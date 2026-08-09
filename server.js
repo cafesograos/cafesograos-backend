@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { MercadoPagoConfig, Preference } = require('mercadopago');
+const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 
 const app = express();
 app.use(cors());
@@ -52,6 +52,27 @@ app.post('/api/create-preference', async (req, res) => {
     console.error('Erro ao criar preferência:', err);
     res.status(500).json({ error: 'Erro ao criar pagamento.' });
   }
+});
+
+// Recebe as notificações de pagamento do Mercado Pago (webhook/IPN).
+// Aceita GET (teste de URL do painel e IPN antigo) e POST (webhooks novos).
+app.all('/webhook', async (req, res) => {
+  try {
+    const topic = req.query.topic || req.query.type || req.body?.type;
+    const id = req.query.id || req.body?.data?.id;
+
+    if (topic === 'payment' && id) {
+      const payment = new Payment(client);
+      const info = await payment.get({ id });
+      console.log(`Notificação de pagamento ${id}: status "${info.status}"`);
+    } else {
+      console.log('Notificação recebida do Mercado Pago:', { topic, id });
+    }
+  } catch (err) {
+    console.error('Erro ao processar notificação do Mercado Pago:', err);
+  }
+  // Sempre responde 200 para o Mercado Pago não ficar reenviando a notificação.
+  res.sendStatus(200);
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));
