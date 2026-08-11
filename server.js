@@ -224,6 +224,24 @@ app.get('/admin/pedidos', async (req, res) => {
   `);
 });
 
+// Rota temporária: envia um e-mail de pedido fictício pra testar a integração com o Resend.
+app.get('/test-email', async (req, res) => {
+  try {
+    await enviarEmailNovoPedido({
+      customer_name: 'Cliente Teste',
+      customer_email: 'teste@example.com',
+      customer_phone: '(16) 99999-9999',
+      address: 'Rua Teste', address_number: '123', address_complement: '',
+      neighborhood: 'Centro', city: 'Araraquara', state: 'SP', cep: '14800-360',
+      items: [{ quantity: 1, title: 'Café Tradicional 500g', unit_price: 33 }],
+      shipping_cost: 14.67, total: 47.67, preference_id: 'teste-123'
+    });
+    res.send('E-mail de teste disparado — confira a caixa de entrada.');
+  } catch (err) {
+    res.status(500).send('Erro: ' + err.message);
+  }
+});
+
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 // Rota temporária de diagnóstico: mostra o IP de saída do servidor
