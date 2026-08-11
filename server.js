@@ -77,5 +77,17 @@ app.all('/webhook', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// Rota temporária de diagnóstico: mostra o IP de saída do servidor
+// (usada para investigar bloqueio de política do Mercado Pago por IP).
+app.get('/whoami', async (req, res) => {
+  try {
+    const r = await fetch('https://api.ipify.org?format=json');
+    const data = await r.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao obter IP' });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
