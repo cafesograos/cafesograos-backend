@@ -67,9 +67,11 @@ async function calcularFrete(cepDestino, pesoKg) {
     });
 
     if (!res.ok) throw new Error('Melhor Envio retornou erro: ' + res.status);
-    const opcoes = await res.json();
-    console.log('Resposta do Melhor Envio:', JSON.stringify(opcoes));
-    const validas = (Array.isArray(opcoes) ? opcoes : []).filter((o) => o.price && !o.error);
+    const corpo = await res.json();
+    // A API retorna um array quando há várias transportadoras habilitadas,
+    // mas um objeto único quando só existe uma opção configurada na conta.
+    const opcoes = Array.isArray(corpo) ? corpo : [corpo];
+    const validas = opcoes.filter((o) => o.price && !o.error);
     if (validas.length === 0) throw new Error('Nenhuma transportadora disponível pra esse CEP.');
 
     const maisBarata = validas.reduce((a, b) => (Number(a.custom_price || a.price) <= Number(b.custom_price || b.price) ? a : b));
