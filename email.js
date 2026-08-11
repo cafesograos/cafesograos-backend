@@ -1,6 +1,8 @@
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL || 'alberto.adm@cafesograos.com';
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'Café Só Grãos <pedidos@cafesograos.com.br>';
+// Até o domínio cafesograos.com.br ser verificado no Resend (resend.com/domains),
+// usamos o remetente padrão deles, que funciona sem verificação.
+const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'Café Só Grãos <onboarding@resend.dev>';
 
 async function enviarEmailNovoPedido(order) {
   if (!RESEND_API_KEY) {
