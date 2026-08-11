@@ -68,6 +68,7 @@ async function calcularFrete(cepDestino, pesoKg) {
 
     if (!res.ok) throw new Error('Melhor Envio retornou erro: ' + res.status);
     const opcoes = await res.json();
+    console.log('Resposta do Melhor Envio:', JSON.stringify(opcoes));
     const validas = (Array.isArray(opcoes) ? opcoes : []).filter((o) => o.price && !o.error);
     if (validas.length === 0) throw new Error('Nenhuma transportadora disponível pra esse CEP.');
 
