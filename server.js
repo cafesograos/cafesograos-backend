@@ -20,7 +20,50 @@ if (!ACCESS_TOKEN) {
 
 const client = new MercadoPagoConfig({ accessToken: ACCESS_TOKEN || 'TEST-TOKEN' });
 
-// Calcula o frete (Correios PAC) a partir do CEP de destino e peso total do carrinho (kg).
+// Autorização OAuth do Melhor Envio (rodar uma vez, manualmente, logado como admin).
+app.get('/oauth/melhorenvio/connect', (req, res) => {
+  const redirectUri = `${req.protocol}://${req.get('host')}/oauth/melhorenvio/callback`;
+  const url = new URL('https://melhorenvio.com.br/oauth/authorize');
+  url.searchParams.set('client_id', process.env.MELHORENVIO_CLIENT_ID);
+  url.searchParams.set('redirect_uri', redirectUri);
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('scope', 'shipping-calculate');
+  res.redirect(url.toString());
+});
+
+app.get('/oauth/melhorenvio/callback', async (req, res) => {
+  try {
+    const redirectUri = `${req.protocol}://${req.get('host')}/oauth/melhorenvio/callback`;
+    const tokenRes = await fetch('https://melhorenvio.com.br/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        client_id: process.env.MELHORENVIO_CLIENT_ID,
+        client_secret: process.env.MELHORENVIO_CLIENT_SECRET,
+        redirect_uri: redirectUri,
+        code: req.query.code
+      })
+    });
+    if (!tokenRes.ok) throw new Error(await tokenRes.text());
+    const data = await tokenRes.json();
+    const expires_at = new Date(Date.now() + data.expires_in * 1000);
+
+    if (pool) {
+      await pool.query('DELETE FROM melhorenvio_tokens');
+      await pool.query(
+        'INSERT INTO melhorenvio_tokens (access_token, refresh_token, expires_at) VALUES ($1,$2,$3)',
+        [data.access_token, data.refresh_token, expires_at]
+      );
+    }
+    res.send('Melhor Envio conectado com sucesso! Pode fechar esta aba.');
+  } catch (err) {
+    console.error('Erro na autorização do Melhor Envio:', err.message);
+    res.status(500).send('Falha ao conectar com o Melhor Envio: ' + err.message);
+  }
+});
+
+// Calcula o frete (Melhor Envio) a partir do CEP de destino e peso total do carrinho (kg).
 app.post('/api/calcular-frete', async (req, res) => {
   try {
     const { cep, pesoKg } = req.body;

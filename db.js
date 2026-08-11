@@ -10,6 +10,15 @@ async function initDb() {
     return;
   }
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS melhorenvio_tokens (
+      id SERIAL PRIMARY KEY,
+      access_token TEXT,
+      refresh_token TEXT,
+      expires_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id SERIAL PRIMARY KEY,
       preference_id TEXT UNIQUE,
