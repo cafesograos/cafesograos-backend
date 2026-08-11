@@ -2,6 +2,9 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
+const { pool, initDb } = require('./db');
+const { calcularFrete } = require('./shipping');
+const { enviarEmailNovoPedido } = require('./email');
 
 const app = express();
 app.use(cors());
@@ -9,6 +12,7 @@ app.use(express.json());
 
 const ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN;
 const SITE_URL = process.env.SITE_URL || 'https://www.cafesograos.com.br';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 if (!ACCESS_TOKEN) {
   console.warn('AVISO: MERCADOPAGO_ACCESS_TOKEN não está definido. Configure o .env antes de aceitar pagamentos.');
@@ -16,17 +20,31 @@ if (!ACCESS_TOKEN) {
 
 const client = new MercadoPagoConfig({ accessToken: ACCESS_TOKEN || 'TEST-TOKEN' });
 
-// Cria uma preferência de pagamento a partir dos itens do carrinho
-// e devolve o link (init_point) para redirecionar o cliente ao checkout do Mercado Pago.
+// Calcula o frete (Correios PAC) a partir do CEP de destino e peso total do carrinho (kg).
+app.post('/api/calcular-frete', async (req, res) => {
+  try {
+    const { cep, pesoKg } = req.body;
+    const frete = await calcularFrete(cep, Number(pesoKg));
+    res.json(frete);
+  } catch (err) {
+    console.error('Erro ao calcular frete:', err.message);
+    res.status(400).json({ error: 'Não foi possível calcular o frete. Confira o CEP.' });
+  }
+});
+
+// Cria uma preferência de pagamento a partir dos itens do carrinho + dados de entrega,
+// salva o pedido no banco e devolve o link (init_point) para o checkout do Mercado Pago.
 app.post('/api/create-preference', async (req, res) => {
   try {
-    const { items } = req.body;
+    const { items, cliente, entrega, frete } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Carrinho vazio ou inválido.' });
     }
+    if (!cliente?.nome || !cliente?.email || !entrega?.cep) {
+      return res.status(400).json({ error: 'Dados de entrega incompletos.' });
+    }
 
-    // Validação simples dos itens recebidos do front-end
     const line_items = items.map((item) => ({
       title: String(item.title).slice(0, 250),
       quantity: Math.max(1, parseInt(item.quantity) || 1),
@@ -34,18 +52,56 @@ app.post('/api/create-preference', async (req, res) => {
       currency_id: 'BRL'
     }));
 
+    const shippingCost = Number(frete) || 0;
+    if (shippingCost > 0) {
+      line_items.push({
+        title: 'Frete',
+        quantity: 1,
+        unit_price: shippingCost,
+        currency_id: 'BRL'
+      });
+    }
+
+    const total = line_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
+
     const preference = new Preference(client);
     const result = await preference.create({
       body: {
         items: line_items,
+        payer: { name: cliente.nome, email: cliente.email },
         back_urls: {
           success: `${SITE_URL}/sucesso.html`,
           failure: `${SITE_URL}/falha.html`,
           pending: `${SITE_URL}/pendente.html`
         },
-        auto_return: 'approved'
+        auto_return: 'approved',
+        notification_url: `${req.protocol}://${req.get('host')}/webhook`
       }
     });
+
+    if (pool) {
+      await pool.query(
+        `INSERT INTO orders
+          (preference_id, status, customer_name, customer_email, customer_phone, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, total)
+         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [
+          result.id,
+          cliente.nome,
+          cliente.email,
+          cliente.telefone || null,
+          entrega.cep,
+          entrega.endereco,
+          entrega.numero,
+          entrega.complemento || null,
+          entrega.bairro,
+          entrega.cidade,
+          entrega.estado,
+          JSON.stringify(items),
+          shippingCost,
+          total
+        ]
+      );
+    }
 
     res.json({ init_point: result.init_point });
   } catch (err) {
@@ -65,6 +121,17 @@ app.all('/webhook', async (req, res) => {
       const payment = new Payment(client);
       const info = await payment.get({ id });
       console.log(`Notificação de pagamento ${id}: status "${info.status}"`);
+
+      if (pool && info.preference_id) {
+        const { rows } = await pool.query(
+          `UPDATE orders SET status = $1, payment_id = $2 WHERE preference_id = $3 RETURNING *`,
+          [info.status, String(id), info.preference_id]
+        );
+        const order = rows[0];
+        if (order && info.status === 'approved') {
+          await enviarEmailNovoPedido(order);
+        }
+      }
     } else {
       console.log('Notificação recebida do Mercado Pago:', { topic, id });
     }
@@ -73,6 +140,44 @@ app.all('/webhook', async (req, res) => {
   }
   // Sempre responde 200 para o Mercado Pago não ficar reenviando a notificação.
   res.sendStatus(200);
+});
+
+// Painel simples de pedidos, protegido por senha (?senha=...).
+app.get('/admin/pedidos', async (req, res) => {
+  if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
+    return res.status(401).send('Senha incorreta. Acesse com ?senha=SUASENHA na URL.');
+  }
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+  const { rows } = await pool.query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 200');
+  const linhas = rows.map((o) => `
+    <tr>
+      <td>${new Date(o.created_at).toLocaleString('pt-BR')}</td>
+      <td>${o.status}</td>
+      <td>${o.customer_name}<br><small>${o.customer_email} · ${o.customer_phone || ''}</small></td>
+      <td>${o.address}, ${o.address_number} ${o.address_complement || ''}<br>${o.neighborhood} - ${o.city}/${o.state}<br>CEP ${o.cep}</td>
+      <td>${(o.items || []).map((i) => `${i.quantity}x ${i.title}`).join('<br>')}</td>
+      <td>R$ ${Number(o.shipping_cost).toFixed(2)}</td>
+      <td>R$ ${Number(o.total).toFixed(2)}</td>
+    </tr>
+  `).join('');
+
+  res.send(`
+    <html><head><meta charset="utf-8"><title>Pedidos - Café Só Grãos</title>
+    <style>
+      body { font-family: sans-serif; padding: 24px; background: #faf6f0; color: #2a1d14; }
+      table { border-collapse: collapse; width: 100%; background: #fff; }
+      th, td { border: 1px solid #ecdfc9; padding: 10px; text-align: left; font-size: 14px; vertical-align: top; }
+      th { background: #3b2416; color: #fff; }
+    </style>
+    </head><body>
+    <h1>Pedidos — Café Só Grãos</h1>
+    <table>
+      <tr><th>Data</th><th>Status</th><th>Cliente</th><th>Endereço</th><th>Itens</th><th>Frete</th><th>Total</th></tr>
+      ${linhas || '<tr><td colspan="7">Nenhum pedido ainda.</td></tr>'}
+    </table>
+    </body></html>
+  `);
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));
@@ -90,4 +195,6 @@ app.get('/whoami', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+initDb().finally(() => {
+  app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+});
