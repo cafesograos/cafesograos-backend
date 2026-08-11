@@ -4,6 +4,12 @@ const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL || 'alberto.adm@cafesograos.com';
 // usamos o remetente padrão deles, que funciona sem verificação.
 const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'Café Só Grãos <onboarding@resend.dev>';
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
 async function enviarEmailNovoPedido(order) {
   if (!RESEND_API_KEY) {
     console.warn('AVISO: RESEND_API_KEY não definido. E-mail de pedido não enviado.');
@@ -11,22 +17,22 @@ async function enviarEmailNovoPedido(order) {
   }
 
   const itensHtml = (order.items || [])
-    .map((i) => `<li>${i.quantity}x ${i.title} — R$ ${Number(i.unit_price).toFixed(2)}</li>`)
+    .map((i) => `<li>${escapeHtml(i.quantity)}x ${escapeHtml(i.title)} — R$ ${Number(i.unit_price).toFixed(2)}</li>`)
     .join('');
 
   const html = `
     <h2>Novo pedido pago — Café Só Grãos</h2>
-    <p><strong>Cliente:</strong> ${order.customer_name} (${order.customer_email}, ${order.customer_phone || 'sem telefone'})</p>
+    <p><strong>Cliente:</strong> ${escapeHtml(order.customer_name)} (${escapeHtml(order.customer_email)}, ${escapeHtml(order.customer_phone || 'sem telefone')})</p>
     <p><strong>Endereço de entrega:</strong><br>
-      ${order.address}, ${order.address_number} ${order.address_complement || ''}<br>
-      ${order.neighborhood} — ${order.city}/${order.state}<br>
-      CEP: ${order.cep}
+      ${escapeHtml(order.address)}, ${escapeHtml(order.address_number)} ${escapeHtml(order.address_complement || '')}<br>
+      ${escapeHtml(order.neighborhood)} — ${escapeHtml(order.city)}/${escapeHtml(order.state)}<br>
+      CEP: ${escapeHtml(order.cep)}
     </p>
     <p><strong>Itens:</strong></p>
     <ul>${itensHtml}</ul>
     <p><strong>Frete:</strong> R$ ${Number(order.shipping_cost).toFixed(2)}</p>
     <p><strong>Total:</strong> R$ ${Number(order.total).toFixed(2)}</p>
-    <p><strong>ID da preferência:</strong> ${order.preference_id}</p>
+    <p><strong>ID da preferência:</strong> ${escapeHtml(order.preference_id)}</p>
   `;
 
   const res = await fetch('https://api.resend.com/emails', {

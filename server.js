@@ -187,6 +187,12 @@ app.all('/webhook', async (req, res) => {
 });
 
 // Painel simples de pedidos, protegido por senha (?senha=...).
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
 app.get('/admin/pedidos', async (req, res) => {
   if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
     return res.status(401).send('Senha incorreta. Acesse com ?senha=SUASENHA na URL.');
@@ -196,11 +202,11 @@ app.get('/admin/pedidos', async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 200');
   const linhas = rows.map((o) => `
     <tr>
-      <td>${new Date(o.created_at).toLocaleString('pt-BR')}</td>
-      <td>${o.status}</td>
-      <td>${o.customer_name}<br><small>${o.customer_email} · ${o.customer_phone || ''}</small></td>
-      <td>${o.address}, ${o.address_number} ${o.address_complement || ''}<br>${o.neighborhood} - ${o.city}/${o.state}<br>CEP ${o.cep}</td>
-      <td>${(o.items || []).map((i) => `${i.quantity}x ${i.title}`).join('<br>')}</td>
+      <td>${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR'))}</td>
+      <td>${escapeHtml(o.status)}</td>
+      <td>${escapeHtml(o.customer_name)}<br><small>${escapeHtml(o.customer_email)} · ${escapeHtml(o.customer_phone || '')}</small></td>
+      <td>${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')}<br>${escapeHtml(o.neighborhood)} - ${escapeHtml(o.city)}/${escapeHtml(o.state)}<br>CEP ${escapeHtml(o.cep)}</td>
+      <td>${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</td>
       <td>R$ ${Number(o.shipping_cost).toFixed(2)}</td>
       <td>R$ ${Number(o.total).toFixed(2)}</td>
     </tr>
