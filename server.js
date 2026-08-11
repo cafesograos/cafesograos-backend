@@ -7,6 +7,7 @@ const { calcularFrete } = require('./shipping');
 const { enviarEmailNovoPedido } = require('./email');
 
 const app = express();
+app.set('trust proxy', true); // Railway/Render terminam HTTPS no proxy; sem isso req.protocol vira "http" errado
 app.use(cors());
 app.use(express.json());
 
