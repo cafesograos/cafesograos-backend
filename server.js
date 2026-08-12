@@ -5,6 +5,7 @@ const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 const { pool, initDb } = require('./db');
 const { calcularFrete } = require('./shipping');
 const { enviarEmailNovoPedido } = require('./email');
+const { CATEGORIES, PRODUCTS } = require('./products');
 
 const app = express();
 app.set('trust proxy', true); // Railway/Render terminam HTTPS no proxy; sem isso req.protocol vira "http" errado
@@ -64,6 +65,12 @@ app.get('/oauth/melhorenvio/callback', async (req, res) => {
   }
 });
 
+// Catálogo de produtos (nome, preço, peso) — fonte única de verdade, usada pelo frontend
+// para montar a vitrine e pelo próprio backend para validar o preço de cada pedido.
+app.get('/api/produtos', (req, res) => {
+  res.json({ categories: CATEGORIES, products: PRODUCTS });
+});
+
 // Calcula o frete (Melhor Envio) a partir do CEP de destino e peso total do carrinho (kg).
 app.post('/api/calcular-frete', async (req, res) => {
   try {
@@ -80,7 +87,7 @@ app.post('/api/calcular-frete', async (req, res) => {
 // salva o pedido no banco e devolve o link (init_point) para o checkout do Mercado Pago.
 app.post('/api/create-preference', async (req, res) => {
   try {
-    const { items, cliente, entrega, frete } = req.body;
+    const { items, cliente, entrega } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Carrinho vazio ou inválido.' });
@@ -89,14 +96,27 @@ app.post('/api/create-preference', async (req, res) => {
       return res.status(400).json({ error: 'Dados de entrega incompletos.' });
     }
 
-    const line_items = items.map((item) => ({
-      title: String(item.title).slice(0, 250),
-      quantity: Math.max(1, parseInt(item.quantity) || 1),
-      unit_price: Number(item.unit_price),
+    // Preço, nome e peso sempre vêm do catálogo do servidor — nunca do que o
+    // cliente mandou — pra ninguém conseguir pagar um valor diferente do real.
+    const itensValidados = items.map((item) => {
+      const produto = PRODUCTS.find((p) => p.id === item.id);
+      if (!produto) throw new Error(`Produto inválido: ${item.id}`);
+      return { produto, quantity: Math.min(50, Math.max(1, parseInt(item.quantity) || 1)) };
+    });
+
+    const line_items = itensValidados.map(({ produto, quantity }) => ({
+      title: produto.nome,
+      quantity,
+      unit_price: produto.preco,
       currency_id: 'BRL'
     }));
 
-    const shippingCost = Number(frete) || 0;
+    const pesoTotalKg = itensValidados.reduce(
+      (sum, { produto, quantity }) => sum + ((produto.pesoGramas || 300) * quantity) / 1000,
+      0
+    );
+    const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
+    const shippingCost = freteCalculado.valor;
     if (shippingCost > 0) {
       line_items.push({
         title: 'Frete',
@@ -140,7 +160,9 @@ app.post('/api/create-preference', async (req, res) => {
           entrega.bairro,
           entrega.cidade,
           entrega.estado,
-          JSON.stringify(items),
+          JSON.stringify(itensValidados.map(({ produto, quantity }) => ({
+            title: produto.nome, quantity, unit_price: produto.preco
+          }))),
           shippingCost,
           total
         ]
