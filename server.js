@@ -215,18 +215,6 @@ function escapeHtml(value) {
   }[c]));
 }
 
-// Rota temporária: remove pedidos de teste criados durante a validação de segurança do checkout.
-app.get('/admin/limpar-teste', async (req, res) => {
-  if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
-    return res.status(401).send('Senha incorreta.');
-  }
-  if (!pool) return res.status(500).send('Banco de dados não configurado.');
-  const { rowCount } = await pool.query(
-    `DELETE FROM orders WHERE customer_email LIKE '%example.com'`
-  );
-  res.send(`Removidos: ${rowCount}`);
-});
-
 app.get('/admin/pedidos', async (req, res) => {
   if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
     return res.status(401).send('Senha incorreta. Acesse com ?senha=SUASENHA na URL.');
