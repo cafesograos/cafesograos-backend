@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 const { pool, initDb } = require('./db');
 const { calcularFrete } = require('./shipping');
@@ -21,6 +22,17 @@ if (!ACCESS_TOKEN) {
 }
 
 const client = new MercadoPagoConfig({ accessToken: ACCESS_TOKEN || 'TEST-TOKEN' });
+
+// Limita chamadas às rotas que dependem de serviços externos pagos/com limite
+// (Melhor Envio) ou que criam registros reais (preferências no Mercado Pago),
+// pra um IP não conseguir estourar o limite da conta nem poluir o painel de pedidos.
+const checkoutLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas requisições. Tente novamente em alguns minutos.' }
+});
 
 // Autorização OAuth do Melhor Envio (rodar uma vez, manualmente, logado como admin).
 app.get('/oauth/melhorenvio/connect', (req, res) => {
@@ -72,7 +84,7 @@ app.get('/api/produtos', (req, res) => {
 });
 
 // Calcula o frete (Melhor Envio) a partir do CEP de destino e peso total do carrinho (kg).
-app.post('/api/calcular-frete', async (req, res) => {
+app.post('/api/calcular-frete', checkoutLimiter, async (req, res) => {
   try {
     const { cep, pesoKg } = req.body;
     const frete = await calcularFrete(cep, Number(pesoKg));
@@ -85,7 +97,7 @@ app.post('/api/calcular-frete', async (req, res) => {
 
 // Cria uma preferência de pagamento a partir dos itens do carrinho + dados de entrega,
 // salva o pedido no banco e devolve o link (init_point) para o checkout do Mercado Pago.
-app.post('/api/create-preference', async (req, res) => {
+app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
   try {
     const { items, cliente, entrega } = req.body;
 

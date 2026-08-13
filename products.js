@@ -16,8 +16,8 @@ const PRODUCTS = [
     preco: 33.00,
     categoria: 'moido',
     pesoGramas: 550,
-    img: 'assets/produto-tradicional-500.png',
-    imgs: ['assets/produto-tradicional-500.png', 'assets/logo.jpg']
+    img: 'assets/produto-tradicional-500.jpg',
+    imgs: ['assets/produto-tradicional-500.jpg', 'assets/logo.jpg']
   },
   {
     id: 'cafe-gourmet-250-grao',
