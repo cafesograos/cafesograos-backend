@@ -220,6 +220,24 @@ app.all('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
+// Rota temporária: testa o envio de e-mail com o domínio verificado no Resend.
+app.get('/test-email', async (req, res) => {
+  try {
+    await enviarEmailNovoPedido({
+      customer_name: 'Cliente Teste',
+      customer_email: 'teste@example.com',
+      customer_phone: '(16) 99999-9999',
+      address: 'Rua Teste', address_number: '123', address_complement: '',
+      neighborhood: 'Centro', city: 'Araraquara', state: 'SP', cep: '14800-360',
+      items: [{ quantity: 1, title: 'Café Tradicional 500g', unit_price: 33 }],
+      shipping_cost: 14.67, total: 47.67, preference_id: 'teste-dominio-verificado'
+    });
+    res.send('E-mail de teste disparado — confira a caixa de entrada.');
+  } catch (err) {
+    res.status(500).send('Erro: ' + err.message);
+  }
+});
+
 // Dados mínimos e públicos de um pedido (sem nome/e-mail/endereço do cliente),
 // usados só pela página de sucesso para registrar a compra no Google Analytics
 // com o valor real — só existe pedido aqui se o preference_id realmente existir.
