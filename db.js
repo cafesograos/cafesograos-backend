@@ -57,6 +57,7 @@ async function initDb() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+  await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS product_line TEXT;`);
 
   // Cupom de 5% gerado após a primeira compra aprovada, válido por 30 dias,
   // aplicado automaticamente pelo e-mail do cliente na próxima compra.

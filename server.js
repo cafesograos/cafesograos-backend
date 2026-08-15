@@ -566,20 +566,23 @@ app.post('/admin/pedidos/:id/excluir', requireAdmin, async (req, res) => {
 // Avaliações de clientes (estilo Google: nome, nota de 1-5, comentário).
 // Toda avaliação nova entra como "pending" e só aparece no site depois de
 // aprovada manualmente — evita comentário falso de concorrente ou spam.
+const LINHAS_PRODUTO = ['Tradicional', 'Gourmet', 'Especial', 'Drip Coffee'];
+
 app.post('/api/avaliacoes', checkoutLimiter, async (req, res) => {
   try {
     if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
     const nome = String(req.body?.nome || '').trim().slice(0, 100);
     const nota = Math.round(Number(req.body?.nota));
     const comentario = String(req.body?.comentario || '').trim().slice(0, 600);
+    const produto = String(req.body?.produto || '').trim();
 
-    if (!nome || !comentario || !(nota >= 1 && nota <= 5)) {
-      return res.status(400).json({ error: 'Preencha nome, nota (1 a 5) e comentário.' });
+    if (!nome || !comentario || !(nota >= 1 && nota <= 5) || !LINHAS_PRODUTO.includes(produto)) {
+      return res.status(400).json({ error: 'Preencha nome, nota (1 a 5), qual produto comprou e o comentário.' });
     }
 
     await pool.query(
-      'INSERT INTO reviews (customer_name, rating, comment) VALUES ($1, $2, $3)',
-      [nome, nota, comentario]
+      'INSERT INTO reviews (customer_name, rating, comment, product_line) VALUES ($1, $2, $3, $4)',
+      [nome, nota, comentario, produto]
     );
     res.json({ ok: true, message: 'Recebemos sua avaliação! Ela vai aparecer no site assim que for revisada.' });
   } catch (err) {
@@ -592,7 +595,7 @@ app.post('/api/avaliacoes', checkoutLimiter, async (req, res) => {
 app.get('/api/avaliacoes', async (req, res) => {
   if (!pool) return res.json([]);
   const { rows } = await pool.query(
-    `SELECT customer_name, rating, comment, created_at FROM reviews
+    `SELECT customer_name, rating, comment, product_line, created_at FROM reviews
      WHERE status = 'approved' ORDER BY created_at DESC LIMIT 30`
   );
   res.json(rows);
@@ -609,6 +612,7 @@ app.get('/admin/avaliacoes', requireAdmin, async (req, res) => {
     <tr>
       <td>${escapeHtml(new Date(r.created_at).toLocaleString('pt-BR'))}</td>
       <td>${escapeHtml(r.customer_name)}</td>
+      <td>${escapeHtml(r.product_line || '')}</td>
       <td>${estrelas(r.rating)}</td>
       <td>${escapeHtml(r.comment)}</td>
       <td><strong>${escapeHtml(r.status)}</strong></td>
@@ -623,8 +627,8 @@ app.get('/admin/avaliacoes', requireAdmin, async (req, res) => {
   const body = `
     <h1>Avaliações — Café Só Grãos</h1>
     <table>
-      <tr><th>Data</th><th>Nome</th><th>Nota</th><th>Comentário</th><th>Status</th><th>Ação</th></tr>
-      ${linhas || '<tr><td colspan="6">Nenhuma avaliação ainda.</td></tr>'}
+      <tr><th>Data</th><th>Nome</th><th>Produto</th><th>Nota</th><th>Comentário</th><th>Status</th><th>Ação</th></tr>
+      ${linhas || '<tr><td colspan="7">Nenhuma avaliação ainda.</td></tr>'}
     </table>
   `;
   res.send(adminLayout({ title: 'Avaliações', senha, ativo: 'avaliacoes', body }));
