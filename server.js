@@ -256,12 +256,13 @@ app.all('/webhook', webhookLimiter, async (req, res) => {
 });
 
 // Dados mínimos e públicos de um pedido (sem nome/e-mail/endereço do cliente),
-// usados só pela página de sucesso para registrar a compra no Google Analytics
-// com o valor real — só existe pedido aqui se o preference_id realmente existir.
+// usados pela página de sucesso (registrar compra no Google Analytics) e pela
+// página de rastreio (cliente consulta status/código com o número do pedido,
+// que é o preference_id — o mesmo enviado no e-mail de confirmação).
 app.get('/api/pedido/:preferenceId', async (req, res) => {
   if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
   const { rows } = await pool.query(
-    'SELECT status, total, shipping_cost, items FROM orders WHERE preference_id = $1',
+    'SELECT status, total, shipping_cost, items, tracking_code, created_at FROM orders WHERE preference_id = $1',
     [req.params.preferenceId]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Pedido não encontrado.' });

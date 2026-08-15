@@ -68,6 +68,9 @@ async function enviarEmailConfirmacaoCliente(order) {
   const html = `
     <h2>Recebemos seu pedido! ☕</h2>
     <p>Oi, ${escapeHtml(order.customer_name)}! Seu pagamento foi aprovado e já vamos preparar seu café.</p>
+    <p><strong>Número do pedido:</strong> ${escapeHtml(order.preference_id)}<br>
+      <span style="color:#8a6f5c;font-size:13px;">Guarde esse número — é com ele que você consulta o status em <a href="https://www.cafesograos.com.br/rastreio.html">cafesograos.com.br/rastreio.html</a></span>
+    </p>
     <p><strong>Itens do pedido:</strong></p>
     <ul>${itensHtml(order)}</ul>
     <p><strong>Frete:</strong> R$ ${Number(order.shipping_cost).toFixed(2)}</p>
