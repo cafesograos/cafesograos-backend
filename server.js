@@ -12,6 +12,7 @@ const app = express();
 app.set('trust proxy', true); // Railway/Render terminam HTTPS no proxy; sem isso req.protocol vira "http" errado
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public')); // ícone do painel admin (favicon / apple-touch-icon)
 
 const ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN;
 const SITE_URL = process.env.SITE_URL || 'https://www.cafesograos.com.br';
@@ -264,7 +265,11 @@ function adminLayout({ title, senha, ativo, body }) {
   `).join('');
 
   return `
-    <html><head><meta charset="utf-8"><title>${escapeHtml(title)} - Café Só Grãos</title>
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${escapeHtml(title)} - Café Só Grãos</title>
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <meta name="theme-color" content="#211714">
     <style>
       body { font-family: sans-serif; padding: 0; margin: 0; background: #faf6f0; color: #2a1d14; }
       .admin-nav { background: #3b2416; padding: 14px 24px; display: flex; gap: 20px; flex-wrap: wrap; }
@@ -272,7 +277,7 @@ function adminLayout({ title, senha, ativo, body }) {
       .admin-nav a:hover, .admin-nav a.ativo { color: #fff; }
       .admin-body { padding: 24px; }
       h1 { margin-top: 0; }
-      table { border-collapse: collapse; width: 100%; background: #fff; }
+      table { border-collapse: collapse; width: 100%; background: #fff; display: block; overflow-x: auto; }
       th, td { border: 1px solid #ecdfc9; padding: 10px; text-align: left; font-size: 14px; vertical-align: top; }
       th { background: #3b2416; color: #fff; }
       a { color: #b85a32; }
