@@ -505,14 +505,19 @@ app.get('/admin/pedidos', requireAdmin, async (req, res) => {
           <button type="submit">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
         </form>
       </td>
+      <td>
+        <form method="POST" action="/admin/pedidos/${o.id}/excluir?senha=${senha}" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
+          <button type="submit" style="color:#b91c1c;">Excluir</button>
+        </form>
+      </td>
     </tr>
   `).join('');
 
   const body = `
     <h1>Pedidos — Café Só Grãos</h1>
     <table>
-      <tr><th>Data</th><th>Status</th><th>Cliente</th><th>Endereço</th><th>Itens</th><th>Frete</th><th>Total</th><th>Rastreio</th></tr>
-      ${linhas || '<tr><td colspan="8">Nenhum pedido ainda.</td></tr>'}
+      <tr><th>Data</th><th>Status</th><th>Cliente</th><th>Endereço</th><th>Itens</th><th>Frete</th><th>Total</th><th>Rastreio</th><th></th></tr>
+      ${linhas || '<tr><td colspan="9">Nenhum pedido ainda.</td></tr>'}
     </table>
   `;
   res.send(adminLayout({ title: 'Pedidos', senha, ativo: 'pedidos', body }));
@@ -531,6 +536,15 @@ app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ exten
   );
   const order = rows[0];
   if (order) await enviarEmailRastreio(order);
+
+  res.redirect('/admin/pedidos?senha=' + encodeURIComponent(req.query.senha));
+});
+
+// Exclui um pedido (ex.: pedidos de teste feitos durante o desenvolvimento).
+app.post('/admin/pedidos/:id/excluir', requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+  await pool.query('DELETE FROM orders WHERE id = $1', [req.params.id]);
 
   res.redirect('/admin/pedidos?senha=' + encodeURIComponent(req.query.senha));
 });
