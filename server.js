@@ -550,9 +550,9 @@ app.get('/admin/testar-emails', requireAdmin, async (req, res) => {
     neighborhood: 'Centro', city: 'Araraquara', state: 'SP', cep: '14800-360',
     tracking_code: 'BR123456789TESTE'
   };
-  await enviarEmailConfirmacaoCliente(pedidoFake);
-  await enviarEmailRastreio(pedidoFake);
-  res.send('Dois e-mails de teste enviados para ' + destinoTeste + '. Confira a caixa de entrada (e o spam).');
+  const r1 = await enviarEmailConfirmacaoCliente(pedidoFake);
+  const r2 = await enviarEmailRastreio(pedidoFake);
+  res.json({ destino: destinoTeste, confirmacao: r1, rastreio: r2 });
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));

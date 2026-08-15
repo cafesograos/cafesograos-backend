@@ -11,7 +11,7 @@ function escapeHtml(value) {
 async function enviarEmail({ to, subject, html }) {
   if (!RESEND_API_KEY) {
     console.warn('AVISO: RESEND_API_KEY não definido. E-mail não enviado:', subject);
-    return;
+    return { ok: false, motivo: 'RESEND_API_KEY não definido' };
   }
 
   const res = await fetch('https://api.resend.com/emails', {
@@ -26,9 +26,10 @@ async function enviarEmail({ to, subject, html }) {
   if (!res.ok) {
     const body = await res.text();
     console.error('Erro ao enviar e-mail via Resend:', res.status, body);
-  } else {
-    console.log('E-mail enviado para', to, '—', subject);
+    return { ok: false, status: res.status, body };
   }
+  console.log('E-mail enviado para', to, '—', subject);
+  return { ok: true };
 }
 
 function itensHtml(order) {
@@ -53,7 +54,7 @@ async function enviarEmailNovoPedido(order) {
     <p><strong>ID da preferência:</strong> ${escapeHtml(order.preference_id)}</p>
   `;
 
-  await enviarEmail({
+  return enviarEmail({
     to: NOTIFY_EMAIL,
     subject: `Novo pedido — ${order.customer_name} — R$ ${Number(order.total).toFixed(2)}`,
     html
@@ -62,7 +63,7 @@ async function enviarEmailNovoPedido(order) {
 
 // Confirmação enviada ao próprio cliente assim que o pagamento é aprovado.
 async function enviarEmailConfirmacaoCliente(order) {
-  if (!order.customer_email) return;
+  if (!order.customer_email) return { ok: false, motivo: 'pedido sem e-mail do cliente' };
 
   const html = `
     <h2>Recebemos seu pedido! ☕</h2>
@@ -81,7 +82,7 @@ async function enviarEmailConfirmacaoCliente(order) {
     <p>Obrigado por comprar com a gente!<br>Café Só Grãos</p>
   `;
 
-  await enviarEmail({
+  return enviarEmail({
     to: order.customer_email,
     subject: 'Recebemos seu pedido — Café Só Grãos',
     html
@@ -91,7 +92,7 @@ async function enviarEmailConfirmacaoCliente(order) {
 // Aviso de envio com código de rastreio, disparado manualmente pelo admin
 // (painel /admin/pedidos) quando o pacote sai para entrega.
 async function enviarEmailRastreio(order) {
-  if (!order.customer_email || !order.tracking_code) return;
+  if (!order.customer_email || !order.tracking_code) return { ok: false, motivo: 'faltam e-mail ou código de rastreio' };
 
   const html = `
     <h2>Seu pedido foi enviado! 📦</h2>
@@ -102,7 +103,7 @@ async function enviarEmailRastreio(order) {
     <p>Obrigado por comprar com a gente!<br>Café Só Grãos</p>
   `;
 
-  await enviarEmail({
+  return enviarEmail({
     to: order.customer_email,
     subject: 'Seu pedido foi enviado — Café Só Grãos',
     html
