@@ -12,7 +12,7 @@ const PRODUCTS = [
   {
     id: 'cafe-tradicional-500-moido',
     nome: 'Café Tradicional 500g',
-    descricao: 'Torra tradicional, equilibrada e encorpada. 100% arábica, moído. 500g.',
+    descricao: 'O parceiro do seu dia a dia: torra encorpada, para um café forte e constante, sem perder a qualidade. 100% arábica, moído. 500g.',
     preco: 33.00,
     categoria: 'moido',
     pesoGramas: 550,
@@ -22,7 +22,7 @@ const PRODUCTS = [
   {
     id: 'cafe-gourmet-250-grao',
     nome: 'Café Gourmet 250g — Grãos',
-    descricao: 'Torra média, aroma marcante e acidez equilibrada. 100% arábica, em grãos. 250g.',
+    descricao: 'Grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, em grãos. 250g.',
     preco: 30.00,
     categoria: 'grao',
     pesoGramas: 300,
@@ -31,7 +31,7 @@ const PRODUCTS = [
   {
     id: 'cafe-gourmet-250-moido',
     nome: 'Café Gourmet 250g — Moído',
-    descricao: 'Torra média, aroma marcante e acidez equilibrada. 100% arábica, moído. 250g.',
+    descricao: 'Grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, moído. 250g.',
     preco: 30.00,
     categoria: 'moido',
     pesoGramas: 300,
@@ -40,7 +40,7 @@ const PRODUCTS = [
   {
     id: 'cafe-gourmet-500-grao',
     nome: 'Café Gourmet 500g — Grãos',
-    descricao: 'Torra média, aroma marcante e acidez equilibrada. 100% arábica, em grãos. 500g.',
+    descricao: 'Grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, em grãos. 500g.',
     preco: 55.00,
     categoria: 'grao',
     pesoGramas: 550,
@@ -49,7 +49,7 @@ const PRODUCTS = [
   {
     id: 'cafe-gourmet-500-moido',
     nome: 'Café Gourmet 500g — Moído',
-    descricao: 'Torra média, aroma marcante e acidez equilibrada. 100% arábica, moído. 500g.',
+    descricao: 'Grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, moído. 500g.',
     preco: 55.00,
     categoria: 'moido',
     pesoGramas: 550,
@@ -58,7 +58,7 @@ const PRODUCTS = [
   {
     id: 'cafe-especial-250-grao',
     nome: 'Café Especial 250g — Grãos',
-    descricao: 'Nota 83+ SCA. Torra clara a média, xícara limpa e notas sensoriais complexas. 100% arábica, em grãos. 250g.',
+    descricao: 'Nosso café mais sofisticado: acima de 80 pontos numa escala internacional (SCA), com xícara limpa e notas aromáticas complexas. 100% arábica, em grãos. 250g.',
     preco: 50.00,
     categoria: 'grao',
     badge: '83+ SCA',
@@ -68,7 +68,7 @@ const PRODUCTS = [
   {
     id: 'cafe-especial-250-moido',
     nome: 'Café Especial 250g — Moído',
-    descricao: 'Nota 83+ SCA. Torra clara a média, xícara limpa e notas sensoriais complexas. 100% arábica, moído. 250g.',
+    descricao: 'Nosso café mais sofisticado: acima de 80 pontos numa escala internacional (SCA), com xícara limpa e notas aromáticas complexas. 100% arábica, moído. 250g.',
     preco: 50.00,
     categoria: 'moido',
     badge: '83+ SCA',
@@ -78,7 +78,7 @@ const PRODUCTS = [
   {
     id: 'cafe-especial-500-grao',
     nome: 'Café Especial 500g — Grãos',
-    descricao: 'Nota 83+ SCA. Torra clara a média, xícara limpa e notas sensoriais complexas. 100% arábica, em grãos. 500g.',
+    descricao: 'Nosso café mais sofisticado: acima de 80 pontos numa escala internacional (SCA), com xícara limpa e notas aromáticas complexas. 100% arábica, em grãos. 500g.',
     preco: 70.00,
     categoria: 'grao',
     badge: '83+ SCA',
@@ -88,7 +88,7 @@ const PRODUCTS = [
   {
     id: 'cafe-especial-500-moido',
     nome: 'Café Especial 500g — Moído',
-    descricao: 'Nota 83+ SCA. Torra clara a média, xícara limpa e notas sensoriais complexas. 100% arábica, moído. 500g.',
+    descricao: 'Nosso café mais sofisticado: acima de 80 pontos numa escala internacional (SCA), com xícara limpa e notas aromáticas complexas. 100% arábica, moído. 500g.',
     preco: 70.00,
     categoria: 'moido',
     badge: '83+ SCA',
@@ -98,7 +98,7 @@ const PRODUCTS = [
   {
     id: 'drip-coffee-caixa-10',
     nome: 'Drip Coffee',
-    descricao: 'Café coado individual, praticidade sem perder o sabor. 100% arábica. Caixa com 10 sachês.',
+    descricao: 'Café coado sem complicação: a praticidade do sachê individual, sem abrir mão do sabor. 100% arábica. Caixa com 10 unidades.',
     preco: 90.00,
     categoria: 'drip',
     pesoGramas: 400,
