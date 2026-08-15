@@ -14,6 +14,16 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public')); // ícone do painel admin (favicon / apple-touch-icon)
 
+// Headers básicos de segurança — sem CSP (quebraria fontes/scripts
+// externos do site sem um mapeamento cuidadoso), mas esses três são de
+// baixo risco e fecham golpes comuns (clickjacking, MIME-sniffing).
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+
 const ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN;
 const SITE_URL = process.env.SITE_URL || 'https://www.cafesograos.com.br';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
