@@ -68,7 +68,7 @@ async function enviarEmailConfirmacaoCliente(order) {
   if (!order.customer_email) return { ok: false, motivo: 'pedido sem e-mail do cliente' };
 
   const brindeHtml = order.free_gift
-    ? `<p>🎁 <strong>De boas-vindas</strong>, incluímos um Drip Coffee grátis no seu pedido! E você já ganhou um cupom de <strong>5% de desconto</strong> pra próxima compra, válido por 30 dias — é automático, basta usar este mesmo e-mail no checkout.</p>`
+    ? `<p>🎁 <strong>De boas-vindas</strong>, incluímos um Drip Coffee grátis no seu pedido! E você já ganhou um cupom de <strong>5% de desconto</strong> para a próxima compra, válido por 30 dias — é automático, basta usar este mesmo e-mail no checkout.</p>`
     : '';
   const descontoHtml = order.discount_percent
     ? `<p>🎉 Aplicamos ${Number(order.discount_percent)}% de desconto neste pedido — nosso presente por você ter voltado.</p>`
@@ -93,7 +93,7 @@ async function enviarEmailConfirmacaoCliente(order) {
     </p>
     <p>Assim que seu pedido for enviado, mandamos outro e-mail com o código de rastreio.</p>
     <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99756-7559.</p>
-    <p>Obrigado por comprar com a gente!<br>Café Só Grãos</p>
+    <p>Obrigado por comprar conosco!<br>Café Só Grãos</p>
   `;
 
   return enviarEmail({
@@ -114,7 +114,7 @@ async function enviarEmailRastreio(order) {
     <p><strong>Código de rastreio:</strong> ${escapeHtml(order.tracking_code)}</p>
     <p>Você pode acompanhar a entrega no site dos Correios ou da transportadora usando esse código.</p>
     <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99756-7559.</p>
-    <p>Obrigado por comprar com a gente!<br>Café Só Grãos</p>
+    <p>Obrigado por comprar conosco!<br>Café Só Grãos</p>
   `;
 
   return enviarEmail({
