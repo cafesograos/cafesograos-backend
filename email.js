@@ -41,6 +41,8 @@ function itensHtml(order) {
 async function enviarEmailNovoPedido(order) {
   const html = `
     <h2>Novo pedido pago — Café Só Grãos</h2>
+    ${order.free_gift ? '<p>🎁 <strong>Primeira compra desse cliente — não esquecer de incluir o Drip Coffee de brinde na caixa.</strong></p>' : ''}
+    ${order.discount_percent ? `<p>Pedido com ${Number(order.discount_percent)}% de desconto de cliente recorrente aplicado.</p>` : ''}
     <p><strong>Cliente:</strong> ${escapeHtml(order.customer_name)} (${escapeHtml(order.customer_email)}, ${escapeHtml(order.customer_phone || 'sem telefone')})</p>
     <p><strong>Endereço de entrega:</strong><br>
       ${escapeHtml(order.address)}, ${escapeHtml(order.address_number)} ${escapeHtml(order.address_complement || '')}<br>
@@ -49,7 +51,7 @@ async function enviarEmailNovoPedido(order) {
     </p>
     <p><strong>Itens:</strong></p>
     <ul>${itensHtml(order)}</ul>
-    <p><strong>Frete:</strong> R$ ${Number(order.shipping_cost).toFixed(2)}</p>
+    <p><strong>Frete:</strong> ${Number(order.shipping_cost) === 0 ? 'Grátis' : 'R$ ' + Number(order.shipping_cost).toFixed(2)}</p>
     <p><strong>Total:</strong> R$ ${Number(order.total).toFixed(2)}</p>
     <p><strong>ID da preferência:</strong> ${escapeHtml(order.preference_id)}</p>
   `;
@@ -65,15 +67,24 @@ async function enviarEmailNovoPedido(order) {
 async function enviarEmailConfirmacaoCliente(order) {
   if (!order.customer_email) return { ok: false, motivo: 'pedido sem e-mail do cliente' };
 
+  const brindeHtml = order.free_gift
+    ? `<p>🎁 <strong>De boas-vindas</strong>, incluímos um Drip Coffee grátis no seu pedido! E você já ganhou um cupom de <strong>5% de desconto</strong> pra próxima compra, válido por 30 dias — é automático, basta usar este mesmo e-mail no checkout.</p>`
+    : '';
+  const descontoHtml = order.discount_percent
+    ? `<p>🎉 Aplicamos ${Number(order.discount_percent)}% de desconto neste pedido — nosso presente por você ter voltado.</p>`
+    : '';
+
   const html = `
     <h2>Recebemos seu pedido! ☕</h2>
     <p>Oi, ${escapeHtml(order.customer_name)}! Seu pagamento foi aprovado e já vamos preparar seu café.</p>
+    ${brindeHtml}
+    ${descontoHtml}
     <p><strong>Número do pedido:</strong> ${escapeHtml(order.preference_id)}<br>
       <span style="color:#8a6f5c;font-size:13px;">Guarde esse número — é com ele que você consulta o status em <a href="https://www.cafesograos.com.br/rastreio.html">cafesograos.com.br/rastreio.html</a></span>
     </p>
     <p><strong>Itens do pedido:</strong></p>
     <ul>${itensHtml(order)}</ul>
-    <p><strong>Frete:</strong> R$ ${Number(order.shipping_cost).toFixed(2)}</p>
+    <p><strong>Frete:</strong> ${Number(order.shipping_cost) === 0 ? 'Grátis' : 'R$ ' + Number(order.shipping_cost).toFixed(2)}</p>
     <p><strong>Total:</strong> R$ ${Number(order.total).toFixed(2)}</p>
     <p><strong>Endereço de entrega:</strong><br>
       ${escapeHtml(order.address)}, ${escapeHtml(order.address_number)} ${escapeHtml(order.address_complement || '')}<br>

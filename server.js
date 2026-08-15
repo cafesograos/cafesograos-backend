@@ -27,6 +27,7 @@ app.use((req, res, next) => {
 
 const ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN;
 const SITE_URL = process.env.SITE_URL || 'https://www.cafesograos.com.br';
+const FRETE_GRATIS_ACIMA_DE = 300;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 if (!ACCESS_TOKEN) {
@@ -118,10 +119,17 @@ app.get('/api/produtos', (req, res) => {
 });
 
 // Calcula o frete (Melhor Envio) a partir do CEP de destino e peso total do carrinho (kg).
+// Se o subtotal do carrinho já bater o mínimo do frete grátis, zera o valor
+// (mas mantém o prazo real) — mesma regra aplicada de novo, com autoridade,
+// em /api/create-preference na hora de fechar o pedido.
 app.post('/api/calcular-frete', checkoutLimiter, async (req, res) => {
   try {
-    const { cep, pesoKg } = req.body;
+    const { cep, pesoKg, subtotal } = req.body;
     const frete = await calcularFrete(cep, Number(pesoKg));
+    if (Number(subtotal) >= FRETE_GRATIS_ACIMA_DE) {
+      frete.valor = 0;
+      frete.gratis = true;
+    }
     res.json(frete);
   } catch (err) {
     console.error('Erro ao calcular frete:', err.message);
@@ -150,19 +158,69 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       return { produto, quantity: Math.min(50, Math.max(1, parseInt(item.quantity) || 1)) };
     });
 
-    const line_items = itensValidados.map(({ produto, quantity }) => ({
+    // Detecta se é a primeira compra aprovada dessa pessoa (por e-mail, telefone
+    // ou endereço+número — nome sozinho não conta, é fácil demais de repetir e
+    // nomes comuns colidem entre clientes diferentes). Se não for a primeira,
+    // busca um cupom de 5% ainda válido, ganho na compra anterior.
+    let freeGift = false;
+    let desconto = null;
+    if (pool) {
+      const { rows: existentes } = await pool.query(
+        `SELECT 1 FROM orders WHERE status = 'approved' AND (
+           LOWER(TRIM(customer_email)) = LOWER(TRIM($1))
+           OR customer_phone = $2
+           OR (LOWER(TRIM(address)) = LOWER(TRIM($3)) AND LOWER(TRIM(address_number)) = LOWER(TRIM($4)))
+         ) LIMIT 1`,
+        [cliente.email, cliente.telefone || '', entrega.endereco, entrega.numero]
+      );
+      if (existentes.length === 0) {
+        freeGift = true;
+      } else {
+        const { rows: cupons } = await pool.query(
+          `SELECT * FROM discounts WHERE LOWER(TRIM(customer_email)) = LOWER(TRIM($1))
+           AND used_at IS NULL AND expires_at > now() ORDER BY created_at DESC LIMIT 1`,
+          [cliente.email]
+        );
+        desconto = cupons[0] || null;
+      }
+    }
+
+    const descontoPercent = desconto ? Number(desconto.percent) : 0;
+    const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
       title: produto.nome,
       quantity,
-      unit_price: produto.preco,
-      currency_id: 'BRL'
+      unit_price: descontoPercent > 0
+        ? Number((produto.preco * (1 - descontoPercent / 100)).toFixed(2))
+        : produto.preco
     }));
 
-    const pesoTotalKg = itensValidados.reduce(
+    // Brinde de boas-vindas: um Drip Coffee grátis (item de R$0, aparece de
+    // verdade no pedido) na primeira compra aprovada de cada pessoa.
+    let brindeProduto = null;
+    if (freeGift) {
+      brindeProduto = PRODUCTS.find((p) => p.id === 'drip-coffee-caixa-10');
+      if (brindeProduto) {
+        itensParaPedido.push({ title: `${brindeProduto.nome} — Brinde de boas-vindas`, quantity: 1, unit_price: 0 });
+      }
+    }
+
+    const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
+
+    // Subtotal pelo preço de catálogo (sem desconto) — é o que decide se bateu
+    // o valor mínimo do frete grátis, não o valor já com cupom aplicado.
+    const subtotalCatalogo = itensValidados.reduce((sum, { produto, quantity }) => sum + produto.preco * quantity, 0);
+
+    let pesoTotalKg = itensValidados.reduce(
       (sum, { produto, quantity }) => sum + ((produto.pesoGramas || 300) * quantity) / 1000,
       0
     );
-    const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
-    const shippingCost = freteCalculado.valor;
+    if (brindeProduto) pesoTotalKg += (brindeProduto.pesoGramas || 400) / 1000;
+
+    let shippingCost = 0;
+    if (subtotalCatalogo < FRETE_GRATIS_ACIMA_DE) {
+      const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
+      shippingCost = freteCalculado.valor;
+    }
     if (shippingCost > 0) {
       line_items.push({
         title: 'Frete',
@@ -192,8 +250,8 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     if (pool) {
       await pool.query(
         `INSERT INTO orders
-          (preference_id, status, customer_name, customer_email, customer_phone, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, total)
-         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          (preference_id, status, customer_name, customer_email, customer_phone, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, total, free_gift, discount_id, discount_percent)
+         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
         [
           result.id,
           cliente.nome,
@@ -206,11 +264,12 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
           entrega.bairro,
           entrega.cidade,
           entrega.estado,
-          JSON.stringify(itensValidados.map(({ produto, quantity }) => ({
-            title: produto.nome, quantity, unit_price: produto.preco
-          }))),
+          JSON.stringify(itensParaPedido),
           shippingCost,
-          total
+          total,
+          freeGift,
+          desconto ? desconto.id : null,
+          desconto ? desconto.percent : null
         ]
       );
     }
@@ -241,6 +300,20 @@ app.all('/webhook', webhookLimiter, async (req, res) => {
         );
         const order = rows[0];
         if (order && info.status === 'approved') {
+          // Só cria o cupom/marca como usado quando o pagamento é realmente
+          // aprovado — evita gerar cupom pra carrinho abandonado ou queimar
+          // o cupom de alguém que desistiu no meio do checkout.
+          if (order.free_gift) {
+            const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+            await pool.query(
+              'INSERT INTO discounts (customer_email, percent, expires_at) VALUES ($1, 5, $2)',
+              [order.customer_email, expiresAt]
+            );
+          }
+          if (order.discount_id) {
+            await pool.query('UPDATE discounts SET used_at = now() WHERE id = $1', [order.discount_id]);
+          }
+
           await enviarEmailNovoPedido(order);
           await enviarEmailConfirmacaoCliente(order);
         }
@@ -419,11 +492,11 @@ app.get('/admin/pedidos', requireAdmin, async (req, res) => {
   const linhas = rows.map((o) => `
     <tr>
       <td>${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR'))}</td>
-      <td>${escapeHtml(o.status)}</td>
+      <td>${escapeHtml(o.status)}${o.free_gift ? '<br>🎁 brinde' : ''}${o.discount_percent ? `<br>-${escapeHtml(o.discount_percent)}%` : ''}</td>
       <td>${escapeHtml(o.customer_name)}<br><small>${escapeHtml(o.customer_email)} · ${escapeHtml(o.customer_phone || '')}</small></td>
       <td>${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')}<br>${escapeHtml(o.neighborhood)} - ${escapeHtml(o.city)}/${escapeHtml(o.state)}<br>CEP ${escapeHtml(o.cep)}</td>
       <td>${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</td>
-      <td>R$ ${Number(o.shipping_cost).toFixed(2)}</td>
+      <td>${Number(o.shipping_cost) === 0 ? 'Grátis' : 'R$ ' + Number(o.shipping_cost).toFixed(2)}</td>
       <td>R$ ${Number(o.total).toFixed(2)}</td>
       <td>
         ${o.tracking_code ? `Enviado:<br><strong>${escapeHtml(o.tracking_code)}</strong>` : ''}

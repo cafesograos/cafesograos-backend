@@ -43,6 +43,9 @@ async function initDb() {
   // Pedido já existia sem essa coluna em produção — ADD COLUMN IF NOT EXISTS
   // garante que o campo apareça sem precisar recriar a tabela.
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_code TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS free_gift BOOLEAN DEFAULT false;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_id INTEGER;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_percent NUMERIC;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reviews (
@@ -54,7 +57,21 @@ async function initDb() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
-  console.log('Banco de dados pronto (tabelas orders, reviews).');
+
+  // Cupom de 5% gerado após a primeira compra aprovada, válido por 30 dias,
+  // aplicado automaticamente pelo e-mail do cliente na próxima compra.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS discounts (
+      id SERIAL PRIMARY KEY,
+      customer_email TEXT NOT NULL,
+      percent NUMERIC NOT NULL DEFAULT 5,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ
+    );
+  `);
+
+  console.log('Banco de dados pronto (tabelas orders, reviews, discounts).');
 }
 
 module.exports = { pool, initDb };
