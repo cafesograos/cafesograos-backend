@@ -234,17 +234,139 @@ app.get('/api/pedido/:preferenceId', async (req, res) => {
   res.json(rows[0]);
 });
 
-// Painel simples de pedidos, protegido por senha (?senha=...).
+// Painéis administrativos, todos protegidos pela mesma senha (?senha=...).
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
 }
 
-app.get('/admin/pedidos', async (req, res) => {
+function requireAdmin(req, res, next) {
   if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
     return res.status(401).send('Senha incorreta. Acesse com ?senha=SUASENHA na URL.');
   }
+  next();
+}
+
+// Layout compartilhado pelos painéis: mesma barra de navegação em todos,
+// pra dar pra pular entre pedidos, avaliações, métricas, GA e Mercado Pago
+// sem digitar URL de novo.
+function adminLayout({ title, senha, ativo, body }) {
+  const nav = [
+    { id: 'painel', label: 'Painel', href: `/admin?senha=${senha}` },
+    { id: 'pedidos', label: 'Pedidos', href: `/admin/pedidos?senha=${senha}` },
+    { id: 'avaliacoes', label: 'Avaliações', href: `/admin/avaliacoes?senha=${senha}` },
+    { id: 'ga', label: 'Google Analytics ↗', href: 'https://analytics.google.com/analytics/web/', external: true },
+    { id: 'mp', label: 'Mercado Pago ↗', href: 'https://www.mercadopago.com.br/activities', external: true }
+  ];
+  const navHtml = nav.map((item) => `
+    <a href="${item.href}" ${item.external ? 'target="_blank" rel="noopener"' : ''} class="${item.id === ativo ? 'ativo' : ''}">${item.label}</a>
+  `).join('');
+
+  return `
+    <html><head><meta charset="utf-8"><title>${escapeHtml(title)} - Café Só Grãos</title>
+    <style>
+      body { font-family: sans-serif; padding: 0; margin: 0; background: #faf6f0; color: #2a1d14; }
+      .admin-nav { background: #3b2416; padding: 14px 24px; display: flex; gap: 20px; flex-wrap: wrap; }
+      .admin-nav a { color: rgba(255,255,255,.75); text-decoration: none; font-size: 14px; font-weight: 600; }
+      .admin-nav a:hover, .admin-nav a.ativo { color: #fff; }
+      .admin-body { padding: 24px; }
+      h1 { margin-top: 0; }
+      table { border-collapse: collapse; width: 100%; background: #fff; }
+      th, td { border: 1px solid #ecdfc9; padding: 10px; text-align: left; font-size: 14px; vertical-align: top; }
+      th { background: #3b2416; color: #fff; }
+      a { color: #b85a32; }
+      form { margin-top: 6px; }
+      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 28px; }
+      .card { background: #fff; border: 1px solid #ecdfc9; border-radius: 8px; padding: 18px; }
+      .card span { display: block; font-size: 13px; color: #8a6f5c; margin-bottom: 6px; }
+      .card strong { font-size: 24px; }
+      .card.alerta strong { color: #b85a32; }
+      section { margin-bottom: 32px; }
+      section h2 { font-size: 16px; margin-bottom: 12px; }
+    </style>
+    </head><body>
+    <nav class="admin-nav">${navHtml}</nav>
+    <div class="admin-body">${body}</div>
+    </body></html>
+  `;
+}
+
+// Painel geral: vendas, pendências e produtos mais vendidos, com atalhos
+// pros outros painéis e pro Google Analytics / Mercado Pago.
+app.get('/admin', requireAdmin, async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const senha = encodeURIComponent(req.query.senha);
+
+  const [hoje, semana, mes, statusRows, semRastreioRows, avaliacoesPendentesRows, topProdutosRows] = await Promise.all([
+    pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('day', now())`),
+    pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('week', now())`),
+    pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('month', now())`),
+    pool.query(`SELECT status, COUNT(*) AS n FROM orders GROUP BY status ORDER BY n DESC`),
+    pool.query(`SELECT COUNT(*) AS n FROM orders WHERE status='approved' AND (tracking_code IS NULL OR tracking_code = '')`),
+    pool.query(`SELECT COUNT(*) AS n FROM reviews WHERE status='pending'`),
+    pool.query(`
+      SELECT item->>'title' AS titulo, SUM((item->>'quantity')::int) AS qtd
+      FROM orders, jsonb_array_elements(items) AS item
+      WHERE status = 'approved'
+      GROUP BY titulo
+      ORDER BY qtd DESC
+      LIMIT 5
+    `)
+  ]);
+
+  const reais = (v) => 'R$ ' + Number(v).toFixed(2).replace('.', ',');
+  const statusLabel = { pending: 'Pendente', approved: 'Aprovado', rejected: 'Recusado', in_process: 'Em análise', cancelled: 'Cancelado', refunded: 'Reembolsado' };
+  const semRastreio = Number(semRastreioRows.rows[0].n);
+  const avaliacoesPendentes = Number(avaliacoesPendentesRows.rows[0].n);
+
+  const body = `
+    <h1>Painel — Café Só Grãos</h1>
+
+    <section>
+      <h2>Vendas (pedidos aprovados)</h2>
+      <div class="cards">
+        <div class="card"><span>Hoje</span><strong>${reais(hoje.rows[0].total)}</strong></div>
+        <div class="card"><span>Esta semana</span><strong>${reais(semana.rows[0].total)}</strong></div>
+        <div class="card"><span>Este mês</span><strong>${reais(mes.rows[0].total)}</strong></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Pendências</h2>
+      <div class="cards">
+        <div class="card ${semRastreio > 0 ? 'alerta' : ''}">
+          <span>Pedidos sem rastreio</span><strong>${semRastreio}</strong>
+          <a href="/admin/pedidos?senha=${senha}">Ver pedidos →</a>
+        </div>
+        <div class="card ${avaliacoesPendentes > 0 ? 'alerta' : ''}">
+          <span>Avaliações aguardando aprovação</span><strong>${avaliacoesPendentes}</strong>
+          <a href="/admin/avaliacoes?senha=${senha}">Ver avaliações →</a>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Produtos mais vendidos</h2>
+      <table>
+        <tr><th>Produto</th><th>Unidades vendidas</th></tr>
+        ${topProdutosRows.rows.map((p) => `<tr><td>${escapeHtml(p.titulo)}</td><td>${p.qtd}</td></tr>`).join('') || '<tr><td colspan="2">Ainda sem vendas aprovadas.</td></tr>'}
+      </table>
+    </section>
+
+    <section>
+      <h2>Pedidos por status</h2>
+      <table>
+        <tr><th>Status</th><th>Quantidade</th></tr>
+        ${statusRows.rows.map((s) => `<tr><td>${escapeHtml(statusLabel[s.status] || s.status)}</td><td>${s.n}</td></tr>`).join('') || '<tr><td colspan="2">Nenhum pedido ainda.</td></tr>'}
+      </table>
+    </section>
+  `;
+
+  res.send(adminLayout({ title: 'Painel', senha, ativo: 'painel', body }));
+});
+
+app.get('/admin/pedidos', requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const { rows } = await pool.query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 200');
@@ -268,30 +390,18 @@ app.get('/admin/pedidos', async (req, res) => {
     </tr>
   `).join('');
 
-  res.send(`
-    <html><head><meta charset="utf-8"><title>Pedidos - Café Só Grãos</title>
-    <style>
-      body { font-family: sans-serif; padding: 24px; background: #faf6f0; color: #2a1d14; }
-      table { border-collapse: collapse; width: 100%; background: #fff; }
-      th, td { border: 1px solid #ecdfc9; padding: 10px; text-align: left; font-size: 14px; vertical-align: top; }
-      th { background: #3b2416; color: #fff; }
-      form { margin-top: 6px; }
-    </style>
-    </head><body>
+  const body = `
     <h1>Pedidos — Café Só Grãos</h1>
     <table>
       <tr><th>Data</th><th>Status</th><th>Cliente</th><th>Endereço</th><th>Itens</th><th>Frete</th><th>Total</th><th>Rastreio</th></tr>
       ${linhas || '<tr><td colspan="8">Nenhum pedido ainda.</td></tr>'}
     </table>
-    </body></html>
-  `);
+  `;
+  res.send(adminLayout({ title: 'Pedidos', senha, ativo: 'pedidos', body }));
 });
 
 // Salva o código de rastreio de um pedido e avisa o cliente por e-mail.
-app.post('/admin/pedidos/:id/rastreio', express.urlencoded({ extended: false }), async (req, res) => {
-  if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
-    return res.status(401).send('Senha incorreta.');
-  }
+app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ extended: false }), async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const codigo = String(req.body?.codigo || '').trim().slice(0, 100);
@@ -343,10 +453,7 @@ app.get('/api/avaliacoes', async (req, res) => {
 });
 
 // Painel de moderação das avaliações, protegido por senha.
-app.get('/admin/avaliacoes', async (req, res) => {
-  if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
-    return res.status(401).send('Senha incorreta. Acesse com ?senha=SUASENHA na URL.');
-  }
+app.get('/admin/avaliacoes', requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const { rows } = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC LIMIT 300');
@@ -367,29 +474,17 @@ app.get('/admin/avaliacoes', async (req, res) => {
     </tr>
   `).join('');
 
-  res.send(`
-    <html><head><meta charset="utf-8"><title>Avaliações - Café Só Grãos</title>
-    <style>
-      body { font-family: sans-serif; padding: 24px; background: #faf6f0; color: #2a1d14; }
-      table { border-collapse: collapse; width: 100%; background: #fff; }
-      th, td { border: 1px solid #ecdfc9; padding: 10px; text-align: left; font-size: 14px; vertical-align: top; }
-      th { background: #3b2416; color: #fff; }
-      a { color: #b85a32; }
-    </style>
-    </head><body>
+  const body = `
     <h1>Avaliações — Café Só Grãos</h1>
     <table>
       <tr><th>Data</th><th>Nome</th><th>Nota</th><th>Comentário</th><th>Status</th><th>Ação</th></tr>
       ${linhas || '<tr><td colspan="6">Nenhuma avaliação ainda.</td></tr>'}
     </table>
-    </body></html>
-  `);
+  `;
+  res.send(adminLayout({ title: 'Avaliações', senha, ativo: 'avaliacoes', body }));
 });
 
-app.get('/admin/avaliacoes/:id/:acao', async (req, res) => {
-  if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
-    return res.status(401).send('Senha incorreta.');
-  }
+app.get('/admin/avaliacoes/:id/:acao', requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
   const acao = req.params.acao;
   if (!['aprovar', 'rejeitar'].includes(acao)) return res.status(400).send('Ação inválida.');
