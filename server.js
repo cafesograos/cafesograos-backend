@@ -293,10 +293,24 @@ app.all('/webhook', webhookLimiter, async (req, res) => {
       const info = await payment.get({ id });
       console.log(`Notificação de pagamento ${id}: status "${info.status}"`);
 
-      if (pool && info.preference_id) {
+      // A API de pagamentos não devolve mais preference_id direto (só o id
+      // da merchant_order) — sem isso a gente nunca conseguia casar o
+      // pagamento com o pedido, e o status ficava pending pra sempre mesmo
+      // com o pagamento aprovado.
+      let preferenceId = info.preference_id;
+      if (!preferenceId && info.order?.id) {
+        const orderRes = await fetch(`https://api.mercadopago.com/merchant_orders/${info.order.id}`, {
+          headers: { Authorization: `Bearer ${ACCESS_TOKEN}` }
+        });
+        if (orderRes.ok) {
+          preferenceId = (await orderRes.json()).preference_id;
+        }
+      }
+
+      if (pool && preferenceId) {
         const { rows } = await pool.query(
           `UPDATE orders SET status = $1, payment_id = $2 WHERE preference_id = $3 RETURNING *`,
-          [info.status, String(id), info.preference_id]
+          [info.status, String(id), preferenceId]
         );
         const order = rows[0];
         if (order && info.status === 'approved') {
