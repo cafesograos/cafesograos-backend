@@ -9,6 +9,7 @@ const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastrei
 const { CATEGORIES, PRODUCTS } = require('./products');
 
 const app = express();
+app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for reconhecer a stack
 app.set('trust proxy', true); // Railway/Render terminam HTTPS no proxy; sem isso req.protocol vira "http" errado
 app.use(cors());
 app.use(express.json());
@@ -534,25 +535,6 @@ app.get('/admin/avaliacoes/:id/:acao', requireAdmin, async (req, res) => {
   const status = acao === 'aprovar' ? 'approved' : 'rejected';
   await pool.query('UPDATE reviews SET status = $1 WHERE id = $2', [status, req.params.id]);
   res.redirect('/admin/avaliacoes?senha=' + encodeURIComponent(req.query.senha));
-});
-
-// TEMPORÁRIO: testa o envio real dos e-mails de confirmação e rastreio.
-// Remover depois de confirmar que os dois chegam na caixa de entrada.
-app.get('/admin/testar-emails', requireAdmin, async (req, res) => {
-  const destinoTeste = 'alberto.adm@cafesograos.com.br';
-  const pedidoFake = {
-    customer_name: 'Teste Auditoria',
-    customer_email: destinoTeste,
-    items: [{ title: 'Café Tradicional 500g', quantity: 1, unit_price: 33 }],
-    shipping_cost: 13.84,
-    total: 46.84,
-    address: 'Rua de Teste', address_number: '100', address_complement: '',
-    neighborhood: 'Centro', city: 'Araraquara', state: 'SP', cep: '14800-360',
-    tracking_code: 'BR123456789TESTE'
-  };
-  const r1 = await enviarEmailConfirmacaoCliente(pedidoFake);
-  const r2 = await enviarEmailRastreio(pedidoFake);
-  res.json({ destino: destinoTeste, confirmacao: r1, rastreio: r2 });
 });
 
 app.get('/health', (req, res) => res.json({ ok: true }));
