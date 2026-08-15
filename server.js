@@ -526,6 +526,25 @@ app.get('/admin/avaliacoes/:id/:acao', requireAdmin, async (req, res) => {
   res.redirect('/admin/avaliacoes?senha=' + encodeURIComponent(req.query.senha));
 });
 
+// TEMPORÁRIO: testa o envio real dos e-mails de confirmação e rastreio.
+// Remover depois de confirmar que os dois chegam na caixa de entrada.
+app.get('/admin/testar-emails', requireAdmin, async (req, res) => {
+  const destinoTeste = 'alberto.adm@cafesograos.com.br';
+  const pedidoFake = {
+    customer_name: 'Teste Auditoria',
+    customer_email: destinoTeste,
+    items: [{ title: 'Café Tradicional 500g', quantity: 1, unit_price: 33 }],
+    shipping_cost: 13.84,
+    total: 46.84,
+    address: 'Rua de Teste', address_number: '100', address_complement: '',
+    neighborhood: 'Centro', city: 'Araraquara', state: 'SP', cep: '14800-360',
+    tracking_code: 'BR123456789TESTE'
+  };
+  await enviarEmailConfirmacaoCliente(pedidoFake);
+  await enviarEmailRastreio(pedidoFake);
+  res.send('Dois e-mails de teste enviados para ' + destinoTeste + '. Confira a caixa de entrada (e o spam).');
+});
+
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
