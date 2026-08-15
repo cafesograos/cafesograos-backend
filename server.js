@@ -35,6 +35,28 @@ const checkoutLimiter = rateLimit({
   message: { error: 'Muitas requisições. Tente novamente em alguns minutos.' }
 });
 
+// O /webhook do Mercado Pago não tinha limite nenhum — qualquer um podia
+// bombardear a rota, cada chamada gerando uma consulta na API do Mercado
+// Pago. Esse limite é mais folgado que o checkoutLimiter pois o MP às vezes
+// reenvia a mesma notificação várias vezes.
+const webhookLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 200,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// Trava bruteforce de senha nas rotas /admin* — a senha é forte, mas sem
+// limite alguém poderia tentar milhares de valores por script.
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Muitas tentativas. Tente novamente em alguns minutos.'
+});
+app.use('/admin', adminLimiter);
+
 // Autorização OAuth do Melhor Envio (rodar uma vez, manualmente, logado como admin).
 app.get('/oauth/melhorenvio/connect', (req, res) => {
   const redirectUri = `${req.protocol}://${req.get('host')}/oauth/melhorenvio/callback`;
@@ -102,7 +124,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
   try {
     const { items, cliente, entrega } = req.body;
 
-    if (!Array.isArray(items) || items.length === 0) {
+    if (!Array.isArray(items) || items.length === 0 || items.length > 30) {
       return res.status(400).json({ error: 'Carrinho vazio ou inválido.' });
     }
     if (!cliente?.nome || !cliente?.email || !entrega?.cep) {
@@ -191,7 +213,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
 
 // Recebe as notificações de pagamento do Mercado Pago (webhook/IPN).
 // Aceita GET (teste de URL do painel e IPN antigo) e POST (webhooks novos).
-app.all('/webhook', async (req, res) => {
+app.all('/webhook', webhookLimiter, async (req, res) => {
   try {
     const topic = req.query.topic || req.query.type || req.body?.type;
     const id = req.query.id || req.body?.data?.id;
@@ -261,7 +283,7 @@ function adminLayout({ title, senha, ativo, body }) {
     { id: 'mp', label: 'Mercado Pago ↗', href: 'https://www.mercadopago.com.br/activities', external: true }
   ];
   const navHtml = nav.map((item) => `
-    <a href="${item.href}" ${item.external ? 'target="_blank" rel="noopener"' : ''} class="${item.id === ativo ? 'ativo' : ''}">${item.label}</a>
+    <a href="${item.href}" ${item.external ? 'target="_blank" rel="noopener noreferrer"' : ''} class="${item.id === ativo ? 'ativo' : ''}">${item.label}</a>
   `).join('');
 
   return `
@@ -270,25 +292,31 @@ function adminLayout({ title, senha, ativo, body }) {
     <link rel="icon" href="/favicon.ico" sizes="any">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <meta name="theme-color" content="#211714">
+    <meta name="referrer" content="no-referrer">
     <style>
       body { font-family: sans-serif; padding: 0; margin: 0; background: #faf6f0; color: #2a1d14; }
-      .admin-nav { background: #3b2416; padding: 14px 24px; display: flex; gap: 20px; flex-wrap: wrap; }
-      .admin-nav a { color: rgba(255,255,255,.75); text-decoration: none; font-size: 14px; font-weight: 600; }
+      .admin-nav { background: #3b2416; padding: 12px 16px; display: flex; gap: 14px; flex-wrap: wrap; }
+      .admin-nav a { color: rgba(255,255,255,.75); text-decoration: none; font-size: 14px; font-weight: 600; white-space: nowrap; }
       .admin-nav a:hover, .admin-nav a.ativo { color: #fff; }
-      .admin-body { padding: 24px; }
-      h1 { margin-top: 0; }
-      table { border-collapse: collapse; width: 100%; background: #fff; display: block; overflow-x: auto; }
+      .admin-body { padding: 16px; }
+      h1 { margin-top: 0; font-size: 22px; }
+      table { border-collapse: collapse; width: 100%; background: #fff; display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
       th, td { border: 1px solid #ecdfc9; padding: 10px; text-align: left; font-size: 14px; vertical-align: top; }
       th { background: #3b2416; color: #fff; }
       a { color: #b85a32; }
       form { margin-top: 6px; }
-      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 28px; }
-      .card { background: #fff; border: 1px solid #ecdfc9; border-radius: 8px; padding: 18px; }
+      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 28px; }
+      .card { background: #fff; border: 1px solid #ecdfc9; border-radius: 8px; padding: 16px; }
       .card span { display: block; font-size: 13px; color: #8a6f5c; margin-bottom: 6px; }
-      .card strong { font-size: 24px; }
+      .card strong { font-size: 22px; }
       .card.alerta strong { color: #b85a32; }
       section { margin-bottom: 32px; }
       section h2 { font-size: 16px; margin-bottom: 12px; }
+      @media (max-width: 480px) {
+        .admin-body { padding: 12px; }
+        .cards { grid-template-columns: 1fr 1fr; }
+        th, td { font-size: 13px; padding: 8px; }
+      }
     </style>
     </head><body>
     <nav class="admin-nav">${navHtml}</nav>
