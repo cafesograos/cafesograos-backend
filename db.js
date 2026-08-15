@@ -40,7 +40,17 @@ async function initDb() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
-  console.log('Banco de dados pronto (tabela orders).');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id SERIAL PRIMARY KEY,
+      customer_name TEXT NOT NULL,
+      rating SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+      comment TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+  console.log('Banco de dados pronto (tabelas orders, reviews).');
 }
 
 module.exports = { pool, initDb };

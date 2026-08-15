@@ -277,6 +277,97 @@ app.get('/admin/pedidos', async (req, res) => {
   `);
 });
 
+// Avaliações de clientes (estilo Google: nome, nota de 1-5, comentário).
+// Toda avaliação nova entra como "pending" e só aparece no site depois de
+// aprovada manualmente — evita comentário falso de concorrente ou spam.
+app.post('/api/avaliacoes', checkoutLimiter, async (req, res) => {
+  try {
+    if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
+    const nome = String(req.body?.nome || '').trim().slice(0, 100);
+    const nota = Math.round(Number(req.body?.nota));
+    const comentario = String(req.body?.comentario || '').trim().slice(0, 600);
+
+    if (!nome || !comentario || !(nota >= 1 && nota <= 5)) {
+      return res.status(400).json({ error: 'Preencha nome, nota (1 a 5) e comentário.' });
+    }
+
+    await pool.query(
+      'INSERT INTO reviews (customer_name, rating, comment) VALUES ($1, $2, $3)',
+      [nome, nota, comentario]
+    );
+    res.json({ ok: true, message: 'Recebemos sua avaliação! Ela vai aparecer no site assim que for revisada.' });
+  } catch (err) {
+    console.error('Erro ao salvar avaliação:', err);
+    res.status(500).json({ error: 'Não foi possível enviar sua avaliação.' });
+  }
+});
+
+// Avaliações já aprovadas, públicas — usadas na seção "O que dizem sobre a gente".
+app.get('/api/avaliacoes', async (req, res) => {
+  if (!pool) return res.json([]);
+  const { rows } = await pool.query(
+    `SELECT customer_name, rating, comment, created_at FROM reviews
+     WHERE status = 'approved' ORDER BY created_at DESC LIMIT 30`
+  );
+  res.json(rows);
+});
+
+// Painel de moderação das avaliações, protegido por senha.
+app.get('/admin/avaliacoes', async (req, res) => {
+  if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
+    return res.status(401).send('Senha incorreta. Acesse com ?senha=SUASENHA na URL.');
+  }
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+  const { rows } = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC LIMIT 300');
+  const senha = encodeURIComponent(req.query.senha);
+  const estrelas = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
+  const linhas = rows.map((r) => `
+    <tr>
+      <td>${escapeHtml(new Date(r.created_at).toLocaleString('pt-BR'))}</td>
+      <td>${escapeHtml(r.customer_name)}</td>
+      <td>${estrelas(r.rating)}</td>
+      <td>${escapeHtml(r.comment)}</td>
+      <td><strong>${escapeHtml(r.status)}</strong></td>
+      <td>
+        ${r.status !== 'approved' ? `<a href="/admin/avaliacoes/${r.id}/aprovar?senha=${senha}">Aprovar</a>` : ''}
+        ${r.status !== 'approved' && r.status !== 'rejected' ? ' · ' : ''}
+        ${r.status !== 'rejected' ? `<a href="/admin/avaliacoes/${r.id}/rejeitar?senha=${senha}">Rejeitar</a>` : ''}
+      </td>
+    </tr>
+  `).join('');
+
+  res.send(`
+    <html><head><meta charset="utf-8"><title>Avaliações - Café Só Grãos</title>
+    <style>
+      body { font-family: sans-serif; padding: 24px; background: #faf6f0; color: #2a1d14; }
+      table { border-collapse: collapse; width: 100%; background: #fff; }
+      th, td { border: 1px solid #ecdfc9; padding: 10px; text-align: left; font-size: 14px; vertical-align: top; }
+      th { background: #3b2416; color: #fff; }
+      a { color: #b85a32; }
+    </style>
+    </head><body>
+    <h1>Avaliações — Café Só Grãos</h1>
+    <table>
+      <tr><th>Data</th><th>Nome</th><th>Nota</th><th>Comentário</th><th>Status</th><th>Ação</th></tr>
+      ${linhas || '<tr><td colspan="6">Nenhuma avaliação ainda.</td></tr>'}
+    </table>
+    </body></html>
+  `);
+});
+
+app.get('/admin/avaliacoes/:id/:acao', async (req, res) => {
+  if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
+    return res.status(401).send('Senha incorreta.');
+  }
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const acao = req.params.acao;
+  if (!['aprovar', 'rejeitar'].includes(acao)) return res.status(400).send('Ação inválida.');
+  const status = acao === 'aprovar' ? 'approved' : 'rejected';
+  await pool.query('UPDATE reviews SET status = $1 WHERE id = $2', [status, req.params.id]);
+  res.redirect('/admin/avaliacoes?senha=' + encodeURIComponent(req.query.senha));
+});
+
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
