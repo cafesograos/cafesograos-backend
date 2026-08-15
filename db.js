@@ -40,6 +40,10 @@ async function initDb() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+  // Pedido já existia sem essa coluna em produção — ADD COLUMN IF NOT EXISTS
+  // garante que o campo apareça sem precisar recriar a tabela.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_code TEXT;`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reviews (
       id SERIAL PRIMARY KEY,

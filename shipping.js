@@ -54,7 +54,7 @@ async function calcularFrete(cepDestino, pesoKg) {
         Accept: 'application/json',
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
-        'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com)'
+        'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com.br)'
       },
       body: JSON.stringify({
         from: { postal_code: ORIGEM_CEP },

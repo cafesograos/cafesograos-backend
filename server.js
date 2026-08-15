@@ -5,7 +5,7 @@ const rateLimit = require('express-rate-limit');
 const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 const { pool, initDb } = require('./db');
 const { calcularFrete } = require('./shipping');
-const { enviarEmailNovoPedido } = require('./email');
+const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio } = require('./email');
 const { CATEGORIES, PRODUCTS } = require('./products');
 
 const app = express();
@@ -208,6 +208,7 @@ app.all('/webhook', async (req, res) => {
         const order = rows[0];
         if (order && info.status === 'approved') {
           await enviarEmailNovoPedido(order);
+          await enviarEmailConfirmacaoCliente(order);
         }
       }
     } else {
@@ -247,6 +248,7 @@ app.get('/admin/pedidos', async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const { rows } = await pool.query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 200');
+  const senha = encodeURIComponent(req.query.senha);
   const linhas = rows.map((o) => `
     <tr>
       <td>${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR'))}</td>
@@ -256,6 +258,13 @@ app.get('/admin/pedidos', async (req, res) => {
       <td>${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</td>
       <td>R$ ${Number(o.shipping_cost).toFixed(2)}</td>
       <td>R$ ${Number(o.total).toFixed(2)}</td>
+      <td>
+        ${o.tracking_code ? `Enviado:<br><strong>${escapeHtml(o.tracking_code)}</strong>` : ''}
+        <form method="POST" action="/admin/pedidos/${o.id}/rastreio?senha=${senha}">
+          <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}" style="width:130px;">
+          <button type="submit">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
+        </form>
+      </td>
     </tr>
   `).join('');
 
@@ -266,15 +275,36 @@ app.get('/admin/pedidos', async (req, res) => {
       table { border-collapse: collapse; width: 100%; background: #fff; }
       th, td { border: 1px solid #ecdfc9; padding: 10px; text-align: left; font-size: 14px; vertical-align: top; }
       th { background: #3b2416; color: #fff; }
+      form { margin-top: 6px; }
     </style>
     </head><body>
     <h1>Pedidos — Café Só Grãos</h1>
     <table>
-      <tr><th>Data</th><th>Status</th><th>Cliente</th><th>Endereço</th><th>Itens</th><th>Frete</th><th>Total</th></tr>
-      ${linhas || '<tr><td colspan="7">Nenhum pedido ainda.</td></tr>'}
+      <tr><th>Data</th><th>Status</th><th>Cliente</th><th>Endereço</th><th>Itens</th><th>Frete</th><th>Total</th><th>Rastreio</th></tr>
+      ${linhas || '<tr><td colspan="8">Nenhum pedido ainda.</td></tr>'}
     </table>
     </body></html>
   `);
+});
+
+// Salva o código de rastreio de um pedido e avisa o cliente por e-mail.
+app.post('/admin/pedidos/:id/rastreio', express.urlencoded({ extended: false }), async (req, res) => {
+  if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
+    return res.status(401).send('Senha incorreta.');
+  }
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+  const codigo = String(req.body?.codigo || '').trim().slice(0, 100);
+  if (!codigo) return res.status(400).send('Informe um código de rastreio.');
+
+  const { rows } = await pool.query(
+    'UPDATE orders SET tracking_code = $1 WHERE id = $2 RETURNING *',
+    [codigo, req.params.id]
+  );
+  const order = rows[0];
+  if (order) await enviarEmailRastreio(order);
+
+  res.redirect('/admin/pedidos?senha=' + encodeURIComponent(req.query.senha));
 });
 
 // Avaliações de clientes (estilo Google: nome, nota de 1-5, comentário).
