@@ -10,7 +10,7 @@ const { CATEGORIES, PRODUCTS } = require('./products');
 
 const app = express();
 app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for reconhecer a stack
-app.set('trust proxy', true); // Railway/Render terminam HTTPS no proxy; sem isso req.protocol vira "http" errado
+app.set('trust proxy', 1); // Railway/Render terminam HTTPS num único proxy; "true" confiaria em qualquer X-Forwarded-For e quebra o rate limit por IP
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public')); // ícone do painel admin (favicon / apple-touch-icon)
@@ -304,16 +304,25 @@ app.all('/webhook', webhookLimiter, async (req, res) => {
         });
         if (orderRes.ok) {
           preferenceId = (await orderRes.json()).preference_id;
+        } else {
+          console.error(`Falha ao buscar merchant_order ${info.order.id} pra achar o preference_id:`, orderRes.status);
         }
       }
 
       if (pool && preferenceId) {
+        // Guarda o status de antes pra só disparar cupom/e-mails na primeira
+        // vez que o pedido vira "approved" — o Mercado Pago reenvia a mesma
+        // notificação várias vezes, e sem essa checagem cada reenvio gerava
+        // um cupom duplicado e mandava os e-mails de novo.
+        const { rows: antes } = await pool.query('SELECT status FROM orders WHERE preference_id = $1', [preferenceId]);
+        const statusAnterior = antes[0]?.status;
+
         const { rows } = await pool.query(
           `UPDATE orders SET status = $1, payment_id = $2 WHERE preference_id = $3 RETURNING *`,
           [info.status, String(id), preferenceId]
         );
         const order = rows[0];
-        if (order && info.status === 'approved') {
+        if (order && info.status === 'approved' && statusAnterior !== 'approved') {
           // Só cria o cupom/marca como usado quando o pagamento é realmente
           // aprovado — evita gerar cupom pra carrinho abandonado ou queimar
           // o cupom de alguém que desistiu no meio do checkout.
@@ -617,9 +626,8 @@ app.get('/admin/avaliacoes', requireAdmin, async (req, res) => {
       <td>${escapeHtml(r.comment)}</td>
       <td><strong>${escapeHtml(r.status)}</strong></td>
       <td>
-        ${r.status !== 'approved' ? `<a href="/admin/avaliacoes/${r.id}/aprovar?senha=${senha}">Aprovar</a>` : ''}
-        ${r.status !== 'approved' && r.status !== 'rejected' ? ' · ' : ''}
-        ${r.status !== 'rejected' ? `<a href="/admin/avaliacoes/${r.id}/rejeitar?senha=${senha}">Rejeitar</a>` : ''}
+        ${r.status !== 'approved' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/aprovar?senha=${senha}" style="display:inline;"><button type="submit">Aprovar</button></form>` : ''}
+        ${r.status !== 'rejected' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/rejeitar?senha=${senha}" style="display:inline; margin-left:6px;"><button type="submit">Rejeitar</button></form>` : ''}
       </td>
     </tr>
   `).join('');
@@ -634,7 +642,7 @@ app.get('/admin/avaliacoes', requireAdmin, async (req, res) => {
   res.send(adminLayout({ title: 'Avaliações', senha, ativo: 'avaliacoes', body }));
 });
 
-app.get('/admin/avaliacoes/:id/:acao', requireAdmin, async (req, res) => {
+app.post('/admin/avaliacoes/:id/:acao', requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
   const acao = req.params.acao;
   if (!['aprovar', 'rejeitar'].includes(acao)) return res.status(400).send('Ação inválida.');
