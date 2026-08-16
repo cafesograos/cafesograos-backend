@@ -230,7 +230,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       });
     }
 
-    const total = line_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
+    const total = Number(line_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0).toFixed(2));
 
     const preference = new Preference(client);
     const result = await preference.create({
