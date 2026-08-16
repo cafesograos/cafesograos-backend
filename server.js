@@ -399,31 +399,105 @@ function adminLayout({ title, senha, ativo, body }) {
     <title>${escapeHtml(title)} - Café Só Grãos</title>
     <link rel="icon" href="/favicon.ico" sizes="any">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,700&display=swap" rel="stylesheet">
     <meta name="theme-color" content="#211714">
     <meta name="referrer" content="no-referrer">
     <style>
-      body { font-family: sans-serif; padding: 0; margin: 0; background: #faf6f0; color: #2a1d14; }
-      .admin-nav { background: #3b2416; padding: 12px 16px; display: flex; gap: 14px; flex-wrap: wrap; }
-      .admin-nav a { color: rgba(255,255,255,.75); text-decoration: none; font-size: 14px; font-weight: 600; white-space: nowrap; }
-      .admin-nav a:hover, .admin-nav a.ativo { color: #fff; }
-      .admin-body { padding: 16px; }
-      h1 { margin-top: 0; font-size: 22px; }
-      table { border-collapse: collapse; width: 100%; background: #fff; display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-      th, td { border: 1px solid #ecdfc9; padding: 10px; text-align: left; font-size: 14px; vertical-align: top; }
-      th { background: #3b2416; color: #fff; }
-      a { color: #b85a32; }
-      form { margin-top: 6px; }
-      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 28px; }
-      .card { background: #fff; border: 1px solid #ecdfc9; border-radius: 8px; padding: 16px; }
-      .card span { display: block; font-size: 13px; color: #8a6f5c; margin-bottom: 6px; }
-      .card strong { font-size: 22px; }
-      .card.alerta strong { color: #b85a32; }
-      section { margin-bottom: 32px; }
-      section h2 { font-size: 16px; margin-bottom: 12px; }
+      * { box-sizing: border-box; }
+      body {
+        font-family: 'General Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        margin: 0; background: #F7F5F4; color: #211714; -webkit-font-smoothing: antialiased;
+      }
+      a { color: #C1642F; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+
+      .admin-nav {
+        position: sticky; top: 0; z-index: 10; background: #211714;
+        padding: 10px 12px; display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+      }
+      .admin-nav a {
+        color: rgba(255,255,255,.65); font-size: 13px; font-weight: 600; text-decoration: none;
+        padding: 8px 14px; border-radius: 999px; white-space: nowrap; transition: background .15s, color .15s;
+      }
+      .admin-nav a:hover { background: rgba(255,255,255,.08); color: #fff; }
+      .admin-nav a.ativo { background: #C1642F; color: #fff; }
+
+      .admin-body { padding: 16px; max-width: 900px; margin: 0 auto; }
+      h1 { margin: 4px 0 20px; font-size: 20px; font-weight: 700; }
+
+      section { margin-bottom: 28px; }
+      section h2 {
+        font-size: 12px; font-weight: 700; color: #8a6f5c; text-transform: uppercase;
+        letter-spacing: .04em; margin-bottom: 10px;
+      }
+
+      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+      .card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
+      .card span { display: block; font-size: 12px; color: #8a6f5c; margin-bottom: 4px; font-weight: 600; }
+      .card strong { font-size: 22px; font-weight: 700; }
+      .card.alerta { box-shadow: 0 1px 3px rgba(33,23,20,.08), inset 3px 0 0 #C1642F; }
+      .card.alerta strong { color: #C1642F; }
+      .card-link { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 700; }
+
+      table.mini { border-collapse: collapse; width: 100%; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
+      table.mini th, table.mini td { padding: 10px 14px; text-align: left; font-size: 13px; border-bottom: 1px solid #F0E9E2; }
+      table.mini th { background: #FAF6F0; color: #5a4a3f; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+      table.mini tr:last-child td { border-bottom: none; }
+
+      .badge {
+        display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: .03em; padding: 4px 10px; border-radius: 999px;
+      }
+      .badge-pending { background: #FDF0DD; color: #B7791F; }
+      .badge-approved { background: #DEF3E5; color: #1F8A4C; }
+      .badge-rejected { background: #FBE2E2; color: #C53030; }
+      .badge-in_process { background: #E4E9FB; color: #3651C7; }
+      .badge-cancelled, .badge-refunded { background: #EDEAE6; color: #6B5B4F; }
+
+      .filtros { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+      .filtros a {
+        font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 999px;
+        background: #fff; color: #5a4a3f; box-shadow: 0 1px 3px rgba(33,23,20,.08);
+      }
+      .filtros a:hover { text-decoration: none; background: #F0E9E2; }
+      .filtros a.ativo { background: #211714; color: #fff; }
+
+      .lista-vazia { text-align: center; color: #8a6f5c; padding: 32px 16px; background: #fff; border-radius: 12px; font-size: 14px; }
+
+      .pedido-lista, .avaliacao-lista { display: flex; flex-direction: column; gap: 12px; }
+      .pedido-card, .avaliacao-card-admin { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
+      .pedido-topo { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
+      .pedido-cliente { font-weight: 700; font-size: 15px; margin-top: 6px; }
+      .pedido-data { font-size: 12px; color: #8a6f5c; }
+      .pedido-total { font-size: 18px; font-weight: 700; white-space: nowrap; }
+
+      .pedido-selos { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+      .selo { font-size: 11px; background: #FDF0DD; color: #8a5a1f; padding: 4px 10px; border-radius: 999px; font-weight: 700; }
+
+      .pedido-detalhe { font-size: 13px; color: #5a4a3f; line-height: 1.5; }
+      .pedido-detalhe strong { color: #211714; }
+      .pedido-itens { font-size: 13px; color: #5a4a3f; margin: 10px 0; padding: 10px 12px; background: #FAF6F0; border-radius: 8px; }
+      .pedido-linhas { display: flex; justify-content: space-between; font-size: 13px; color: #5a4a3f; }
+
+      .pedido-acoes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #F0E9E2; }
+      .pedido-acoes form { display: flex; gap: 6px; flex: 1; min-width: 220px; }
+      .pedido-acoes input[type=text] { flex: 1; min-width: 0; }
+
+      form { margin: 0; }
+      .btn-mini {
+        padding: 10px 16px; border-radius: 8px; border: none; font-size: 13px; font-weight: 700;
+        cursor: pointer; white-space: nowrap; font-family: inherit;
+      }
+      .btn-mini-primary { background: #211714; color: #fff; }
+      .btn-mini-danger { background: #fff; color: #C53030; border: 1px solid #F3C7C7; }
+      input[type=text] {
+        padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; font-family: inherit;
+      }
+
       @media (max-width: 480px) {
         .admin-body { padding: 12px; }
         .cards { grid-template-columns: 1fr 1fr; }
-        th, td { font-size: 13px; padding: 8px; }
+        .pedido-acoes form { min-width: 100%; }
       }
     </style>
     </head><body>
@@ -432,6 +506,8 @@ function adminLayout({ title, senha, ativo, body }) {
     </body></html>
   `;
 }
+
+const STATUS_LABEL = { pending: 'Pendente', approved: 'Aprovado', rejected: 'Recusado', in_process: 'Em análise', cancelled: 'Cancelado', refunded: 'Reembolsado' };
 
 // Painel geral: vendas, pendências e produtos mais vendidos, com atalhos
 // pros outros painéis e pro Google Analytics / Mercado Pago.
@@ -457,7 +533,6 @@ app.get('/admin', requireAdmin, async (req, res) => {
   ]);
 
   const reais = (v) => 'R$ ' + Number(v).toFixed(2).replace('.', ',');
-  const statusLabel = { pending: 'Pendente', approved: 'Aprovado', rejected: 'Recusado', in_process: 'Em análise', cancelled: 'Cancelado', refunded: 'Reembolsado' };
   const semRastreio = Number(semRastreioRows.rows[0].n);
   const avaliacoesPendentes = Number(avaliacoesPendentesRows.rows[0].n);
 
@@ -478,18 +553,18 @@ app.get('/admin', requireAdmin, async (req, res) => {
       <div class="cards">
         <div class="card ${semRastreio > 0 ? 'alerta' : ''}">
           <span>Pedidos sem rastreio</span><strong>${semRastreio}</strong>
-          <a href="/admin/pedidos?senha=${senha}">Ver pedidos →</a>
+          <a class="card-link" href="/admin/pedidos?senha=${senha}">Ver pedidos →</a>
         </div>
         <div class="card ${avaliacoesPendentes > 0 ? 'alerta' : ''}">
           <span>Avaliações aguardando aprovação</span><strong>${avaliacoesPendentes}</strong>
-          <a href="/admin/avaliacoes?senha=${senha}">Ver avaliações →</a>
+          <a class="card-link" href="/admin/avaliacoes?senha=${senha}">Ver avaliações →</a>
         </div>
       </div>
     </section>
 
     <section>
       <h2>Produtos mais vendidos</h2>
-      <table>
+      <table class="mini">
         <tr><th>Produto</th><th>Unidades vendidas</th></tr>
         ${topProdutosRows.rows.map((p) => `<tr><td>${escapeHtml(p.titulo)}</td><td>${p.qtd}</td></tr>`).join('') || '<tr><td colspan="2">Ainda sem vendas aprovadas.</td></tr>'}
       </table>
@@ -497,9 +572,9 @@ app.get('/admin', requireAdmin, async (req, res) => {
 
     <section>
       <h2>Pedidos por status</h2>
-      <table>
+      <table class="mini">
         <tr><th>Status</th><th>Quantidade</th></tr>
-        ${statusRows.rows.map((s) => `<tr><td>${escapeHtml(statusLabel[s.status] || s.status)}</td><td>${s.n}</td></tr>`).join('') || '<tr><td colspan="2">Nenhum pedido ainda.</td></tr>'}
+        ${statusRows.rows.map((s) => `<tr><td><span class="badge badge-${escapeHtml(s.status)}">${escapeHtml(STATUS_LABEL[s.status] || s.status)}</span></td><td>${s.n}</td></tr>`).join('') || '<tr><td colspan="2">Nenhum pedido ainda.</td></tr>'}
       </table>
     </section>
   `;
@@ -510,38 +585,65 @@ app.get('/admin', requireAdmin, async (req, res) => {
 app.get('/admin/pedidos', requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
-  const { rows } = await pool.query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 200');
+  const filtro = ['pending', 'approved', 'rejected', 'in_process', 'cancelled', 'refunded'].includes(req.query.status)
+    ? req.query.status
+    : null;
+
+  const { rows } = await pool.query(
+    filtro
+      ? 'SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC LIMIT 200'
+      : 'SELECT * FROM orders ORDER BY created_at DESC LIMIT 200',
+    filtro ? [filtro] : []
+  );
   const senha = encodeURIComponent(req.query.senha);
-  const linhas = rows.map((o) => `
-    <tr>
-      <td>${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR'))}</td>
-      <td>${escapeHtml(o.status)}${o.free_gift ? '<br>🎁 brinde' : ''}${o.discount_percent ? `<br>-${escapeHtml(o.discount_percent)}%` : ''}</td>
-      <td>${escapeHtml(o.customer_name)}<br><small>${escapeHtml(o.customer_email)} · ${escapeHtml(o.customer_phone || '')}</small></td>
-      <td>${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')}<br>${escapeHtml(o.neighborhood)} - ${escapeHtml(o.city)}/${escapeHtml(o.state)}<br>CEP ${escapeHtml(o.cep)}</td>
-      <td>${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</td>
-      <td>${Number(o.shipping_cost) === 0 ? 'Grátis' : 'R$ ' + Number(o.shipping_cost).toFixed(2)}</td>
-      <td>R$ ${Number(o.total).toFixed(2)}</td>
-      <td>
-        ${o.tracking_code ? `Enviado:<br><strong>${escapeHtml(o.tracking_code)}</strong>` : ''}
+
+  const filtroLink = (status) => `/admin/pedidos?senha=${senha}${status ? `&status=${status}` : ''}`;
+  const filtros = `
+    <div class="filtros">
+      <a href="${filtroLink(null)}" class="${!filtro ? 'ativo' : ''}">Todos</a>
+      ${Object.keys(STATUS_LABEL).map((s) => `<a href="${filtroLink(s)}" class="${filtro === s ? 'ativo' : ''}">${escapeHtml(STATUS_LABEL[s])}</a>`).join('')}
+    </div>
+  `;
+
+  const cartoes = rows.map((o) => `
+    <div class="pedido-card">
+      <div class="pedido-topo">
+        <div>
+          <span class="badge badge-${escapeHtml(o.status)}">${escapeHtml(STATUS_LABEL[o.status] || o.status)}</span>
+          <div class="pedido-cliente">${escapeHtml(o.customer_name)}</div>
+          <div class="pedido-data">${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR'))}</div>
+        </div>
+        <div class="pedido-total">R$ ${Number(o.total).toFixed(2)}</div>
+      </div>
+      ${(o.free_gift || o.discount_percent || o.tracking_code) ? `
+        <div class="pedido-selos">
+          ${o.free_gift ? '<span class="selo">🎁 Brinde</span>' : ''}
+          ${o.discount_percent ? `<span class="selo">-${escapeHtml(o.discount_percent)}% cupom</span>` : ''}
+          ${o.tracking_code ? `<span class="selo">📦 Enviado: ${escapeHtml(o.tracking_code)}</span>` : ''}
+        </div>
+      ` : ''}
+      <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${escapeHtml(o.customer_email)} · ${escapeHtml(o.customer_phone || 'sem telefone')}</div>
+      <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
+      <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
+      <div class="pedido-linhas"><span>Frete</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : 'R$ ' + Number(o.shipping_cost).toFixed(2)}</strong></div>
+      <div class="pedido-acoes">
         <form method="POST" action="/admin/pedidos/${o.id}/rastreio?senha=${senha}">
-          <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}" style="width:130px;">
-          <button type="submit">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
+          <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
+          <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
         </form>
-      </td>
-      <td>
         <form method="POST" action="/admin/pedidos/${o.id}/excluir?senha=${senha}" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
-          <button type="submit" style="color:#b91c1c;">Excluir</button>
+          <button type="submit" class="btn-mini btn-mini-danger">Excluir</button>
         </form>
-      </td>
-    </tr>
+      </div>
+    </div>
   `).join('');
 
   const body = `
     <h1>Pedidos — Café Só Grãos</h1>
-    <table>
-      <tr><th>Data</th><th>Status</th><th>Cliente</th><th>Endereço</th><th>Itens</th><th>Frete</th><th>Total</th><th>Rastreio</th><th></th></tr>
-      ${linhas || '<tr><td colspan="9">Nenhum pedido ainda.</td></tr>'}
-    </table>
+    ${filtros}
+    <div class="pedido-lista">
+      ${cartoes || '<div class="lista-vazia">Nenhum pedido encontrado.</div>'}
+    </div>
   `;
   res.send(adminLayout({ title: 'Pedidos', senha, ativo: 'pedidos', body }));
 });
@@ -611,33 +713,54 @@ app.get('/api/avaliacoes', async (req, res) => {
 });
 
 // Painel de moderação das avaliações, protegido por senha.
+const REVIEW_STATUS_LABEL = { pending: 'Pendente', approved: 'Aprovada', rejected: 'Rejeitada' };
+
 app.get('/admin/avaliacoes', requireAdmin, async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
-  const { rows } = await pool.query('SELECT * FROM reviews ORDER BY created_at DESC LIMIT 300');
+  const filtro = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null;
+
+  const { rows } = await pool.query(
+    filtro
+      ? 'SELECT * FROM reviews WHERE status = $1 ORDER BY created_at DESC LIMIT 300'
+      : 'SELECT * FROM reviews ORDER BY created_at DESC LIMIT 300',
+    filtro ? [filtro] : []
+  );
   const senha = encodeURIComponent(req.query.senha);
   const estrelas = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
-  const linhas = rows.map((r) => `
-    <tr>
-      <td>${escapeHtml(new Date(r.created_at).toLocaleString('pt-BR'))}</td>
-      <td>${escapeHtml(r.customer_name)}</td>
-      <td>${escapeHtml(r.product_line || '')}</td>
-      <td>${estrelas(r.rating)}</td>
-      <td>${escapeHtml(r.comment)}</td>
-      <td><strong>${escapeHtml(r.status)}</strong></td>
-      <td>
-        ${r.status !== 'approved' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/aprovar?senha=${senha}" style="display:inline;"><button type="submit">Aprovar</button></form>` : ''}
-        ${r.status !== 'rejected' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/rejeitar?senha=${senha}" style="display:inline; margin-left:6px;"><button type="submit">Rejeitar</button></form>` : ''}
-      </td>
-    </tr>
+
+  const filtroLink = (status) => `/admin/avaliacoes?senha=${senha}${status ? `&status=${status}` : ''}`;
+  const filtros = `
+    <div class="filtros">
+      <a href="${filtroLink(null)}" class="${!filtro ? 'ativo' : ''}">Todas</a>
+      ${Object.keys(REVIEW_STATUS_LABEL).map((s) => `<a href="${filtroLink(s)}" class="${filtro === s ? 'ativo' : ''}">${escapeHtml(REVIEW_STATUS_LABEL[s])}</a>`).join('')}
+    </div>
+  `;
+
+  const cartoes = rows.map((r) => `
+    <div class="avaliacao-card-admin">
+      <div class="pedido-topo">
+        <div>
+          <span class="badge badge-${escapeHtml(r.status)}">${escapeHtml(REVIEW_STATUS_LABEL[r.status] || r.status)}</span>
+          <div class="pedido-cliente">${escapeHtml(r.customer_name)}</div>
+          <div class="pedido-data">${escapeHtml(new Date(r.created_at).toLocaleString('pt-BR'))}${r.product_line ? ` · Comprou: ${escapeHtml(r.product_line)}` : ''}</div>
+        </div>
+        <div class="pedido-total" style="color:#C1642F;">${estrelas(r.rating)}</div>
+      </div>
+      <div class="pedido-itens">"${escapeHtml(r.comment)}"</div>
+      <div class="pedido-acoes">
+        ${r.status !== 'approved' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/aprovar?senha=${senha}"><button type="submit" class="btn-mini btn-mini-primary">Aprovar</button></form>` : ''}
+        ${r.status !== 'rejected' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/rejeitar?senha=${senha}"><button type="submit" class="btn-mini btn-mini-danger">Rejeitar</button></form>` : ''}
+      </div>
+    </div>
   `).join('');
 
   const body = `
     <h1>Avaliações — Café Só Grãos</h1>
-    <table>
-      <tr><th>Data</th><th>Nome</th><th>Produto</th><th>Nota</th><th>Comentário</th><th>Status</th><th>Ação</th></tr>
-      ${linhas || '<tr><td colspan="7">Nenhuma avaliação ainda.</td></tr>'}
-    </table>
+    ${filtros}
+    <div class="avaliacao-lista">
+      ${cartoes || '<div class="lista-vazia">Nenhuma avaliação encontrada.</div>'}
+    </div>
   `;
   res.send(adminLayout({ title: 'Avaliações', senha, ativo: 'avaliacoes', body }));
 });
