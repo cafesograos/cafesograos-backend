@@ -11,7 +11,23 @@ const { CATEGORIES, PRODUCTS } = require('./products');
 const app = express();
 app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for reconhecer a stack
 app.set('trust proxy', 1); // Railway/Render terminam HTTPS num único proxy; "true" confiaria em qualquer X-Forwarded-For e quebra o rate limit por IP
-app.use(cors());
+// CORS aberto (sem origin definida) deixava qualquer site na internet chamar
+// nossa API — inclusive /api/create-preference, que cria pedido de verdade
+// no Mercado Pago. Restringe só ao próprio site (+ localhost, usado em testes).
+const ORIGENS_PERMITIDAS = [
+  'https://cafesograos.com.br',
+  'https://www.cafesograos.com.br',
+  /^http:\/\/localhost(:\d+)?$/,
+  /^http:\/\/127\.0\.0\.1(:\d+)?$/
+];
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || ORIGENS_PERMITIDAS.some((o) => (o instanceof RegExp ? o.test(origin) : o === origin))) {
+      return callback(null, true);
+    }
+    callback(new Error('Não permitido por CORS'));
+  }
+}));
 app.use(express.json());
 app.use(express.static('public')); // ícone do painel admin (favicon / apple-touch-icon)
 
