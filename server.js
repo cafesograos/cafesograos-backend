@@ -90,18 +90,31 @@ const adminLimiter = rateLimit({
 app.use('/admin', adminLimiter);
 
 // Autorização OAuth do Melhor Envio (rodar uma vez, manualmente, logado como admin).
-app.get('/oauth/melhorenvio/connect', (req, res) => {
+// Antes essas duas rotas eram públicas, sem checagem nenhuma — qualquer um
+// que descobrisse a URL podia completar o fluxo OAuth com a PRÓPRIA conta do
+// Melhor Envio e substituir silenciosamente a integração do Alberto pela
+// dele. Agora /connect exige a senha do admin, e o /callback só aceita um
+// "state" que a gente mesmo gerou nessa sessão (proteção padrão de CSRF em
+// OAuth) — nunca aceita um code vindo de fora desse fluxo.
+let melhorEnvioOAuthState = null;
+app.get('/oauth/melhorenvio/connect', requireAdmin, (req, res) => {
+  melhorEnvioOAuthState = require('crypto').randomBytes(24).toString('hex');
   const redirectUri = `${req.protocol}://${req.get('host')}/oauth/melhorenvio/callback`;
   const url = new URL('https://melhorenvio.com.br/oauth/authorize');
   url.searchParams.set('client_id', process.env.MELHORENVIO_CLIENT_ID);
   url.searchParams.set('redirect_uri', redirectUri);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', 'shipping-calculate');
+  url.searchParams.set('state', melhorEnvioOAuthState);
   res.redirect(url.toString());
 });
 
 app.get('/oauth/melhorenvio/callback', async (req, res) => {
   try {
+    if (!melhorEnvioOAuthState || req.query.state !== melhorEnvioOAuthState) {
+      return res.status(403).send('Autorização inválida ou expirada. Peça pro admin iniciar a conexão de novo.');
+    }
+    melhorEnvioOAuthState = null; // uso único
     const redirectUri = `${req.protocol}://${req.get('host')}/oauth/melhorenvio/callback`;
     const tokenRes = await fetch('https://melhorenvio.com.br/oauth/token', {
       method: 'POST',
@@ -375,7 +388,7 @@ app.all('/webhook', webhookLimiter, async (req, res) => {
 // usados pela página de sucesso (registrar compra no Google Analytics) e pela
 // página de rastreio (cliente consulta status/código com o número do pedido,
 // que é o preference_id — o mesmo enviado no e-mail de confirmação).
-app.get('/api/pedido/:preferenceId', async (req, res) => {
+app.get('/api/pedido/:preferenceId', asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
   const { rows } = await pool.query(
     'SELECT status, total, shipping_cost, items, tracking_code, created_at FROM orders WHERE preference_id = $1',
@@ -383,13 +396,22 @@ app.get('/api/pedido/:preferenceId', async (req, res) => {
   );
   if (!rows[0]) return res.status(404).json({ error: 'Pedido não encontrado.' });
   res.json(rows[0]);
-});
+}));
 
 // Painéis administrativos, todos protegidos pela mesma senha (?senha=...).
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
+}
+
+// Express 4 não captura erro/rejeição de rota async automaticamente — sem
+// isso, uma falha inesperada (ex.: soluço de conexão com o banco) vira uma
+// promise rejeitada sem handler, que derruba o processo inteiro (loja E
+// painel, ao mesmo tempo) até o Railway reiniciar sozinho. Todo handler
+// async sem try/catch próprio passa por aqui.
+function asyncHandler(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
 
 function requireAdmin(req, res, next) {
@@ -531,7 +553,7 @@ const STATUS_LABEL = { pending: 'Pendente', approved: 'Aprovado', rejected: 'Rec
 
 // Painel geral: vendas, pendências e produtos mais vendidos, com atalhos
 // pros outros painéis e pro Google Analytics / Mercado Pago.
-app.get('/admin', requireAdmin, async (req, res) => {
+app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
   const senha = encodeURIComponent(req.query.senha);
 
@@ -600,9 +622,9 @@ app.get('/admin', requireAdmin, async (req, res) => {
   `;
 
   res.send(adminLayout({ title: 'Painel', senha, ativo: 'painel', body }));
-});
+}));
 
-app.get('/admin/pedidos', requireAdmin, async (req, res) => {
+app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const filtro = ['pending', 'approved', 'rejected', 'in_process', 'cancelled', 'refunded'].includes(req.query.status)
@@ -666,10 +688,10 @@ app.get('/admin/pedidos', requireAdmin, async (req, res) => {
     </div>
   `;
   res.send(adminLayout({ title: 'Pedidos', senha, ativo: 'pedidos', body }));
-});
+}));
 
 // Salva o código de rastreio de um pedido e avisa o cliente por e-mail.
-app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ extended: false }), async (req, res) => {
+app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const codigo = String(req.body?.codigo || '').trim().slice(0, 100);
@@ -683,16 +705,16 @@ app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ exten
   if (order) await enviarEmailRastreio(order);
 
   res.redirect('/admin/pedidos?senha=' + encodeURIComponent(req.query.senha));
-});
+}));
 
 // Exclui um pedido (ex.: pedidos de teste feitos durante o desenvolvimento).
-app.post('/admin/pedidos/:id/excluir', requireAdmin, async (req, res) => {
+app.post('/admin/pedidos/:id/excluir', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   await pool.query('DELETE FROM orders WHERE id = $1', [req.params.id]);
 
   res.redirect('/admin/pedidos?senha=' + encodeURIComponent(req.query.senha));
-});
+}));
 
 // Avaliações de clientes (estilo Google: nome, nota de 1-5, comentário).
 // Toda avaliação nova entra como "pending" e só aparece no site depois de
@@ -723,19 +745,19 @@ app.post('/api/avaliacoes', checkoutLimiter, async (req, res) => {
 });
 
 // Avaliações já aprovadas, públicas — usadas na seção "O que dizem sobre a gente".
-app.get('/api/avaliacoes', async (req, res) => {
+app.get('/api/avaliacoes', asyncHandler(async (req, res) => {
   if (!pool) return res.json([]);
   const { rows } = await pool.query(
     `SELECT customer_name, rating, comment, product_line, created_at FROM reviews
      WHERE status = 'approved' ORDER BY created_at DESC LIMIT 30`
   );
   res.json(rows);
-});
+}));
 
 // Painel de moderação das avaliações, protegido por senha.
 const REVIEW_STATUS_LABEL = { pending: 'Pendente', approved: 'Aprovada', rejected: 'Rejeitada' };
 
-app.get('/admin/avaliacoes', requireAdmin, async (req, res) => {
+app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const filtro = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null;
@@ -783,18 +805,30 @@ app.get('/admin/avaliacoes', requireAdmin, async (req, res) => {
     </div>
   `;
   res.send(adminLayout({ title: 'Avaliações', senha, ativo: 'avaliacoes', body }));
-});
+}));
 
-app.post('/admin/avaliacoes/:id/:acao', requireAdmin, async (req, res) => {
+app.post('/admin/avaliacoes/:id/:acao', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
   const acao = req.params.acao;
   if (!['aprovar', 'rejeitar'].includes(acao)) return res.status(400).send('Ação inválida.');
   const status = acao === 'aprovar' ? 'approved' : 'rejected';
   await pool.query('UPDATE reviews SET status = $1 WHERE id = $2', [status, req.params.id]);
   res.redirect('/admin/avaliacoes?senha=' + encodeURIComponent(req.query.senha));
-});
+}));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
+
+// Rede de segurança final: qualquer erro que escapou de uma rota (via
+// asyncHandler ou next(err) direto) cai aqui em vez de derrubar o processo.
+app.use((err, req, res, next) => {
+  console.error('Erro não tratado numa rota:', err);
+  if (res.headersSent) return next(err);
+  if (req.path.startsWith('/api/') || req.path === '/webhook') {
+    res.status(500).json({ error: 'Erro interno no servidor.' });
+  } else {
+    res.status(500).send('Ocorreu um erro inesperado. Tente novamente em instantes.');
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 initDb().finally(() => {
