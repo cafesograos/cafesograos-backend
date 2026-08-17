@@ -435,6 +435,7 @@ function adminLayout({ title, senha, ativo, body }) {
   const navHtml = nav.map((item) => `
     <a href="${item.href}" ${item.external ? 'target="_blank" rel="noopener noreferrer"' : ''} class="${item.id === ativo ? 'ativo' : ''}">${item.label}</a>
   `).join('');
+  const refreshHtml = `<button class="admin-refresh" onclick="location.reload()" aria-label="Atualizar" title="Atualizar">⟳</button>`;
 
   return `
     <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -455,7 +456,10 @@ function adminLayout({ title, senha, ativo, body }) {
 
       .admin-nav {
         position: sticky; top: 0; z-index: 10; background: #211714;
-        padding: 10px 12px; display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+        padding: 10px 12px; display: flex; align-items: center; gap: 8px;
+      }
+      .admin-nav-links {
+        display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch; flex: 1; min-width: 0;
       }
       .admin-nav a {
         color: rgba(255,255,255,.65); font-size: 13px; font-weight: 600; text-decoration: none;
@@ -463,6 +467,13 @@ function adminLayout({ title, senha, ativo, body }) {
       }
       .admin-nav a:hover { background: rgba(255,255,255,.08); color: #fff; }
       .admin-nav a.ativo { background: #C1642F; color: #fff; }
+      .admin-refresh {
+        flex-shrink: 0; background: rgba(255,255,255,.1); border: none; color: #fff;
+        width: 36px; height: 36px; border-radius: 999px; font-size: 18px; line-height: 1;
+        cursor: pointer; display: flex; align-items: center; justify-content: center;
+      }
+      .admin-refresh:hover { background: rgba(255,255,255,.2); }
+      .admin-refresh:active { transform: rotate(180deg); transition: transform .3s; }
 
       .admin-body { padding: 16px; max-width: 900px; margin: 0 auto; }
       h1 { margin: 4px 0 20px; font-size: 20px; font-weight: 700; }
@@ -543,7 +554,7 @@ function adminLayout({ title, senha, ativo, body }) {
       }
     </style>
     </head><body>
-    <nav class="admin-nav">${navHtml}</nav>
+    <nav class="admin-nav"><div class="admin-nav-links">${navHtml}</div>${refreshHtml}</nav>
     <div class="admin-body">${body}</div>
     </body></html>
   `;
