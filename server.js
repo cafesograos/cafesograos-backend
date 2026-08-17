@@ -442,7 +442,7 @@ function adminLayout({ title, senha, ativo, body }) {
     <title>${escapeHtml(title)} - Café Só Grãos</title>
     <link rel="icon" href="/favicon.ico" sizes="any">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-    <link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,700&display=swap" rel="stylesheet">
+    <link href="https://api.fontshare.com/v2/css?f[]=tanker@400&f[]=general-sans@400,500,700&display=swap" rel="stylesheet">
     <meta name="theme-color" content="#211714">
     <meta name="referrer" content="no-referrer">
     <style>
@@ -451,7 +451,7 @@ function adminLayout({ title, senha, ativo, body }) {
         font-family: 'General Sans', -apple-system, BlinkMacSystemFont, sans-serif;
         margin: 0; background: #F7F5F4; color: #211714; -webkit-font-smoothing: antialiased;
       }
-      a { color: #C1642F; text-decoration: none; }
+      a { color: #D66B3E; text-decoration: none; }
       a:hover { text-decoration: underline; }
 
       .admin-nav {
@@ -466,7 +466,7 @@ function adminLayout({ title, senha, ativo, body }) {
         padding: 8px 14px; border-radius: 999px; white-space: nowrap; transition: background .15s, color .15s;
       }
       .admin-nav a:hover { background: rgba(255,255,255,.08); color: #fff; }
-      .admin-nav a.ativo { background: #C1642F; color: #fff; }
+      .admin-nav a.ativo { background: #D66B3E; color: #fff; }
       .admin-refresh {
         flex-shrink: 0; background: rgba(255,255,255,.1); border: none; color: #fff;
         width: 36px; height: 36px; border-radius: 999px; font-size: 18px; line-height: 1;
@@ -476,7 +476,7 @@ function adminLayout({ title, senha, ativo, body }) {
       .admin-refresh:active { transform: rotate(180deg); transition: transform .3s; }
 
       .admin-body { padding: 16px; max-width: 900px; margin: 0 auto; }
-      h1 { margin: 4px 0 20px; font-size: 20px; font-weight: 700; }
+      h1 { margin: 4px 0 20px; font-size: 24px; font-family: 'Tanker', sans-serif; color: #211714; font-weight: 400; }
 
       section { margin-bottom: 28px; }
       section h2 {
@@ -488,8 +488,8 @@ function adminLayout({ title, senha, ativo, body }) {
       .card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
       .card span { display: block; font-size: 12px; color: #8a6f5c; margin-bottom: 4px; font-weight: 600; }
       .card strong { font-size: 22px; font-weight: 700; }
-      .card.alerta { box-shadow: 0 1px 3px rgba(33,23,20,.08), inset 3px 0 0 #C1642F; }
-      .card.alerta strong { color: #C1642F; }
+      .card.alerta { box-shadow: 0 1px 3px rgba(33,23,20,.08), inset 3px 0 0 #D66B3E; }
+      .card.alerta strong { color: #D66B3E; }
       .card-link { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 700; }
 
       table.mini { border-collapse: collapse; width: 100%; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
@@ -531,6 +531,18 @@ function adminLayout({ title, senha, ativo, body }) {
       .pedido-detalhe strong { color: #211714; }
       .pedido-itens { font-size: 13px; color: #5a4a3f; margin: 10px 0; padding: 10px 12px; background: #FAF6F0; border-radius: 8px; }
       .pedido-linhas { display: flex; justify-content: space-between; font-size: 13px; color: #5a4a3f; }
+
+      .pedido-entrada {
+        margin-top: 12px; padding: 10px 12px; border-radius: 8px;
+        background: #FAF6F0; border: 1px solid #F0E9E2;
+      }
+      .pedido-entrada.marcada { background: #DEF3E5; border-color: #B8E0C4; }
+      .pedido-entrada label {
+        display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700;
+        color: #5a4a3f; cursor: pointer;
+      }
+      .pedido-entrada.marcada label { color: #1F8A4C; }
+      .pedido-entrada input[type=checkbox] { width: 18px; height: 18px; cursor: pointer; accent-color: #1F8A4C; }
 
       .pedido-acoes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #F0E9E2; }
       .pedido-acoes form { display: flex; gap: 6px; flex: 1; min-width: 220px; }
@@ -679,6 +691,12 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
       <div class="pedido-linhas"><span>Frete</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : 'R$ ' + Number(o.shipping_cost).toFixed(2)}</strong></div>
+      <form method="POST" action="/admin/pedidos/${o.id}/entrada?senha=${senha}" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
+        <label>
+          <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''} onchange="this.form.submit()">
+          Já dei entrada no sistema de vendas
+        </label>
+      </form>
       <div class="pedido-acoes">
         <form method="POST" action="/admin/pedidos/${o.id}/rastreio?senha=${senha}">
           <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
@@ -714,6 +732,16 @@ app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ exten
   );
   const order = rows[0];
   if (order) await enviarEmailRastreio(order);
+
+  res.redirect('/admin/pedidos?senha=' + encodeURIComponent(req.query.senha));
+}));
+
+// Alterna a marcação "já dei entrada no sistema de vendas" — controle manual
+// do admin, sem relação com o status de pagamento/rastreio do pedido.
+app.post('/admin/pedidos/:id/entrada', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+  await pool.query('UPDATE orders SET entrada_sistema = NOT COALESCE(entrada_sistema, false) WHERE id = $1', [req.params.id]);
 
   res.redirect('/admin/pedidos?senha=' + encodeURIComponent(req.query.senha));
 }));
@@ -798,7 +826,7 @@ app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
           <div class="pedido-cliente">${escapeHtml(r.customer_name)}</div>
           <div class="pedido-data">${escapeHtml(new Date(r.created_at).toLocaleString('pt-BR'))}${r.product_line ? ` · Comprou: ${escapeHtml(r.product_line)}` : ''}</div>
         </div>
-        <div class="pedido-total" style="color:#C1642F;">${estrelas(r.rating)}</div>
+        <div class="pedido-total" style="color:#D66B3E;">${estrelas(r.rating)}</div>
       </div>
       <div class="pedido-itens">"${escapeHtml(r.comment)}"</div>
       <div class="pedido-acoes">

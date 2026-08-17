@@ -46,6 +46,9 @@ async function initDb() {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS free_gift BOOLEAN DEFAULT false;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_id INTEGER;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_percent NUMERIC;`);
+  // Marcação manual do admin: "já lancei esse pedido no meu sistema de
+  // vendas/contabilidade" — independente do status de pagamento/rastreio.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS entrada_sistema BOOLEAN DEFAULT false;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reviews (
