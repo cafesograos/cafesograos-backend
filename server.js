@@ -13,19 +13,23 @@ app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for re
 app.set('trust proxy', 1); // Railway/Render terminam HTTPS num único proxy; "true" confiaria em qualquer X-Forwarded-For e quebra o rate limit por IP
 // CORS aberto (sem origin definida) deixava qualquer site na internet chamar
 // nossa API — inclusive /api/create-preference, que cria pedido de verdade
-// no Mercado Pago. Restringe só ao próprio site (+ localhost, usado em testes).
+// no Mercado Pago. Restringe só ao próprio site (+ o domínio do próprio painel
+// admin, que roda aqui no backend, + localhost, usado em testes).
+// Importante: nunca chamar o callback com Error — isso derruba a requisição
+// inteira com 500 (inclusive submits de formulário same-origin, que nem
+// passam por CORS de verdade). callback(null, false) só omite o cabeçalho,
+// que é o suficiente pra bloquear leitura via JS de outra origem.
 const ORIGENS_PERMITIDAS = [
   'https://cafesograos.com.br',
   'https://www.cafesograos.com.br',
+  'https://cafesograos-backend-production.up.railway.app',
   /^http:\/\/localhost(:\d+)?$/,
   /^http:\/\/127\.0\.0\.1(:\d+)?$/
 ];
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || ORIGENS_PERMITIDAS.some((o) => (o instanceof RegExp ? o.test(origin) : o === origin))) {
-      return callback(null, true);
-    }
-    callback(new Error('Não permitido por CORS'));
+    const permitido = !origin || ORIGENS_PERMITIDAS.some((o) => (o instanceof RegExp ? o.test(origin) : o === origin));
+    callback(null, permitido);
   }
 }));
 app.use(express.json());
