@@ -42,6 +42,11 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // Header (não meta tag) pra cobrir TODA resposta desde a primeira requisição —
+  // inclusive o CSS do Fontshare carregado no <head> do painel admin antes de
+  // qualquer <meta> ser processada, que senão sairia com a URL completa (com
+  // ?senha=...) no Referer pro CDN de fontes.
+  res.setHeader('Referrer-Policy', 'no-referrer');
   next();
 });
 
@@ -414,8 +419,19 @@ function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
 
+// Compara em tempo constante — "!==" direto vaza, por timing, quantos
+// caracteres do início da senha o requisitante acertou (mais visível numa
+// rota pública na internet do que pareceria à primeira vista).
+function senhaCorreta(recebida) {
+  if (!ADMIN_PASSWORD) return false;
+  const crypto = require('crypto');
+  const hashRecebida = crypto.createHash('sha256').update(String(recebida ?? '')).digest();
+  const hashEsperada = crypto.createHash('sha256').update(ADMIN_PASSWORD).digest();
+  return crypto.timingSafeEqual(hashRecebida, hashEsperada);
+}
+
 function requireAdmin(req, res, next) {
-  if (!ADMIN_PASSWORD || req.query.senha !== ADMIN_PASSWORD) {
+  if (!senhaCorreta(req.query.senha)) {
     return res.status(401).send('Senha incorreta. Acesse com ?senha=SUASENHA na URL.');
   }
   next();
