@@ -103,7 +103,7 @@ app.use('/admin', adminLimiter);
 // OAuth) — nunca aceita um code vindo de fora desse fluxo.
 let melhorEnvioOAuthState = null;
 app.get('/oauth/melhorenvio/connect', requireAdmin, (req, res) => {
-  melhorEnvioOAuthState = require('crypto').randomBytes(24).toString('hex');
+  melhorEnvioOAuthState = crypto.randomBytes(24).toString('hex');
   const redirectUri = `${req.protocol}://${req.get('host')}/oauth/melhorenvio/callback`;
   const url = new URL('https://melhorenvio.com.br/oauth/authorize');
   url.searchParams.set('client_id', process.env.MELHORENVIO_CLIENT_ID);
@@ -403,7 +403,7 @@ app.get('/api/pedido/:preferenceId', asyncHandler(async (req, res) => {
   res.json(rows[0]);
 }));
 
-// Painéis administrativos, todos protegidos pela mesma senha (?senha=...).
+// Painéis administrativos, todos atrás de login (ver requireAdmin mais abaixo).
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -424,29 +424,140 @@ function asyncHandler(fn) {
 // rota pública na internet do que pareceria à primeira vista).
 function senhaCorreta(recebida) {
   if (!ADMIN_PASSWORD) return false;
-  const crypto = require('crypto');
   const hashRecebida = crypto.createHash('sha256').update(String(recebida ?? '')).digest();
   const hashEsperada = crypto.createHash('sha256').update(ADMIN_PASSWORD).digest();
   return crypto.timingSafeEqual(hashRecebida, hashEsperada);
 }
 
-function requireAdmin(req, res, next) {
-  if (!senhaCorreta(req.query.senha)) {
-    return res.status(401).send('Senha incorreta. Acesse com ?senha=SUASENHA na URL.');
-  }
-  next();
+// Login do painel: antes a senha ia em "?senha=..." em toda URL/link/form do
+// admin — sobrava em log de acesso do Railway, no histórico do navegador e
+// em qualquer link copiado. Agora é um login (POST) que gera um cookie de
+// sessão assinado (HttpOnly, então nem JavaScript de uma eventual falha de
+// XSS consegue ler; Secure, só viaja em HTTPS). Sem dependência nova: cookie
+// é lido/escrito à mão, e a chave de assinatura deriva da própria senha do
+// admin — não precisa de mais nenhuma variável de ambiente, e trocar a senha
+// já invalida sozinho qualquer sessão antiga.
+const crypto = require('crypto');
+const SESSION_COOKIE = 'admin_sessao';
+const SESSION_DURATION_MS = 12 * 60 * 60 * 1000; // 12h
+
+function getCookie(req, nome) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  const par = header.split(';').map((s) => s.trim()).find((s) => s.startsWith(nome + '='));
+  return par ? decodeURIComponent(par.slice(nome.length + 1)) : null;
 }
+
+function assinarSessao(exp) {
+  const payload = Buffer.from(JSON.stringify({ exp })).toString('base64url');
+  const assinatura = crypto.createHmac('sha256', ADMIN_PASSWORD || '').update(payload).digest('base64url');
+  return `${payload}.${assinatura}`;
+}
+
+function sessaoValida(cookieValue) {
+  if (!ADMIN_PASSWORD || !cookieValue) return false;
+  const partes = String(cookieValue).split('.');
+  if (partes.length !== 2) return false;
+  const [payload, assinatura] = partes;
+  const assinaturaEsperada = crypto.createHmac('sha256', ADMIN_PASSWORD).update(payload).digest('base64url');
+  const bufRecebido = Buffer.from(assinatura);
+  const bufEsperado = Buffer.from(assinaturaEsperada);
+  if (bufRecebido.length !== bufEsperado.length) return false;
+  if (!crypto.timingSafeEqual(bufRecebido, bufEsperado)) return false;
+  try {
+    const { exp } = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return typeof exp === 'number' && Date.now() < exp;
+  } catch {
+    return false;
+  }
+}
+
+// Só aceita caminho relativo interno (nunca um domínio externo) como destino
+// pós-login, senão vira um open redirect (?proximo=https://phishing.com).
+function destinoSeguro(valor) {
+  if (typeof valor !== 'string' || !valor.startsWith('/') || valor.startsWith('//')) return '/admin';
+  return valor;
+}
+
+function requireAdmin(req, res, next) {
+  if (sessaoValida(getCookie(req, SESSION_COOKIE))) return next();
+  res.redirect(`/admin/login?proximo=${encodeURIComponent(req.originalUrl)}`);
+}
+
+function loginPage({ erro, proximo } = {}) {
+  return `
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrar - Café Só Grãos</title>
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link href="https://api.fontshare.com/v2/css?f[]=tanker@400&f[]=general-sans@400,500,700&display=swap" rel="stylesheet">
+    <meta name="theme-color" content="#211714">
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        font-family: 'General Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        background: #211714; color: #211714; padding: 16px;
+      }
+      .login-card { background: #fff; border-radius: 16px; padding: 32px 28px; width: 100%; max-width: 340px; }
+      h1 { margin: 0 0 20px; font-size: 22px; font-family: 'Tanker', sans-serif; font-weight: 400; }
+      input[type=password] {
+        width: 100%; padding: 12px 14px; border: 1px solid #ddd; border-radius: 8px;
+        font-size: 15px; font-family: inherit; margin-bottom: 12px;
+      }
+      button {
+        width: 100%; padding: 12px; border-radius: 8px; border: none; background: #D66B3E;
+        color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit;
+      }
+      .erro { color: #C53030; font-size: 13px; margin: -6px 0 12px; }
+    </style>
+    </head><body>
+      <form class="login-card" method="POST" action="/admin/login">
+        <h1>Painel — Café Só Grãos</h1>
+        ${erro ? '<p class="erro">Senha incorreta.</p>' : ''}
+        <input type="hidden" name="proximo" value="${escapeHtml(destinoSeguro(proximo))}">
+        <input type="password" name="senha" placeholder="Senha" autofocus required>
+        <button type="submit">Entrar</button>
+      </form>
+    </body></html>
+  `;
+}
+
+app.get('/admin/login', (req, res) => {
+  if (sessaoValida(getCookie(req, SESSION_COOKIE))) return res.redirect(destinoSeguro(req.query.proximo));
+  res.send(loginPage({ proximo: req.query.proximo }));
+});
+
+app.post('/admin/login', express.urlencoded({ extended: false }), (req, res) => {
+  const proximo = destinoSeguro(req.body?.proximo);
+  if (!senhaCorreta(req.body?.senha)) {
+    return res.status(401).send(loginPage({ erro: true, proximo }));
+  }
+  const exp = Date.now() + SESSION_DURATION_MS;
+  const cookie = [
+    `${SESSION_COOKIE}=${encodeURIComponent(assinarSessao(exp))}`,
+    'HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/',
+    `Max-Age=${Math.floor(SESSION_DURATION_MS / 1000)}`
+  ].join('; ');
+  res.setHeader('Set-Cookie', cookie);
+  res.redirect(proximo);
+});
+
+app.get('/admin/logout', (req, res) => {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
+  res.redirect('/admin/login');
+});
 
 // Layout compartilhado pelos painéis: mesma barra de navegação em todos,
 // pra dar pra pular entre pedidos, avaliações, métricas, GA e Mercado Pago
 // sem digitar URL de novo.
-function adminLayout({ title, senha, ativo, body }) {
+function adminLayout({ title, ativo, body }) {
   const nav = [
-    { id: 'painel', label: 'Painel', href: `/admin?senha=${senha}` },
-    { id: 'pedidos', label: 'Pedidos', href: `/admin/pedidos?senha=${senha}` },
-    { id: 'avaliacoes', label: 'Avaliações', href: `/admin/avaliacoes?senha=${senha}` },
+    { id: 'painel', label: 'Painel', href: '/admin' },
+    { id: 'pedidos', label: 'Pedidos', href: '/admin/pedidos' },
+    { id: 'avaliacoes', label: 'Avaliações', href: '/admin/avaliacoes' },
     { id: 'ga', label: 'Google Analytics ↗', href: 'https://analytics.google.com/analytics/web/', external: true },
-    { id: 'mp', label: 'Mercado Pago ↗', href: 'https://www.mercadopago.com.br/activities', external: true }
+    { id: 'mp', label: 'Mercado Pago ↗', href: 'https://www.mercadopago.com.br/activities', external: true },
+    { id: 'sair', label: 'Sair', href: '/admin/logout' }
   ];
   const navHtml = nav.map((item) => `
     <a href="${item.href}" ${item.external ? 'target="_blank" rel="noopener noreferrer"' : ''} class="${item.id === ativo ? 'ativo' : ''}">${item.label}</a>
@@ -460,7 +571,6 @@ function adminLayout({ title, senha, ativo, body }) {
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link href="https://api.fontshare.com/v2/css?f[]=tanker@400&f[]=general-sans@400,500,700&display=swap" rel="stylesheet">
     <meta name="theme-color" content="#211714">
-    <meta name="referrer" content="no-referrer">
     <style>
       * { box-sizing: border-box; }
       body {
@@ -594,7 +704,6 @@ const STATUS_LABEL = { pending: 'Pendente', approved: 'Aprovado', rejected: 'Rec
 // pros outros painéis e pro Google Analytics / Mercado Pago.
 app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
-  const senha = encodeURIComponent(req.query.senha);
 
   const [hoje, semana, mes, statusRows, semRastreioRows, avaliacoesPendentesRows, topProdutosRows] = await Promise.all([
     pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('day', now())`),
@@ -634,11 +743,11 @@ app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
       <div class="cards">
         <div class="card ${semRastreio > 0 ? 'alerta' : ''}">
           <span>Pedidos sem rastreio</span><strong>${semRastreio}</strong>
-          <a class="card-link" href="/admin/pedidos?senha=${senha}">Ver pedidos →</a>
+          <a class="card-link" href="/admin/pedidos">Ver pedidos →</a>
         </div>
         <div class="card ${avaliacoesPendentes > 0 ? 'alerta' : ''}">
           <span>Avaliações aguardando aprovação</span><strong>${avaliacoesPendentes}</strong>
-          <a class="card-link" href="/admin/avaliacoes?senha=${senha}">Ver avaliações →</a>
+          <a class="card-link" href="/admin/avaliacoes">Ver avaliações →</a>
         </div>
       </div>
     </section>
@@ -660,7 +769,7 @@ app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
     </section>
   `;
 
-  res.send(adminLayout({ title: 'Painel', senha, ativo: 'painel', body }));
+  res.send(adminLayout({ title: 'Painel', ativo: 'painel', body }));
 }));
 
 app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
@@ -676,9 +785,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       : 'SELECT * FROM orders ORDER BY created_at DESC LIMIT 200',
     filtro ? [filtro] : []
   );
-  const senha = encodeURIComponent(req.query.senha);
-
-  const filtroLink = (status) => `/admin/pedidos?senha=${senha}${status ? `&status=${status}` : ''}`;
+  const filtroLink = (status) => `/admin/pedidos${status ? `?status=${status}` : ''}`;
   const filtros = `
     <div class="filtros">
       <a href="${filtroLink(null)}" class="${!filtro ? 'ativo' : ''}">Todos</a>
@@ -707,18 +814,18 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
       <div class="pedido-linhas"><span>Frete</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : 'R$ ' + Number(o.shipping_cost).toFixed(2)}</strong></div>
-      <form method="POST" action="/admin/pedidos/${o.id}/entrada?senha=${senha}" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
+      <form method="POST" action="/admin/pedidos/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
         <label>
           <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''} onchange="this.form.submit()">
           Já dei entrada no sistema de vendas
         </label>
       </form>
       <div class="pedido-acoes">
-        <form method="POST" action="/admin/pedidos/${o.id}/rastreio?senha=${senha}">
+        <form method="POST" action="/admin/pedidos/${o.id}/rastreio">
           <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
           <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
         </form>
-        <form method="POST" action="/admin/pedidos/${o.id}/excluir?senha=${senha}" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
+        <form method="POST" action="/admin/pedidos/${o.id}/excluir" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
           <button type="submit" class="btn-mini btn-mini-danger">Excluir</button>
         </form>
       </div>
@@ -732,7 +839,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       ${cartoes || '<div class="lista-vazia">Nenhum pedido encontrado.</div>'}
     </div>
   `;
-  res.send(adminLayout({ title: 'Pedidos', senha, ativo: 'pedidos', body }));
+  res.send(adminLayout({ title: 'Pedidos', ativo: 'pedidos', body }));
 }));
 
 // Salva o código de rastreio de um pedido e avisa o cliente por e-mail.
@@ -749,7 +856,7 @@ app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ exten
   const order = rows[0];
   if (order) await enviarEmailRastreio(order);
 
-  res.redirect('/admin/pedidos?senha=' + encodeURIComponent(req.query.senha));
+  res.redirect('/admin/pedidos');
 }));
 
 // Alterna a marcação "já dei entrada no sistema de vendas" — controle manual
@@ -759,7 +866,7 @@ app.post('/admin/pedidos/:id/entrada', requireAdmin, asyncHandler(async (req, re
 
   await pool.query('UPDATE orders SET entrada_sistema = NOT COALESCE(entrada_sistema, false) WHERE id = $1', [req.params.id]);
 
-  res.redirect('/admin/pedidos?senha=' + encodeURIComponent(req.query.senha));
+  res.redirect('/admin/pedidos');
 }));
 
 // Exclui um pedido (ex.: pedidos de teste feitos durante o desenvolvimento).
@@ -768,7 +875,7 @@ app.post('/admin/pedidos/:id/excluir', requireAdmin, asyncHandler(async (req, re
 
   await pool.query('DELETE FROM orders WHERE id = $1', [req.params.id]);
 
-  res.redirect('/admin/pedidos?senha=' + encodeURIComponent(req.query.senha));
+  res.redirect('/admin/pedidos');
 }));
 
 // Avaliações de clientes (estilo Google: nome, nota de 1-5, comentário).
@@ -823,10 +930,9 @@ app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
       : 'SELECT * FROM reviews ORDER BY created_at DESC LIMIT 300',
     filtro ? [filtro] : []
   );
-  const senha = encodeURIComponent(req.query.senha);
   const estrelas = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
 
-  const filtroLink = (status) => `/admin/avaliacoes?senha=${senha}${status ? `&status=${status}` : ''}`;
+  const filtroLink = (status) => `/admin/avaliacoes${status ? `?status=${status}` : ''}`;
   const filtros = `
     <div class="filtros">
       <a href="${filtroLink(null)}" class="${!filtro ? 'ativo' : ''}">Todas</a>
@@ -846,8 +952,8 @@ app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
       </div>
       <div class="pedido-itens">"${escapeHtml(r.comment)}"</div>
       <div class="pedido-acoes">
-        ${r.status !== 'approved' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/aprovar?senha=${senha}"><button type="submit" class="btn-mini btn-mini-primary">Aprovar</button></form>` : ''}
-        ${r.status !== 'rejected' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/rejeitar?senha=${senha}"><button type="submit" class="btn-mini btn-mini-danger">Rejeitar</button></form>` : ''}
+        ${r.status !== 'approved' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/aprovar"><button type="submit" class="btn-mini btn-mini-primary">Aprovar</button></form>` : ''}
+        ${r.status !== 'rejected' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/rejeitar"><button type="submit" class="btn-mini btn-mini-danger">Rejeitar</button></form>` : ''}
       </div>
     </div>
   `).join('');
@@ -859,7 +965,7 @@ app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
       ${cartoes || '<div class="lista-vazia">Nenhuma avaliação encontrada.</div>'}
     </div>
   `;
-  res.send(adminLayout({ title: 'Avaliações', senha, ativo: 'avaliacoes', body }));
+  res.send(adminLayout({ title: 'Avaliações', ativo: 'avaliacoes', body }));
 }));
 
 app.post('/admin/avaliacoes/:id/:acao', requireAdmin, asyncHandler(async (req, res) => {
@@ -868,7 +974,7 @@ app.post('/admin/avaliacoes/:id/:acao', requireAdmin, asyncHandler(async (req, r
   if (!['aprovar', 'rejeitar'].includes(acao)) return res.status(400).send('Ação inválida.');
   const status = acao === 'aprovar' ? 'approved' : 'rejected';
   await pool.query('UPDATE reviews SET status = $1 WHERE id = $2', [status, req.params.id]);
-  res.redirect('/admin/avaliacoes?senha=' + encodeURIComponent(req.query.senha));
+  res.redirect('/admin/avaliacoes');
 }));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
