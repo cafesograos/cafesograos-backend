@@ -21,26 +21,6 @@ const PRODUCTS = [
     imgs: ['assets/produto-tradicional-500.jpg', 'assets/produto-tradicional-500-2.jpg']
   },
   {
-    id: 'cafe-gourmet-250-grao',
-    nome: 'Café Gourmet 250g — Grãos',
-    descricao: 'Nossa linha Oro Brasiliano: grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, em grãos. 250g.',
-    preco: 29.10,
-    precoOriginal: 30.00,
-    categoria: 'grao',
-    pesoGramas: 300,
-    img: null
-  },
-  {
-    id: 'cafe-gourmet-250-moido',
-    nome: 'Café Gourmet 250g — Moído',
-    descricao: 'Nossa linha Oro Brasiliano: grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, moído. 250g.',
-    preco: 29.10,
-    precoOriginal: 30.00,
-    categoria: 'moido',
-    pesoGramas: 300,
-    img: null
-  },
-  {
     id: 'cafe-gourmet-500-grao',
     nome: 'Café Gourmet 500g — Grãos',
     descricao: 'Nossa linha Oro Brasiliano: grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, em grãos. 500g.',
@@ -61,28 +41,6 @@ const PRODUCTS = [
     pesoGramas: 550,
     img: 'assets/produto-gourmet-oro-brasiliano.jpg',
     imgs: ['assets/produto-gourmet-oro-brasiliano.jpg']
-  },
-  {
-    id: 'cafe-especial-250-grao',
-    nome: 'Café Especial 250g — Grãos',
-    descricao: 'Nosso café mais sofisticado: acima de 80 pontos numa escala internacional (SCA), com xícara limpa e notas aromáticas complexas. 100% arábica, em grãos. 250g.',
-    preco: 48.50,
-    precoOriginal: 50.00,
-    categoria: 'grao',
-    badge: '83+ SCA',
-    pesoGramas: 300,
-    img: null
-  },
-  {
-    id: 'cafe-especial-250-moido',
-    nome: 'Café Especial 250g — Moído',
-    descricao: 'Nosso café mais sofisticado: acima de 80 pontos numa escala internacional (SCA), com xícara limpa e notas aromáticas complexas. 100% arábica, moído. 250g.',
-    preco: 48.50,
-    precoOriginal: 50.00,
-    categoria: 'moido',
-    badge: '83+ SCA',
-    pesoGramas: 300,
-    img: null
   },
   {
     id: 'cafe-especial-500-grao',
