@@ -115,7 +115,7 @@ const PRODUCTS = [
     categoria: 'drip',
     pesoGramas: 400,
     img: 'assets/produto-drip-coffee.jpg',
-    imgs: ['assets/produto-drip-coffee.jpg']
+    imgs: ['assets/produto-drip-coffee.jpg', 'assets/produto-drip-coffee-rotulo.jpg']
   }
 ];
 
