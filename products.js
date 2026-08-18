@@ -23,7 +23,7 @@ const PRODUCTS = [
   {
     id: 'cafe-gourmet-250-grao',
     nome: 'Café Gourmet 250g — Grãos',
-    descricao: 'Grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, em grãos. 250g.',
+    descricao: 'Nossa linha Oro Brasiliano: grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, em grãos. 250g.',
     preco: 29.10,
     precoOriginal: 30.00,
     categoria: 'grao',
@@ -33,7 +33,7 @@ const PRODUCTS = [
   {
     id: 'cafe-gourmet-250-moido',
     nome: 'Café Gourmet 250g — Moído',
-    descricao: 'Grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, moído. 250g.',
+    descricao: 'Nossa linha Oro Brasiliano: grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, moído. 250g.',
     preco: 29.10,
     precoOriginal: 30.00,
     categoria: 'moido',
@@ -43,22 +43,24 @@ const PRODUCTS = [
   {
     id: 'cafe-gourmet-500-grao',
     nome: 'Café Gourmet 500g — Grãos',
-    descricao: 'Grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, em grãos. 500g.',
+    descricao: 'Nossa linha Oro Brasiliano: grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, em grãos. 500g.',
     preco: 53.35,
     precoOriginal: 55.00,
     categoria: 'grao',
     pesoGramas: 550,
-    img: null
+    img: 'assets/produto-gourmet-oro-brasiliano.jpg',
+    imgs: ['assets/produto-gourmet-oro-brasiliano.jpg']
   },
   {
     id: 'cafe-gourmet-500-moido',
     nome: 'Café Gourmet 500g — Moído',
-    descricao: 'Grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, moído. 500g.',
+    descricao: 'Nossa linha Oro Brasiliano: grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, moído. 500g.',
     preco: 53.35,
     precoOriginal: 55.00,
     categoria: 'moido',
     pesoGramas: 550,
-    img: null
+    img: 'assets/produto-gourmet-oro-brasiliano.jpg',
+    imgs: ['assets/produto-gourmet-oro-brasiliano.jpg']
   },
   {
     id: 'cafe-especial-250-grao',
