@@ -474,8 +474,12 @@ function sessaoValida(cookieValue) {
 
 // Só aceita caminho relativo interno (nunca um domínio externo) como destino
 // pós-login, senão vira um open redirect (?proximo=https://phishing.com).
+// Lista de permissão (não bloqueio de padrões específicos) — "//evil.com" e
+// variações como "/\evil.com" (barra invertida, que navegadores às vezes
+// tratam como barra normal ao montar a URL final do redirect) nunca batem
+// com essa expressão regular, então nem precisam ser bloqueadas uma a uma.
 function destinoSeguro(valor) {
-  if (typeof valor !== 'string' || !valor.startsWith('/') || valor.startsWith('//')) return '/admin';
+  if (typeof valor !== 'string' || !/^\/[a-zA-Z0-9\-_/]*(\?[a-zA-Z0-9\-_=&]*)?$/.test(valor)) return '/admin';
   return valor;
 }
 
@@ -997,8 +1001,15 @@ app.post('/api/newsletter', checkoutLimiter, async (req, res) => {
       'INSERT INTO leads (name, email, phone) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING RETURNING id',
       [nome || null, email, telefone || null]
     );
+    // O contato já está salvo nesse ponto — se o envio do e-mail falhar (rede
+    // instável, Resend fora do ar), isso não pode virar erro pro visitante,
+    // que já teve o dado guardado com sucesso. Só loga pra investigar depois.
     if (rows.length > 0) {
-      await enviarEmailBoasVindasLead({ name: nome, email });
+      try {
+        await enviarEmailBoasVindasLead({ name: nome, email });
+      } catch (emailErr) {
+        console.error('Contato salvo, mas falhou o e-mail de boas-vindas:', emailErr);
+      }
     }
     res.json({ ok: true, message: 'Prontinho! Você vai ficar sabendo das novidades em primeira mão.' });
   } catch (err) {
