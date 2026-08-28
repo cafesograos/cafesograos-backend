@@ -75,7 +75,20 @@ async function initDb() {
     );
   `);
 
-  console.log('Banco de dados pronto (tabelas orders, reviews, discounts).');
+  // Contatos captados pelo formulário "deixe seu e-mail/WhatsApp" — gente que
+  // visitou o site mas ainda não comprou. E-mail normalizado (minúsculo, sem
+  // espaço) e único, pra não duplicar quem preenche o formulário de novo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS leads (
+      id SERIAL PRIMARY KEY,
+      name TEXT,
+      email TEXT NOT NULL UNIQUE,
+      phone TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  console.log('Banco de dados pronto (tabelas orders, reviews, discounts, leads).');
 }
 
 module.exports = { pool, initDb };

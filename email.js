@@ -124,4 +124,23 @@ async function enviarEmailRastreio(order) {
   });
 }
 
-module.exports = { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio };
+// Confirmação para quem deixou o contato no formulário "avise-me" do site,
+// sem ter comprado ainda — reforça a oferta de primeira compra já anunciada
+// no site, em vez de inventar um cupom novo e concorrente com ela.
+async function enviarEmailBoasVindasLead(lead) {
+  const html = `
+    <h2>Combinado! ☕</h2>
+    <p>Oi${lead.name ? `, ${escapeHtml(lead.name)}` : ''}! Anotamos seu contato — assim que sair uma nova torra ou uma promoção, você fica sabendo antes de todo mundo.</p>
+    <p>E já que você está aqui: na sua primeira compra você ganha um Drip Coffee de brinde e um cupom de 5% de desconto pra próxima. É só finalizar o pedido normalmente em <a href="https://www.cafesograos.com.br">cafesograos.com.br</a>.</p>
+    <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99756-7559.</p>
+    <p>Até já!<br>Café Só Grãos</p>
+  `;
+
+  return enviarEmail({
+    to: lead.email,
+    subject: 'Combinado — Café Só Grãos',
+    html
+  });
+}
+
+module.exports = { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio, enviarEmailBoasVindasLead };

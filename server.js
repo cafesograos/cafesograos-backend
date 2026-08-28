@@ -5,7 +5,7 @@ const rateLimit = require('express-rate-limit');
 const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 const { pool, initDb } = require('./db');
 const { calcularFrete } = require('./shipping');
-const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio } = require('./email');
+const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio, enviarEmailBoasVindasLead } = require('./email');
 const { CATEGORIES, PRODUCTS } = require('./products');
 
 const app = express();
@@ -555,6 +555,7 @@ function adminLayout({ title, ativo, body }) {
     { id: 'painel', label: 'Painel', href: '/admin' },
     { id: 'pedidos', label: 'Pedidos', href: '/admin/pedidos' },
     { id: 'avaliacoes', label: 'Avaliações', href: '/admin/avaliacoes' },
+    { id: 'leads', label: 'Contatos', href: '/admin/leads' },
     { id: 'ga', label: 'Google Analytics ↗', href: 'https://analytics.google.com/analytics/web/', external: true },
     { id: 'mp', label: 'Mercado Pago ↗', href: 'https://www.mercadopago.com.br/activities', external: true },
     { id: 'sair', label: 'Sair', href: '/admin/logout' }
@@ -975,6 +976,65 @@ app.post('/admin/avaliacoes/:id/:acao', requireAdmin, asyncHandler(async (req, r
   const status = acao === 'aprovar' ? 'approved' : 'rejected';
   await pool.query('UPDATE reviews SET status = $1 WHERE id = $2', [status, req.params.id]);
   res.redirect('/admin/avaliacoes');
+}));
+
+// Formulário "avise-me" do site: captura contato de quem visitou mas ainda
+// não comprou, pra dar pra reengajar depois (novidade de torra, promoção).
+// E-mail é a chave única — reenviar o formulário com o mesmo e-mail não
+// duplica linha nem manda o e-mail de boas-vindas de novo.
+app.post('/api/newsletter', checkoutLimiter, async (req, res) => {
+  try {
+    if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
+    const nome = String(req.body?.nome || '').trim().slice(0, 100);
+    const email = String(req.body?.email || '').trim().toLowerCase().slice(0, 200);
+    const telefone = String(req.body?.telefone || '').trim().slice(0, 30);
+
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ error: 'Informe um e-mail válido.' });
+    }
+
+    const { rows } = await pool.query(
+      'INSERT INTO leads (name, email, phone) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING RETURNING id',
+      [nome || null, email, telefone || null]
+    );
+    if (rows.length > 0) {
+      await enviarEmailBoasVindasLead({ name: nome, email });
+    }
+    res.json({ ok: true, message: 'Prontinho! Você vai ficar sabendo das novidades em primeira mão.' });
+  } catch (err) {
+    console.error('Erro ao salvar contato:', err);
+    res.status(500).json({ error: 'Não foi possível salvar seu contato agora.' });
+  }
+});
+
+// Lista de contatos captados, protegida por senha — pra você mesmo chamar
+// no WhatsApp manualmente (não existe envio em massa automático por WhatsApp).
+app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+  const { rows } = await pool.query('SELECT * FROM leads ORDER BY created_at DESC LIMIT 500');
+
+  const cartoes = rows.map((l) => `
+    <div class="pedido-card">
+      <div class="pedido-topo">
+        <div>
+          <div class="pedido-cliente">${escapeHtml(l.name || 'Sem nome')}</div>
+          <div class="pedido-data">${escapeHtml(new Date(l.created_at).toLocaleString('pt-BR'))}</div>
+        </div>
+      </div>
+      <div class="pedido-detalhe" style="margin-top:10px;"><strong>E-mail:</strong> ${escapeHtml(l.email)}</div>
+      ${l.phone ? `<div class="pedido-detalhe"><strong>WhatsApp:</strong> ${escapeHtml(l.phone)}</div>` : ''}
+    </div>
+  `).join('');
+
+  const body = `
+    <h1>Contatos — Café Só Grãos</h1>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">${rows.length} contato${rows.length === 1 ? '' : 's'} captado${rows.length === 1 ? '' : 's'} pelo formulário do site. Envio de novidades por e-mail e WhatsApp continua manual, feito por você.</p>
+    <div class="pedido-lista">
+      ${cartoes || '<div class="lista-vazia">Nenhum contato captado ainda.</div>'}
+    </div>
+  `;
+  res.send(adminLayout({ title: 'Contatos', ativo: 'leads', body }));
 }));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
