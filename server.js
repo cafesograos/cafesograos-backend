@@ -175,6 +175,25 @@ app.post('/api/calcular-frete', checkoutLimiter, async (req, res) => {
   }
 });
 
+// Validação padrão de CPF (dígitos verificadores) — recusa também sequências
+// óbvias tipo "00000000000". O Mercado Pago usa esse dado pra avaliar risco
+// de fraude em pagamento com cartão; sem ele (ou com lixo), a maioria dos
+// cartões cai em recusa automática "cc_rejected_high_risk".
+function cpfValido(cpf) {
+  cpf = String(cpf || '').replace(/\D/g, '');
+  if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return false;
+  let soma = 0;
+  for (let i = 0; i < 9; i++) soma += parseInt(cpf[i], 10) * (10 - i);
+  let resto = (soma * 10) % 11;
+  if (resto === 10 || resto === 11) resto = 0;
+  if (resto !== parseInt(cpf[9], 10)) return false;
+  soma = 0;
+  for (let i = 0; i < 10; i++) soma += parseInt(cpf[i], 10) * (11 - i);
+  resto = (soma * 10) % 11;
+  if (resto === 10 || resto === 11) resto = 0;
+  return resto === parseInt(cpf[10], 10);
+}
+
 // Cria uma preferência de pagamento a partir dos itens do carrinho + dados de entrega,
 // salva o pedido no banco e devolve o link (init_point) para o checkout do Mercado Pago.
 app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
@@ -186,6 +205,10 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     }
     if (!cliente?.nome || !cliente?.email || !entrega?.cep) {
       return res.status(400).json({ error: 'Dados de entrega incompletos.' });
+    }
+    const cpfDigits = String(cliente.cpf || '').replace(/\D/g, '');
+    if (!cpfValido(cpfDigits)) {
+      return res.status(400).json({ error: 'CPF inválido.' });
     }
 
     // Preço, nome e peso sempre vêm do catálogo do servidor — nunca do que o
@@ -270,11 +293,29 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
 
     const total = Number(line_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0).toFixed(2));
 
+    // CPF (obrigatório) + telefone/endereço (já coletados no formulário) vão
+    // no payer pro Mercado Pago avaliar risco de fraude em cartão — sem isso
+    // o motor antifraude deles rejeita a maioria dos cartões como alto risco.
+    const payer = {
+      name: cliente.nome,
+      email: cliente.email,
+      identification: { type: 'CPF', number: cpfDigits },
+      address: {
+        zip_code: String(entrega.cep || '').replace(/\D/g, ''),
+        street_name: entrega.endereco,
+        street_number: entrega.numero
+      }
+    };
+    const telefoneDigits = String(cliente.telefone || '').replace(/\D/g, '');
+    if (telefoneDigits.length >= 10) {
+      payer.phone = { area_code: telefoneDigits.slice(0, 2), number: telefoneDigits.slice(2) };
+    }
+
     const preference = new Preference(client);
     const result = await preference.create({
       body: {
         items: line_items,
-        payer: { name: cliente.nome, email: cliente.email },
+        payer,
         back_urls: {
           success: `${SITE_URL}/sucesso.html`,
           failure: `${SITE_URL}/falha.html`,
