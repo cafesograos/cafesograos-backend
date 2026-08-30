@@ -360,6 +360,91 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
   }
 });
 
+// Atualiza o status de um pedido a partir de um pagamento do Mercado Pago —
+// usado tanto pelo webhook quanto pela reconciliação manual/automática, pra
+// nunca duplicar a lógica de cupom/e-mail (e nunca duplicar o cupom em si).
+async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
+  if (!pool || !preferenceId) return null;
+
+  // Guarda o status de antes pra só disparar cupom/e-mails na primeira vez
+  // que o pedido vira "approved" — o Mercado Pago reenvia a mesma notificação
+  // várias vezes, e sem essa checagem cada reenvio gerava um cupom duplicado
+  // e mandava os e-mails de novo.
+  const { rows: antes } = await pool.query('SELECT status FROM orders WHERE preference_id = $1', [preferenceId]);
+  if (!antes[0]) return null;
+  const statusAnterior = antes[0].status;
+
+  const { rows } = await pool.query(
+    `UPDATE orders SET status = $1, payment_id = $2 WHERE preference_id = $3 RETURNING *`,
+    [novoStatus, String(paymentId), preferenceId]
+  );
+  const order = rows[0];
+  if (order && novoStatus === 'approved' && statusAnterior !== 'approved') {
+    // Só cria o cupom/marca como usado quando o pagamento é realmente
+    // aprovado — evita gerar cupom pra carrinho abandonado ou queimar
+    // o cupom de alguém que desistiu no meio do checkout.
+    if (order.free_gift) {
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      await pool.query(
+        'INSERT INTO discounts (customer_email, percent, expires_at) VALUES ($1, 5, $2)',
+        [order.customer_email, expiresAt]
+      );
+    }
+    if (order.discount_id) {
+      await pool.query('UPDATE discounts SET used_at = now() WHERE id = $1', [order.discount_id]);
+    }
+
+    await enviarEmailNovoPedido(order);
+    await enviarEmailConfirmacaoCliente(order);
+  }
+  return order;
+}
+
+// Verifica pedidos "pending" antigos direto na API do Mercado Pago — cobre o
+// caso (raro, mas real) do webhook nunca chegar (falha de rede, nosso
+// servidor reiniciando bem na hora, etc.). Sem isso, um pedido pago de
+// verdade podia ficar "pending" pra sempre no nosso painel, sem ninguém
+// saber. Só olha pedidos com mais de 10 min (dá tempo da pessoa terminar o
+// checkout sozinha) e menos de 7 dias (carrinho mais velho que isso já é
+// abandono de verdade, não faz sentido continuar checando pra sempre).
+async function reconciliarPedidosPendentes() {
+  if (!pool) return { verificados: 0, atualizados: 0 };
+  const { rows: pendentes } = await pool.query(
+    `SELECT preference_id FROM orders
+     WHERE status = 'pending' AND created_at < now() - interval '10 minutes' AND created_at > now() - interval '7 days'`
+  );
+
+  let atualizados = 0;
+  for (const { preference_id } of pendentes) {
+    try {
+      const res = await fetch(`https://api.mercadopago.com/merchant_orders/search?preference_id=${encodeURIComponent(preference_id)}`, {
+        headers: { Authorization: `Bearer ${ACCESS_TOKEN}` }
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const pagamentos = (data.elements || []).flatMap((mo) => mo.payments || []);
+      // Prioriza um pagamento aprovado; senão, pega o mais recente de qualquer status.
+      const pagamento = pagamentos.find((p) => p.status === 'approved')
+        || pagamentos.sort((a, b) => new Date(b.date_created) - new Date(a.date_created))[0];
+      if (pagamento && pagamento.status !== 'pending') {
+        await atualizarStatusPedido(preference_id, pagamento.status, pagamento.id);
+        atualizados++;
+      }
+    } catch (err) {
+      console.error(`Erro ao reconciliar pedido ${preference_id}:`, err.message);
+    }
+  }
+  if (pendentes.length > 0) {
+    console.log(`[reconciliacao] ${pendentes.length} pedidos verificados, ${atualizados} atualizados`);
+  }
+  return { verificados: pendentes.length, atualizados };
+}
+
+// Roda sozinho a cada 20 min, sem depender de ninguém lembrar de checar.
+setInterval(() => {
+  reconciliarPedidosPendentes().catch((err) => console.error('Erro na reconciliação automática:', err.message));
+}, 20 * 60 * 1000);
+
 // Recebe as notificações de pagamento do Mercado Pago (webhook/IPN).
 // Aceita GET (teste de URL do painel e IPN antigo) e POST (webhooks novos).
 app.all('/webhook', webhookLimiter, async (req, res) => {
@@ -389,36 +474,7 @@ app.all('/webhook', webhookLimiter, async (req, res) => {
       }
 
       if (pool && preferenceId) {
-        // Guarda o status de antes pra só disparar cupom/e-mails na primeira
-        // vez que o pedido vira "approved" — o Mercado Pago reenvia a mesma
-        // notificação várias vezes, e sem essa checagem cada reenvio gerava
-        // um cupom duplicado e mandava os e-mails de novo.
-        const { rows: antes } = await pool.query('SELECT status FROM orders WHERE preference_id = $1', [preferenceId]);
-        const statusAnterior = antes[0]?.status;
-
-        const { rows } = await pool.query(
-          `UPDATE orders SET status = $1, payment_id = $2 WHERE preference_id = $3 RETURNING *`,
-          [info.status, String(id), preferenceId]
-        );
-        const order = rows[0];
-        if (order && info.status === 'approved' && statusAnterior !== 'approved') {
-          // Só cria o cupom/marca como usado quando o pagamento é realmente
-          // aprovado — evita gerar cupom pra carrinho abandonado ou queimar
-          // o cupom de alguém que desistiu no meio do checkout.
-          if (order.free_gift) {
-            const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-            await pool.query(
-              'INSERT INTO discounts (customer_email, percent, expires_at) VALUES ($1, 5, $2)',
-              [order.customer_email, expiresAt]
-            );
-          }
-          if (order.discount_id) {
-            await pool.query('UPDATE discounts SET used_at = now() WHERE id = $1', [order.discount_id]);
-          }
-
-          await enviarEmailNovoPedido(order);
-          await enviarEmailConfirmacaoCliente(order);
-        }
+        await atualizarStatusPedido(preferenceId, info.status, id);
       }
     } else {
       console.log('Notificação recebida do Mercado Pago:', { topic, id });
@@ -665,6 +721,7 @@ function adminLayout({ title, ativo, body }) {
       .card.alerta { box-shadow: 0 1px 3px rgba(33,23,20,.08), inset 3px 0 0 #D66B3E; }
       .card.alerta strong { color: #D66B3E; }
       .card-link { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 700; }
+      .aviso-reconciliacao { background: #EAF4E9; color: #2E5C31; padding: 10px 14px; border-radius: 8px; font-size: 14px; margin-bottom: 14px; }
 
       table.mini { border-collapse: collapse; width: 100%; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
       table.mini th, table.mini td { padding: 10px 14px; text-align: left; font-size: 13px; border-bottom: 1px solid #F0E9E2; }
@@ -887,14 +944,32 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
     </div>
   `).join('');
 
+  const reconciliado = req.query.reconciliado;
+  const avisoReconciliacao = reconciliado
+    ? `<p class="aviso-reconciliacao">Verificação concluída: ${escapeHtml(reconciliado)}.</p>`
+    : '';
+
   const body = `
     <h1>Pedidos — Café Só Grãos</h1>
+    <form method="POST" action="/admin/pedidos/reconciliar" style="margin-bottom:14px;">
+      <button type="submit" class="btn-mini btn-mini-primary">Verificar pedidos pendentes agora</button>
+    </form>
+    ${avisoReconciliacao}
     ${filtros}
     <div class="pedido-lista">
       ${cartoes || '<div class="lista-vazia">Nenhum pedido encontrado.</div>'}
     </div>
   `;
   res.send(adminLayout({ title: 'Pedidos', ativo: 'pedidos', body }));
+}));
+
+// Verificação manual: além da checagem automática a cada 20 min, o admin
+// pode forçar uma checagem imediata (ex.: logo depois de reportarem um
+// possível problema, sem precisar esperar o próximo ciclo automático).
+app.post('/admin/pedidos/reconciliar', requireAdmin, asyncHandler(async (req, res) => {
+  const resultado = await reconciliarPedidosPendentes();
+  logAdminAcao(req, 'reconciliacao_manual', `${resultado.atualizados}/${resultado.verificados} atualizados`);
+  res.redirect(`/admin/pedidos?reconciliado=${resultado.verificados} verificados, ${resultado.atualizados} atualizados`);
 }));
 
 // Salva o código de rastreio de um pedido e avisa o cliente por e-mail.
