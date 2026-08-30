@@ -575,8 +575,10 @@ app.get('/admin/login', (req, res) => {
 app.post('/admin/login', express.urlencoded({ extended: false }), (req, res) => {
   const proximo = destinoSeguro(req.body?.proximo);
   if (!senhaCorreta(req.body?.senha)) {
+    console.log(`[admin] login_falhou — IP ${req.ip}`);
     return res.status(401).send(loginPage({ erro: true, proximo }));
   }
+  console.log(`[admin] login_ok — IP ${req.ip}`);
   const exp = Date.now() + SESSION_DURATION_MS;
   const cookie = [
     `${SESSION_COOKIE}=${encodeURIComponent(assinarSessao(exp))}`,
@@ -818,6 +820,13 @@ app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
   res.send(adminLayout({ title: 'Painel', ativo: 'painel', body }));
 }));
 
+// Trilha de auditoria das ações do admin (excluir pedido, editar rastreio,
+// aprovar/rejeitar avaliação) — antes nada disso ficava registrado, então
+// não dava pra saber depois quem mudou o quê.
+function logAdminAcao(req, acao, detalhe) {
+  console.log(`[admin] ${acao} — ${detalhe} — IP ${req.ip}`);
+}
+
 app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
@@ -901,6 +910,7 @@ app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ exten
   );
   const order = rows[0];
   if (order) await enviarEmailRastreio(order);
+  logAdminAcao(req, 'rastreio_atualizado', `pedido #${req.params.id} → "${codigo}"`);
 
   res.redirect('/admin/pedidos');
 }));
@@ -911,6 +921,7 @@ app.post('/admin/pedidos/:id/entrada', requireAdmin, asyncHandler(async (req, re
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   await pool.query('UPDATE orders SET entrada_sistema = NOT COALESCE(entrada_sistema, false) WHERE id = $1', [req.params.id]);
+  logAdminAcao(req, 'entrada_alternada', `pedido #${req.params.id}`);
 
   res.redirect('/admin/pedidos');
 }));
@@ -920,6 +931,7 @@ app.post('/admin/pedidos/:id/excluir', requireAdmin, asyncHandler(async (req, re
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   await pool.query('DELETE FROM orders WHERE id = $1', [req.params.id]);
+  logAdminAcao(req, 'pedido_excluido', `pedido #${req.params.id}`);
 
   res.redirect('/admin/pedidos');
 }));
@@ -1020,6 +1032,7 @@ app.post('/admin/avaliacoes/:id/:acao', requireAdmin, asyncHandler(async (req, r
   if (!['aprovar', 'rejeitar'].includes(acao)) return res.status(400).send('Ação inválida.');
   const status = acao === 'aprovar' ? 'approved' : 'rejected';
   await pool.query('UPDATE reviews SET status = $1 WHERE id = $2', [status, req.params.id]);
+  logAdminAcao(req, 'avaliacao_' + acao, `avaliação #${req.params.id}`);
   res.redirect('/admin/avaliacoes');
 }));
 
