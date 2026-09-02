@@ -206,6 +206,13 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     if (!cliente?.nome || !cliente?.email || !entrega?.cep) {
       return res.status(400).json({ error: 'Dados de entrega incompletos.' });
     }
+    // Sem essa checagem, um e-mail sem ponto no domínio (ex.: "nome@gmailcom",
+    // digitado errado) passava batido — o pagamento era aprovado normalmente,
+    // mas o Resend rejeitava o envio da confirmação/rastreio, e o cliente
+    // nunca ficava sabendo de nada sobre o próprio pedido.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cliente.email)) {
+      return res.status(400).json({ error: 'E-mail inválido.' });
+    }
     const cpfDigits = String(cliente.cpf || '').replace(/\D/g, '');
     if (!cpfValido(cpfDigits)) {
       return res.status(400).json({ error: 'CPF inválido.' });
@@ -501,6 +508,9 @@ app.get('/api/pedido/:preferenceId', asyncHandler(async (req, res) => {
 }));
 
 // Painéis administrativos, todos atrás de login (ver requireAdmin mais abaixo).
+function reais(v) {
+  return 'R$ ' + Number(v).toFixed(2).replace('.', ',');
+}
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -827,7 +837,6 @@ app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
     `)
   ]);
 
-  const reais = (v) => 'R$ ' + Number(v).toFixed(2).replace('.', ',');
   const semRastreio = Number(semRastreioRows.rows[0].n);
   const avaliacoesPendentes = Number(avaliacoesPendentesRows.rows[0].n);
 
@@ -913,7 +922,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
           <div class="pedido-cliente">${escapeHtml(o.customer_name)}</div>
           <div class="pedido-data">${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR'))}</div>
         </div>
-        <div class="pedido-total">R$ ${Number(o.total).toFixed(2)}</div>
+        <div class="pedido-total">${reais(o.total)}</div>
       </div>
       ${(o.free_gift || o.discount_percent || o.tracking_code) ? `
         <div class="pedido-selos">
@@ -925,7 +934,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${escapeHtml(o.customer_email)} · ${escapeHtml(o.customer_phone || 'sem telefone')}</div>
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
-      <div class="pedido-linhas"><span>Frete</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : 'R$ ' + Number(o.shipping_cost).toFixed(2)}</strong></div>
+      <div class="pedido-linhas"><span>Frete</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>
       <form method="POST" action="/admin/pedidos/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
         <label>
           <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''} onchange="this.form.submit()">
@@ -1122,7 +1131,7 @@ app.post('/api/newsletter', checkoutLimiter, async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase().slice(0, 200);
     const telefone = String(req.body?.telefone || '').trim().slice(0, 30);
 
-    if (!email || !email.includes('@')) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'Informe um e-mail válido.' });
     }
 
