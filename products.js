@@ -26,21 +26,6 @@ const PRODUCTS = [
     imgs: ['assets/produto-tradicional-500.jpg', 'assets/produto-tradicional-500-2.jpg']
   },
   {
-    id: 'cafe-gourmet-500-grao',
-    nome: 'Café Gourmet 500g — Grãos',
-    nome_en: 'Gourmet Coffee 500g — Whole Beans',
-    nome_es: 'Café Gourmet 500g — En Grano',
-    descricao: 'Nossa linha Oro Brasiliano: grãos selecionados a dedo, torra média e acidez equilibrada — um upgrade de sabor na sua xícara. 100% arábica, em grãos. 500g.',
-    descricao_en: 'Our Oro Brasiliano line: hand-picked beans, medium roast and balanced acidity — a flavor upgrade for your cup. 100% arabica, whole beans. 500g.',
-    descricao_es: 'Nuestra línea Oro Brasiliano: granos seleccionados a mano, tueste medio y acidez equilibrada — una mejora de sabor en tu taza. 100% arábica, en grano. 500g.',
-    preco: 53.35,
-    precoOriginal: 55.00,
-    categoria: 'grao',
-    pesoGramas: 550,
-    img: 'assets/produto-gourmet-oro-brasiliano.jpg',
-    imgs: ['assets/produto-gourmet-oro-brasiliano.jpg', 'assets/produto-gourmet-oro-brasiliano-rotulo.jpg']
-  },
-  {
     id: 'cafe-gourmet-500-moido',
     nome: 'Café Gourmet 500g — Moído',
     nome_en: 'Gourmet Coffee 500g — Ground',
