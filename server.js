@@ -55,6 +55,17 @@ const SITE_URL = process.env.SITE_URL || 'https://www.cafesograos.com.br';
 const FRETE_GRATIS_ACIMA_DE = 300;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
+// Frete grátis acima do valor mínimo vale só pra São Paulo — a faixa de CEP
+// do estado (01000-000 a 19999-999) é fixa e pública, não precisa de consulta
+// externa. Calculado no servidor (nunca a partir do que o cliente informa)
+// pra ninguém conseguir digitar um estado falso e ganhar frete grátis fora de SP.
+function cepEhSP(cep) {
+  const digitos = String(cep || '').replace(/\D/g, '');
+  if (digitos.length < 5) return false;
+  const prefixo = Number(digitos.slice(0, 5));
+  return prefixo >= 1000 && prefixo <= 19999;
+}
+
 if (!ACCESS_TOKEN) {
   console.warn('AVISO: MERCADOPAGO_ACCESS_TOKEN não está definido. Configure o .env antes de aceitar pagamentos.');
 }
@@ -164,7 +175,7 @@ app.post('/api/calcular-frete', checkoutLimiter, async (req, res) => {
   try {
     const { cep, pesoKg, subtotal } = req.body;
     const frete = await calcularFrete(cep, Number(pesoKg));
-    if (Number(subtotal) >= FRETE_GRATIS_ACIMA_DE) {
+    if (Number(subtotal) >= FRETE_GRATIS_ACIMA_DE && cepEhSP(cep)) {
       frete.valor = 0;
       frete.gratis = true;
     }
@@ -285,7 +296,8 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     if (brindeProduto) pesoTotalKg += (brindeProduto.pesoGramas || 400) / 1000;
 
     let shippingCost = 0;
-    if (subtotalCatalogo < FRETE_GRATIS_ACIMA_DE) {
+    const freteGratis = subtotalCatalogo >= FRETE_GRATIS_ACIMA_DE && cepEhSP(entrega.cep);
+    if (!freteGratis) {
       const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
       shippingCost = freteCalculado.valor;
     }
