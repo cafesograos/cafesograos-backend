@@ -209,7 +209,7 @@ function cpfValido(cpf) {
 // salva o pedido no banco e devolve o link (init_point) para o checkout do Mercado Pago.
 app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
   try {
-    const { items, cliente, entrega } = req.body;
+    const { items, cliente, entrega, deviceId } = req.body;
 
     if (!Array.isArray(items) || items.length === 0 || items.length > 30) {
       return res.status(400).json({ error: 'Carrinho vazio ou inválido.' });
@@ -342,7 +342,12 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
         },
         auto_return: 'approved',
         notification_url: `${req.protocol}://${req.get('host')}/webhook`
-      }
+      },
+      // Repassa o Device ID (gerado pelo security.js do Mercado Pago no
+      // front) como X-Meli-Session-Id — sinal que o antifraude deles usa
+      // pra avaliar risco de cartão. O SDK já sabe montar esse header
+      // sozinho a partir dessa opção, não precisa de chamada HTTP manual.
+      requestOptions: deviceId ? { meliSessionId: deviceId } : undefined
     });
 
     if (pool) {
