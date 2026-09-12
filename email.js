@@ -73,7 +73,7 @@ function emailCliente(conteudoHtml) {
             <tr>
               <td style="background:#211714;padding:20px 32px;color:rgba(255,255,255,.75);font-size:12px;text-align:center;line-height:1.8;">
                 Café Só Grãos · Araraquara/SP<br>
-                <a href="https://wa.me/5516997567559" style="color:#D66B3E;text-decoration:none;">WhatsApp (16) 99756-7559</a>
+                <a href="https://wa.me/5516997616459" style="color:#D66B3E;text-decoration:none;">WhatsApp (16) 99761-6459</a>
                 &nbsp;·&nbsp;
                 <a href="mailto:contato@cafesograos.com.br" style="color:#D66B3E;text-decoration:none;">contato@cafesograos.com.br</a><br>
                 <a href="https://www.cafesograos.com.br/privacidade.html" style="color:rgba(255,255,255,.55);text-decoration:none;">Política de Privacidade</a>
@@ -150,7 +150,7 @@ async function enviarEmailConfirmacaoCliente(order) {
       ${escapeHtml(order.neighborhood)} — ${escapeHtml(order.city)}/${escapeHtml(order.state)}<br>
       CEP: ${escapeHtml(order.cep)}
     </p>
-    <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99756-7559.</p>
+    <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99761-6459.</p>
     <p>Obrigado por comprar conosco!<br>Café Só Grãos</p>
   `;
 
@@ -171,7 +171,7 @@ async function enviarEmailRastreio(order) {
     <p>Oi, ${escapeHtml(order.customer_name)}! Seu café já está a caminho.</p>
     ${caixaDestaque(`<strong style="color:#B85A32;">Código de rastreio:</strong> ${escapeHtml(order.tracking_code)}`)}
     <p>Você pode acompanhar a entrega no site dos Correios ou da transportadora usando esse código.</p>
-    <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99756-7559.</p>
+    <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99761-6459.</p>
     <p>Obrigado por comprar conosco!<br>Café Só Grãos</p>
   `;
 
@@ -190,7 +190,7 @@ async function enviarEmailBoasVindasLead(lead) {
     <h2 style="font-size:22px;margin:0 0 12px;">Combinado! ☕</h2>
     <p>Oi${lead.name ? `, ${escapeHtml(lead.name)}` : ''}! Anotamos seu contato — assim que sair uma nova torra ou uma promoção, você fica sabendo antes de todo mundo.</p>
     <p>E já que você está aqui: na sua primeira compra você ganha um Drip Coffee de brinde e um cupom de 5% de desconto pra próxima. É só finalizar o pedido normalmente em <a href="https://www.cafesograos.com.br" style="color:#D66B3E;">cafesograos.com.br</a>.</p>
-    <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99756-7559.</p>
+    <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99761-6459.</p>
     <p>Até já!<br>Café Só Grãos</p>
   `;
 
