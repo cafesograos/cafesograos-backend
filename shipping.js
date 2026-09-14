@@ -4,6 +4,14 @@ const ORIGEM_CEP = '14800360';
 const ME_BASE = 'https://melhorenvio.com.br';
 const FALLBACK_POR_KG = 22; // usado só se a integração com o Melhor Envio estiver fora do ar
 
+// IDs dos serviços habilitados na conta (GET /api/v2/me/shipment/services) — sem
+// informar "services" na cotação, a API só retorna a Loggi Ponto (id 34), mesmo
+// com Correios, Jadlog e Total Express disponíveis e habilitados na conta. Isso
+// fazia o site sempre cotar só a Loggi, escondendo opções mais baratas (Jadlog)
+// e não refletindo o Correios de verdade quando ele saía mais em conta.
+// 1/2/17=Correios (PAC/SEDEX/Mini Envios), 3/4/27=Jadlog, 31/32/34=Loggi, 35=Total Express.
+const SERVICOS_HABILITADOS = '1,2,3,4,17,27,31,32,34,35';
+
 function limparCep(cep) {
   return String(cep || '').replace(/\D/g, '');
 }
@@ -62,14 +70,15 @@ async function calcularFrete(cepDestino, pesoKg) {
         products: [
           { id: 'carrinho', width: 15, height: 10, length: 20, weight: peso, insurance_value: 50, quantity: 1 }
         ],
-        options: { receipt: false, own_hand: false }
+        options: { receipt: false, own_hand: false },
+        services: SERVICOS_HABILITADOS
       })
     });
 
     if (!res.ok) throw new Error('Melhor Envio retornou erro: ' + res.status);
     const corpo = await res.json();
-    // A API retorna um array quando há várias transportadoras habilitadas,
-    // mas um objeto único quando só existe uma opção configurada na conta.
+    // Com "services" informado a API sempre devolve um array (um item por
+    // serviço pedido, com "error" preenchido nos que não atenderem o CEP/peso).
     const opcoes = Array.isArray(corpo) ? corpo : [corpo];
     const validas = opcoes.filter((o) => o.price && !o.error);
     if (validas.length === 0) throw new Error('Nenhuma transportadora disponível pra esse CEP.');
