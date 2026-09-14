@@ -280,6 +280,10 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       brindeProduto = PRODUCTS.find((p) => p.id === 'drip-coffee-caixa-10');
       if (brindeProduto) {
         itensParaPedido.push({ title: `${brindeProduto.nome} — Brinde de boas-vindas`, quantity: 1, unit_price: 0 });
+      } else {
+        // Sem isso, se o id do brinde mudar no catálogo, o brinde de boas-vindas
+        // some silenciosamente pro cliente novo, sem erro nenhum aparecer.
+        console.warn('[pedido] Produto de brinde "drip-coffee-caixa-10" não encontrado no catálogo — brinde de boas-vindas não foi incluído.');
       }
     }
 
