@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 const { pool, initDb } = require('./db');
 const { calcularFrete } = require('./shipping');
+const { criarLinkPagamento, consultarStatusPagamento } = require('./infinitepay');
 const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio, enviarEmailBoasVindasLead } = require('./email');
 const { CATEGORIES, PRODUCTS } = require('./products');
 
@@ -205,11 +206,11 @@ function cpfValido(cpf) {
   return resto === parseInt(cpf[10], 10);
 }
 
-// Cria uma preferência de pagamento a partir dos itens do carrinho + dados de entrega,
-// salva o pedido no banco e devolve o link (init_point) para o checkout do Mercado Pago.
+// Cria um link de pagamento a partir dos itens do carrinho + dados de entrega,
+// salva o pedido no banco e devolve o link (init_point) para o checkout da InfinitePay.
 app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
   try {
-    const { items, cliente, entrega, deviceId } = req.body;
+    const { items, cliente, entrega } = req.body;
 
     if (!Array.isArray(items) || items.length === 0 || items.length > 30) {
       return res.status(400).json({ error: 'Carrinho vazio ou inválido.' });
@@ -316,42 +317,33 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
 
     const total = Number(line_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0).toFixed(2));
 
-    // CPF (obrigatório) + telefone/endereço (já coletados no formulário) vão
-    // no payer pro Mercado Pago avaliar risco de fraude em cartão — sem isso
-    // o motor antifraude deles rejeita a maioria dos cartões como alto risco.
-    const payer = {
-      name: cliente.nome,
-      email: cliente.email,
-      identification: { type: 'CPF', number: cpfDigits },
-      address: {
-        zip_code: String(entrega.cep || '').replace(/\D/g, ''),
-        street_name: entrega.endereco,
-        street_number: entrega.numero
-      }
-    };
     const telefoneDigits = String(cliente.telefone || '').replace(/\D/g, '');
-    if (telefoneDigits.length >= 10) {
-      payer.phone = { area_code: telefoneDigits.slice(0, 2), number: telefoneDigits.slice(2) };
-    }
+    const customer = { name: cliente.nome, email: cliente.email };
+    if (telefoneDigits.length >= 10) customer.phone_number = '+55' + telefoneDigits;
 
-    const preference = new Preference(client);
-    const result = await preference.create({
-      body: {
-        items: line_items,
-        payer,
-        back_urls: {
-          success: `${SITE_URL}/sucesso.html`,
-          failure: `${SITE_URL}/falha.html`,
-          pending: `${SITE_URL}/pendente.html`
-        },
-        auto_return: 'approved',
-        notification_url: `${req.protocol}://${req.get('host')}/webhook`
+    // Identificador do pedido gerado por nós (a InfinitePay não devolve um id
+    // próprio na criação do link) — é com ele que casamos webhook e o pedido
+    // salvo no banco, no lugar do preference_id que vinha do Mercado Pago.
+    const orderNsu = crypto.randomUUID();
+
+    // A InfinitePay rejeita item com valor 0 — o brinde de boas-vindas (R$0)
+    // continua registrado no pedido/e-mail normalmente, só não vai como linha
+    // separada no link de pagamento (não muda o valor cobrado de qualquer forma).
+    const itensParaPagamento = line_items.filter((i) => i.unit_price > 0);
+
+    const initPoint = await criarLinkPagamento({
+      items: itensParaPagamento,
+      customer,
+      address: {
+        cep: String(entrega.cep || '').replace(/\D/g, ''),
+        street: entrega.endereco,
+        neighborhood: entrega.bairro,
+        number: entrega.numero,
+        complement: entrega.complemento || undefined
       },
-      // Repassa o Device ID (gerado pelo security.js do Mercado Pago no
-      // front) como X-Meli-Session-Id — sinal que o antifraude deles usa
-      // pra avaliar risco de cartão. O SDK já sabe montar esse header
-      // sozinho a partir dessa opção, não precisa de chamada HTTP manual.
-      requestOptions: deviceId ? { meliSessionId: deviceId } : undefined
+      orderNsu,
+      redirectUrl: `${SITE_URL}/sucesso.html`,
+      webhookUrl: `${req.protocol}://${req.get('host')}/webhook-infinitepay`
     });
 
     if (pool) {
@@ -360,7 +352,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
           (preference_id, status, customer_name, customer_email, customer_phone, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, total, free_gift, discount_id, discount_percent)
          VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
         [
-          result.id,
+          orderNsu,
           cliente.nome,
           cliente.email,
           cliente.telefone || null,
@@ -381,9 +373,9 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       );
     }
 
-    res.json({ init_point: result.init_point });
+    res.json({ init_point: initPoint });
   } catch (err) {
-    console.error('Erro ao criar preferência:', err);
+    console.error('Erro ao criar link de pagamento:', err);
     res.status(500).json({ error: 'Erro ao criar pagamento.' });
   }
 });
@@ -511,6 +503,35 @@ app.all('/webhook', webhookLimiter, async (req, res) => {
     console.error('Erro ao processar notificação do Mercado Pago:', err);
   }
   // Sempre responde 200 para o Mercado Pago não ficar reenviando a notificação.
+  res.sendStatus(200);
+});
+
+// Notificação de pagamento aprovado da InfinitePay. O payload não é assinado
+// (a criação do link também não usa token, só o handle público), então nunca
+// confiamos nele sozinho — sempre confirmamos com uma chamada nossa pra
+// /payment_check antes de aprovar o pedido, e conferimos se o valor pago bate
+// com o total salvo (mesmo cuidado que já temos em /api/create-preference).
+app.post('/webhook-infinitepay', webhookLimiter, async (req, res) => {
+  const { order_nsu, transaction_nsu, invoice_slug } = req.body || {};
+  try {
+    if (order_nsu && pool) {
+      const status = await consultarStatusPagamento({ orderNsu: order_nsu, transactionNsu: transaction_nsu, slug: invoice_slug });
+      if (status.success && status.paid) {
+        const { rows } = await pool.query('SELECT total FROM orders WHERE preference_id = $1', [order_nsu]);
+        const pedido = rows[0];
+        if (pedido && Math.abs(Number(status.paid_amount) / 100 - Number(pedido.total)) < 0.01) {
+          await atualizarStatusPedido(order_nsu, 'approved', transaction_nsu);
+        } else if (pedido) {
+          console.error(`[webhook-infinitepay] Valor pago (R$ ${Number(status.paid_amount) / 100}) não bate com o total do pedido ${order_nsu} (R$ ${pedido.total}) — não aprovado automaticamente.`);
+        }
+      }
+    } else {
+      console.log('Notificação recebida da InfinitePay sem order_nsu:', req.body);
+    }
+  } catch (err) {
+    console.error('Erro ao processar notificação da InfinitePay:', err);
+    return res.sendStatus(400); // resposta != 2xx faz a InfinitePay reenviar o webhook depois
+  }
   res.sendStatus(200);
 });
 
@@ -682,7 +703,7 @@ app.get('/admin/logout', (req, res) => {
 });
 
 // Layout compartilhado pelos painéis: mesma barra de navegação em todos,
-// pra dar pra pular entre pedidos, avaliações, métricas, GA e Mercado Pago
+// pra dar pra pular entre pedidos, avaliações, métricas, GA e InfinitePay
 // sem digitar URL de novo.
 function adminLayout({ title, ativo, body }) {
   const nav = [
@@ -691,7 +712,7 @@ function adminLayout({ title, ativo, body }) {
     { id: 'avaliacoes', label: 'Avaliações', href: '/admin/avaliacoes' },
     { id: 'leads', label: 'Contatos', href: '/admin/leads' },
     { id: 'ga', label: 'Google Analytics ↗', href: 'https://analytics.google.com/analytics/web/', external: true },
-    { id: 'mp', label: 'Mercado Pago ↗', href: 'https://www.mercadopago.com.br/activities', external: true },
+    { id: 'ip', label: 'InfinitePay ↗', href: 'https://app.infinitepay.io/', external: true },
     { id: 'sair', label: 'Sair', href: '/admin/logout' }
   ];
   const navHtml = nav.map((item) => `
@@ -837,7 +858,7 @@ function adminLayout({ title, ativo, body }) {
 const STATUS_LABEL = { pending: 'Pendente', approved: 'Aprovado', rejected: 'Recusado', in_process: 'Em análise', cancelled: 'Cancelado', refunded: 'Reembolsado' };
 
 // Painel geral: vendas, pendências e produtos mais vendidos, com atalhos
-// pros outros painéis e pro Google Analytics / Mercado Pago.
+// pros outros painéis e pro Google Analytics / InfinitePay.
 app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
