@@ -73,12 +73,35 @@ if (!ACCESS_TOKEN) {
 
 const client = new MercadoPagoConfig({ accessToken: ACCESS_TOKEN || 'TEST-TOKEN' });
 
-// Limita chamadas às rotas que dependem de serviços externos pagos/com limite
-// (Melhor Envio) ou que criam registros reais (preferências no Mercado Pago),
-// pra um IP não conseguir estourar o limite da conta nem poluir o painel de pedidos.
+// Limita a rota que cria pagamento de verdade (InfinitePay) — mais apertado
+// porque cada chamada gera um pedido real no banco, pra um IP não conseguir
+// poluir o painel de pedidos nem abusar da criação de links de pagamento.
 const checkoutLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas requisições. Tente novamente em alguns minutos.' }
+});
+
+// Calcular frete (Melhor Envio) é só consulta, sem custo nem registro criado —
+// mais generoso que o checkout porque é normal testar vários CEPs/quantidades
+// antes de fechar o pedido. Tinha o mesmo limite apertado do checkout antes,
+// e um cliente testando frete algumas vezes já esgotava a cota de quem for
+// finalizar a compra depois, no mesmo IP.
+const freteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas requisições. Tente novamente em alguns minutos.' }
+});
+
+// Avaliação e newsletter só gravam no nosso próprio banco (sem custo de API
+// externa) — não tem por que competir pelo mesmo limite apertado do checkout.
+const formularioLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Muitas requisições. Tente novamente em alguns minutos.' }
@@ -172,7 +195,7 @@ app.get('/api/produtos', (req, res) => {
 // Se o subtotal do carrinho já bater o mínimo do frete grátis, zera o valor
 // (mas mantém o prazo real) — mesma regra aplicada de novo, com autoridade,
 // em /api/create-preference na hora de fechar o pedido.
-app.post('/api/calcular-frete', checkoutLimiter, async (req, res) => {
+app.post('/api/calcular-frete', freteLimiter, async (req, res) => {
   try {
     const { cep, pesoKg, subtotal } = req.body;
     const frete = await calcularFrete(cep, Number(pesoKg));
@@ -1078,7 +1101,7 @@ app.post('/admin/pedidos/:id/excluir', requireAdmin, asyncHandler(async (req, re
 // aprovada manualmente — evita comentário falso de concorrente ou spam.
 const LINHAS_PRODUTO = ['Tradicional', 'Gourmet', 'Especial', 'Drip Coffee'];
 
-app.post('/api/avaliacoes', checkoutLimiter, async (req, res) => {
+app.post('/api/avaliacoes', formularioLimiter, async (req, res) => {
   try {
     if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
     const nome = String(req.body?.nome || '').trim().slice(0, 100);
@@ -1177,7 +1200,7 @@ app.post('/admin/avaliacoes/:id/:acao', requireAdmin, asyncHandler(async (req, r
 // não comprou, pra dar pra reengajar depois (novidade de torra, promoção).
 // E-mail é a chave única — reenviar o formulário com o mesmo e-mail não
 // duplica linha nem manda o e-mail de boas-vindas de novo.
-app.post('/api/newsletter', checkoutLimiter, async (req, res) => {
+app.post('/api/newsletter', formularioLimiter, async (req, res) => {
   try {
     if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
     const nome = String(req.body?.nome || '').trim().slice(0, 100);
