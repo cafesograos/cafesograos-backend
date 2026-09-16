@@ -49,6 +49,10 @@ async function initDb() {
   // Marcação manual do admin: "já lancei esse pedido no meu sistema de
   // vendas/contabilidade" — independente do status de pagamento/rastreio.
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS entrada_sistema BOOLEAN DEFAULT false;`);
+  // Qual transportadora/modalidade a Melhor Envio escolheu como mais barata
+  // pra esse pedido — sem isso, na hora de gerar a etiqueta de verdade era
+  // preciso recalcular o frete manualmente só pra descobrir qual usar.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_carrier TEXT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reviews (

@@ -106,7 +106,7 @@ async function enviarEmailNovoPedido(order) {
     </p>
     <p><strong>Itens:</strong></p>
     <ul>${itensHtml(order)}</ul>
-    <p><strong>Frete:</strong> ${Number(order.shipping_cost) === 0 ? 'Grátis' : reais(order.shipping_cost)}</p>
+    <p><strong>Frete:</strong> ${Number(order.shipping_cost) === 0 ? 'Grátis' : reais(order.shipping_cost)}${order.shipping_carrier ? ` — enviar via <strong>${escapeHtml(order.shipping_carrier)}</strong>` : ''}</p>
     <p><strong>Total:</strong> ${reais(order.total)}</p>
     <p><strong>ID da preferência:</strong> ${escapeHtml(order.preference_id)}</p>
   `;

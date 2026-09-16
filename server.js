@@ -301,10 +301,15 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     if (brindeProduto) pesoTotalKg += (brindeProduto.pesoGramas || 400) / 1000;
 
     let shippingCost = 0;
+    let shippingCarrier = null;
     const freteGratis = subtotalCatalogo >= FRETE_GRATIS_ACIMA_DE && cepEhSP(entrega.cep);
     if (!freteGratis) {
       const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
       shippingCost = freteCalculado.valor;
+      // Guarda qual transportadora/modalidade foi a mais barata pra esse
+      // pedido — sem isso, na hora de gerar a etiqueta de verdade era preciso
+      // recalcular o frete manualmente só pra descobrir qual usar.
+      shippingCarrier = freteCalculado.transportadora || null;
     }
     if (shippingCost > 0) {
       line_items.push({
@@ -349,8 +354,8 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     if (pool) {
       await pool.query(
         `INSERT INTO orders
-          (preference_id, status, customer_name, customer_email, customer_phone, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, total, free_gift, discount_id, discount_percent)
-         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+          (preference_id, status, customer_name, customer_email, customer_phone, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, total, free_gift, discount_id, discount_percent)
+         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
         [
           orderNsu,
           cliente.nome,
@@ -365,6 +370,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
           entrega.estado,
           JSON.stringify(itensParaPedido),
           shippingCost,
+          shippingCarrier,
           total,
           freeGift,
           desconto ? desconto.id : null,
@@ -981,7 +987,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${escapeHtml(o.customer_email)} · ${escapeHtml(o.customer_phone || 'sem telefone')}</div>
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
-      <div class="pedido-linhas"><span>Frete</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>
+      <div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>
       <form method="POST" action="/admin/pedidos/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
         <label>
           <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''} onchange="this.form.submit()">
