@@ -519,10 +519,15 @@ app.post('/webhook-infinitepay', webhookLimiter, async (req, res) => {
       if (status.success && status.paid) {
         const { rows } = await pool.query('SELECT total FROM orders WHERE preference_id = $1', [order_nsu]);
         const pedido = rows[0];
-        if (pedido && Math.abs(Number(status.paid_amount) / 100 - Number(pedido.total)) < 0.01) {
+        // Compara com "amount" (o valor que nós pedimos pra cobrar na criação
+        // do link), não "paid_amount" (o que o cliente efetivamente pagou) —
+        // em parcelamento com taxa repassada ao cliente, paid_amount vem MAIOR
+        // que o total do pedido de propósito, e comparar com ele faria um
+        // pagamento aprovado de verdade nunca bater e ficar pending pra sempre.
+        if (pedido && Math.abs(Number(status.amount) / 100 - Number(pedido.total)) < 0.01) {
           await atualizarStatusPedido(order_nsu, 'approved', transaction_nsu);
         } else if (pedido) {
-          console.error(`[webhook-infinitepay] Valor pago (R$ ${Number(status.paid_amount) / 100}) não bate com o total do pedido ${order_nsu} (R$ ${pedido.total}) — não aprovado automaticamente.`);
+          console.error(`[webhook-infinitepay] Valor cobrado (R$ ${Number(status.amount) / 100}) não bate com o total do pedido ${order_nsu} (R$ ${pedido.total}) — não aprovado automaticamente.`);
         }
       }
     } else {
