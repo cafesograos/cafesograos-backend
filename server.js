@@ -1269,7 +1269,7 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 app.use((err, req, res, next) => {
   console.error('Erro não tratado numa rota:', err);
   if (res.headersSent) return next(err);
-  if (req.path.startsWith('/api/') || req.path === '/webhook') {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/webhook')) {
     res.status(500).json({ error: 'Erro interno no servidor.' });
   } else {
     res.status(500).send('Ocorreu um erro inesperado. Tente novamente em instantes.');
