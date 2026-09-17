@@ -449,51 +449,6 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
   return order;
 }
 
-// Verifica pedidos "pending" antigos direto na API do Mercado Pago — cobre o
-// caso (raro, mas real) do webhook nunca chegar (falha de rede, nosso
-// servidor reiniciando bem na hora, etc.). Sem isso, um pedido pago de
-// verdade podia ficar "pending" pra sempre no nosso painel, sem ninguém
-// saber. Só olha pedidos com mais de 10 min (dá tempo da pessoa terminar o
-// checkout sozinha) e menos de 7 dias (carrinho mais velho que isso já é
-// abandono de verdade, não faz sentido continuar checando pra sempre).
-async function reconciliarPedidosPendentes() {
-  if (!pool) return { verificados: 0, atualizados: 0 };
-  const { rows: pendentes } = await pool.query(
-    `SELECT preference_id FROM orders
-     WHERE status = 'pending' AND created_at < now() - interval '10 minutes' AND created_at > now() - interval '7 days'`
-  );
-
-  let atualizados = 0;
-  for (const { preference_id } of pendentes) {
-    try {
-      const res = await fetch(`https://api.mercadopago.com/merchant_orders/search?preference_id=${encodeURIComponent(preference_id)}`, {
-        headers: { Authorization: `Bearer ${ACCESS_TOKEN}` }
-      });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const pagamentos = (data.elements || []).flatMap((mo) => mo.payments || []);
-      // Prioriza um pagamento aprovado; senão, pega o mais recente de qualquer status.
-      const pagamento = pagamentos.find((p) => p.status === 'approved')
-        || pagamentos.sort((a, b) => new Date(b.date_created) - new Date(a.date_created))[0];
-      if (pagamento && pagamento.status !== 'pending') {
-        await atualizarStatusPedido(preference_id, pagamento.status, pagamento.id);
-        atualizados++;
-      }
-    } catch (err) {
-      console.error(`Erro ao reconciliar pedido ${preference_id}:`, err.message);
-    }
-  }
-  if (pendentes.length > 0) {
-    console.log(`[reconciliacao] ${pendentes.length} pedidos verificados, ${atualizados} atualizados`);
-  }
-  return { verificados: pendentes.length, atualizados };
-}
-
-// Roda sozinho a cada 20 min, sem depender de ninguém lembrar de checar.
-setInterval(() => {
-  reconciliarPedidosPendentes().catch((err) => console.error('Erro na reconciliação automática:', err.message));
-}, 20 * 60 * 1000);
-
 // Recebe as notificações de pagamento do Mercado Pago (webhook/IPN).
 // Aceita GET (teste de URL do painel e IPN antigo) e POST (webhooks novos).
 app.all('/webhook', webhookLimiter, async (req, res) => {
@@ -807,7 +762,6 @@ function adminLayout({ title, ativo, body }) {
       .card.alerta { box-shadow: 0 1px 3px rgba(33,23,20,.08), inset 3px 0 0 #D66B3E; }
       .card.alerta strong { color: #D66B3E; }
       .card-link { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 700; }
-      .aviso-reconciliacao { background: #EAF4E9; color: #2E5C31; padding: 10px 14px; border-radius: 8px; font-size: 14px; margin-bottom: 14px; }
 
       table.mini { border-collapse: collapse; width: 100%; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
       table.mini th, table.mini td { padding: 10px 14px; text-align: left; font-size: 13px; border-bottom: 1px solid #F0E9E2; }
@@ -1007,6 +961,9 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
           ${o.tracking_code ? `<span class="selo">📦 Enviado: ${escapeHtml(o.tracking_code)}</span>` : ''}
         </div>
       ` : ''}
+      ${o.status === 'pending' && (Date.now() - new Date(o.created_at).getTime()) > 10 * 60 * 1000 ? `
+        <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Pendente há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a> pela data/valor acima.</div>
+      ` : ''}
       <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${escapeHtml(o.customer_email)} · ${escapeHtml(o.customer_phone || 'sem telefone')}</div>
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
@@ -1029,32 +986,14 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
     </div>
   `).join('');
 
-  const reconciliado = req.query.reconciliado;
-  const avisoReconciliacao = reconciliado
-    ? `<p class="aviso-reconciliacao">Verificação concluída: ${escapeHtml(reconciliado)}.</p>`
-    : '';
-
   const body = `
     <h1>Pedidos — Café Só Grãos</h1>
-    <form method="POST" action="/admin/pedidos/reconciliar" style="margin-bottom:14px;">
-      <button type="submit" class="btn-mini btn-mini-primary">Verificar pedidos pendentes agora</button>
-    </form>
-    ${avisoReconciliacao}
     ${filtros}
     <div class="pedido-lista">
       ${cartoes || '<div class="lista-vazia">Nenhum pedido encontrado.</div>'}
     </div>
   `;
   res.send(adminLayout({ title: 'Pedidos', ativo: 'pedidos', body }));
-}));
-
-// Verificação manual: além da checagem automática a cada 20 min, o admin
-// pode forçar uma checagem imediata (ex.: logo depois de reportarem um
-// possível problema, sem precisar esperar o próximo ciclo automático).
-app.post('/admin/pedidos/reconciliar', requireAdmin, asyncHandler(async (req, res) => {
-  const resultado = await reconciliarPedidosPendentes();
-  logAdminAcao(req, 'reconciliacao_manual', `${resultado.atualizados}/${resultado.verificados} atualizados`);
-  res.redirect(`/admin/pedidos?reconciliado=${resultado.verificados} verificados, ${resultado.atualizados} atualizados`);
 }));
 
 // Salva o código de rastreio de um pedido e avisa o cliente por e-mail.
