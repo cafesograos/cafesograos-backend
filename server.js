@@ -136,7 +136,12 @@ app.get('/oauth/melhorenvio/connect', requireAdmin, (req, res) => {
   url.searchParams.set('client_id', process.env.MELHORENVIO_CLIENT_ID);
   url.searchParams.set('redirect_uri', redirectUri);
   url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', 'shipping-calculate');
+  // "shipping-calculate" sozinho só autorizava cotar frete — a automação de
+  // etiqueta (carrinho, pagamento, geração, impressão, rastreio) dava "This
+  // action is unauthorized" por falta desses escopos extras. Precisa
+  // reautorizar (rodar /oauth/melhorenvio/connect de novo) depois desse
+  // deploy pra pegar um token com o escopo novo.
+  url.searchParams.set('scope', 'shipping-calculate shipping-companies cart-read cart-write shipping-checkout shipping-generate shipping-print shipping-tracking');
   url.searchParams.set('state', melhorEnvioOAuthState);
   res.redirect(url.toString());
 });
