@@ -849,6 +849,22 @@ function adminLayout({ title, ativo, body }) {
 
 const STATUS_LABEL = { pending: 'Pendente', approved: 'Aprovado', rejected: 'Recusado', in_process: 'Em análise', cancelled: 'Cancelado', refunded: 'Reembolsado' };
 
+// Textos fixos pro aviso de erro do fluxo de etiqueta — nunca texto vindo da
+// URL direto (ver comentário em /admin/pedidos), então cada rota só manda um
+// desses códigos, nunca a mensagem em si.
+const FRETE_ERRO_MSG = {
+  ja_no_carrinho: 'Esse pedido já tem um item no carrinho da Melhor Envio. Pra recomeçar, remova antes no painel da Melhor Envio.',
+  sem_servico: 'Esse pedido não tem um serviço de frete cotado (provavelmente a cotação caiu na estimativa de reserva na hora da compra) — não dá pra saber qual transportadora usar.',
+  sem_cpf: 'Esse pedido não tem CPF salvo (feito antes dessa funcionalidade existir) — não dá pra automatizar, precisa comprar a etiqueta direto no painel da Melhor Envio.',
+  sem_telefone: 'Esse pedido não tem telefone do cliente salvo — a Melhor Envio pode recusar sem um contato do destinatário. Confirme o telefone com o cliente antes, ou compre a etiqueta direto no painel da Melhor Envio.',
+  nao_no_carrinho: 'Esse pedido ainda não foi inserido no carrinho da Melhor Envio.',
+  ja_tem_rastreio: 'Esse pedido já tem código de rastreio.',
+  sem_codigo_rastreio: 'Pagamento e etiqueta gerados, mas não veio o código de rastreio na resposta — confira direto no painel da Melhor Envio e cole o código manualmente aqui.',
+  sem_link_impressao: 'Não veio um link de impressão na resposta da Melhor Envio.',
+  api_recusou: 'A Melhor Envio recusou essa operação. Confira o motivo exato nos logs do servidor.',
+  erro_desconhecido: 'Algo deu errado nessa operação. Confira os logs do servidor pra detalhes.'
+};
+
 // Painel geral: vendas, pendências e produtos mais vendidos, com atalhos
 // pros outros painéis e pro Google Analytics / InfinitePay.
 app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
@@ -1005,13 +1021,20 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
     </div>
   `).join('');
 
-  const freteOk = req.query.frete_ok;
-  const freteErro = req.query.frete_erro;
-  const avisoFrete = freteOk
-    ? `<p class="aviso-frete aviso-frete-ok">${escapeHtml(freteOk)}</p>`
-    : freteErro
-      ? `<p class="aviso-frete aviso-frete-erro">${escapeHtml(freteErro)}</p>`
-      : '';
+  // Mensagem do aviso de frete vem de um código fixo (nunca de texto livre na
+  // URL) — antes qualquer um podia montar um link tipo
+  // "/admin/pedidos?frete_ok=qualquer coisa" e fazer aparecer uma mensagem
+  // forjada pro admin já logado. Com código fixo, o texto exibido só pode
+  // ser um dos que a gente mesmo escreveu abaixo.
+  let avisoFrete = '';
+  if (req.query.frete_ok === 'carrinho') {
+    avisoFrete = `<p class="aviso-frete aviso-frete-ok">Inserido no carrinho da Melhor Envio. Confira os dados e clique em "Pagar e gerar etiqueta" pra confirmar — ainda não foi cobrado nada.</p>`;
+  } else if (req.query.frete_ok === 'pago') {
+    const pedidoPago = rows.find((o) => String(o.id) === String(req.query.id));
+    avisoFrete = `<p class="aviso-frete aviso-frete-ok">Etiqueta paga e gerada${pedidoPago?.tracking_code ? `! Código de rastreio ${escapeHtml(pedidoPago.tracking_code)}` : ''} — e-mail de envio disparado pro cliente.</p>`;
+  } else if (FRETE_ERRO_MSG[req.query.frete_erro]) {
+    avisoFrete = `<p class="aviso-frete aviso-frete-erro">${FRETE_ERRO_MSG[req.query.frete_erro]}</p>`;
+  }
 
   const body = `
     <h1>Pedidos — Café Só Grãos</h1>
@@ -1065,19 +1088,19 @@ app.post('/admin/pedidos/:id/frete/carrinho', requireAdmin, asyncHandler(async (
 
   try {
     if (order.melhorenvio_order_id) {
-      throw new Error(`Esse pedido já tem um item no carrinho da Melhor Envio (id ${order.melhorenvio_order_id}). Pra recomeçar, remova antes no painel da Melhor Envio.`);
+      throw new Error('ja_no_carrinho');
     }
     if (!order.shipping_service_id) {
-      throw new Error('Esse pedido não tem um serviço de frete cotado (provavelmente a cotação caiu na estimativa de reserva na hora da compra) — não dá pra saber qual transportadora usar.');
+      throw new Error('sem_servico');
     }
     if (!order.customer_cpf) {
-      throw new Error('Esse pedido não tem CPF salvo (feito antes dessa funcionalidade existir) — não dá pra automatizar, precisa comprar a etiqueta direto no painel da Melhor Envio.');
+      throw new Error('sem_cpf');
     }
     // Telefone é opcional no checkout, mas a Melhor Envio pode recusar a
     // inserção no carrinho sem um contato do destinatário — melhor avisar
     // isso claramente aqui do que deixar a API devolver um erro genérico.
     if (!order.customer_phone) {
-      throw new Error('Esse pedido não tem telefone do cliente salvo — a Melhor Envio pode recusar sem um contato do destinatário. Confirme o telefone com o cliente antes, ou compre a etiqueta direto no painel da Melhor Envio.');
+      throw new Error('sem_telefone');
     }
 
     const resultado = await inserirNoCarrinho({
@@ -1104,10 +1127,11 @@ app.post('/admin/pedidos/:id/frete/carrinho', requireAdmin, asyncHandler(async (
 
     await pool.query('UPDATE orders SET melhorenvio_order_id = $1 WHERE id = $2', [resultado.id, order.id]);
     logAdminAcao(req, 'frete_carrinho', `pedido #${order.id} → item Melhor Envio ${resultado.id}`);
-    res.redirect(`/admin/pedidos?frete_ok=${encodeURIComponent(`Inserido no carrinho: ${resultado.price ? 'R$ ' + resultado.price : ''} (id ${resultado.id}). Confira os dados e clique em "Pagar e gerar etiqueta" pra confirmar — ainda não foi cobrado nada.`)}`);
+    res.redirect('/admin/pedidos?frete_ok=carrinho');
   } catch (err) {
     console.error(`Erro ao inserir pedido #${order.id} no carrinho da Melhor Envio:`, err.message);
-    res.redirect(`/admin/pedidos?frete_erro=${encodeURIComponent(err.message)}`);
+    const codigo = FRETE_ERRO_MSG[err.message] ? err.message : 'api_recusou';
+    res.redirect(`/admin/pedidos?frete_erro=${codigo}`);
   }
 }));
 
@@ -1119,10 +1143,10 @@ app.post('/admin/pedidos/:id/frete/pagar', requireAdmin, asyncHandler(async (req
 
   try {
     if (!order.melhorenvio_order_id) {
-      throw new Error('Esse pedido ainda não foi inserido no carrinho da Melhor Envio.');
+      throw new Error('nao_no_carrinho');
     }
     if (order.tracking_code) {
-      throw new Error(`Esse pedido já tem código de rastreio (${order.tracking_code}).`);
+      throw new Error('ja_tem_rastreio');
     }
 
     await comprarEtiquetas([order.melhorenvio_order_id]);
@@ -1131,16 +1155,17 @@ app.post('/admin/pedidos/:id/frete/pagar', requireAdmin, asyncHandler(async (req
     const codigo = rastreio?.[order.melhorenvio_order_id]?.tracking
       || (Array.isArray(rastreio) ? rastreio.find((r) => String(r.id) === String(order.melhorenvio_order_id))?.tracking : null);
     if (!codigo) {
-      throw new Error('Pagamento e etiqueta gerados, mas não veio o código de rastreio na resposta — confira direto no painel da Melhor Envio e cole o código manualmente aqui.');
+      throw new Error('sem_codigo_rastreio');
     }
 
     const { rows: atualizado } = await pool.query('UPDATE orders SET tracking_code = $1 WHERE id = $2 RETURNING *', [codigo, order.id]);
     await enviarEmailRastreio(atualizado[0]);
     logAdminAcao(req, 'frete_pago', `pedido #${order.id} → rastreio ${codigo}`);
-    res.redirect(`/admin/pedidos?frete_ok=${encodeURIComponent(`Etiqueta paga e gerada! Código de rastreio ${codigo} — e-mail de envio disparado pro cliente.`)}`);
+    res.redirect(`/admin/pedidos?frete_ok=pago&id=${order.id}`);
   } catch (err) {
     console.error(`Erro ao pagar/gerar etiqueta do pedido #${order.id}:`, err.message);
-    res.redirect(`/admin/pedidos?frete_erro=${encodeURIComponent(err.message)}`);
+    const codigo = FRETE_ERRO_MSG[err.message] ? err.message : 'api_recusou';
+    res.redirect(`/admin/pedidos?frete_erro=${codigo}`);
   }
 }));
 
@@ -1152,11 +1177,12 @@ app.get('/admin/pedidos/:id/frete/etiqueta', requireAdmin, asyncHandler(async (r
 
   try {
     const resultado = await imprimirEtiquetas([order.melhorenvio_order_id]);
-    if (!resultado.url) throw new Error('Não veio um link de impressão na resposta.');
+    if (!resultado.url) throw new Error('sem_link_impressao');
     res.redirect(resultado.url);
   } catch (err) {
     console.error(`Erro ao imprimir etiqueta do pedido #${order.id}:`, err.message);
-    res.redirect(`/admin/pedidos?frete_erro=${encodeURIComponent(err.message)}`);
+    const codigo = FRETE_ERRO_MSG[err.message] ? err.message : 'api_recusou';
+    res.redirect(`/admin/pedidos?frete_erro=${codigo}`);
   }
 }));
 
