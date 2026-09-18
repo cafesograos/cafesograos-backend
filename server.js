@@ -1167,9 +1167,17 @@ app.post('/admin/pedidos/:id/frete/pagar', requireAdmin, asyncHandler(async (req
 
     await comprarEtiquetas([order.melhorenvio_order_id]);
     await gerarEtiquetas([order.melhorenvio_order_id]);
-    const rastreio = await rastrearEtiquetas([order.melhorenvio_order_id]);
-    const codigo = rastreio?.[order.melhorenvio_order_id]?.tracking
-      || (Array.isArray(rastreio) ? rastreio.find((r) => String(r.id) === String(order.melhorenvio_order_id))?.tracking : null);
+
+    // A transportadora não devolve o código de rastreio na hora — leva alguns
+    // segundos entre a etiqueta ser gerada e a Melhor Envio receber o código
+    // de volta. Sem essa espera, a consulta abaixo quase sempre vem vazia.
+    let codigo = null;
+    for (let tentativa = 0; tentativa < 5 && !codigo; tentativa++) {
+      if (tentativa > 0) await new Promise((resolve) => setTimeout(resolve, 4000));
+      const rastreio = await rastrearEtiquetas([order.melhorenvio_order_id]);
+      codigo = rastreio?.[order.melhorenvio_order_id]?.tracking
+        || (Array.isArray(rastreio) ? rastreio.find((r) => String(r.id) === String(order.melhorenvio_order_id))?.tracking : null);
+    }
     if (!codigo) {
       throw new Error('sem_codigo_rastreio');
     }
