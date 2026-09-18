@@ -12,6 +12,21 @@ const { CATEGORIES, PRODUCTS } = require('./products');
 const app = express();
 app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for reconhecer a stack
 app.set('trust proxy', 1); // Railway/Render terminam HTTPS num único proxy; "true" confiaria em qualquer X-Forwarded-For e quebra o rate limit por IP
+
+// IPs bloqueados na entrada, antes de CORS/rate-limit/qualquer rota — usado
+// pra cortar tráfego abusivo identificado manualmente (ex.: script batendo
+// em /api/calcular-frete de fora do site, sem passar por navegador nenhum,
+// então CORS não segura nada). Curl e outros clientes fora de navegador
+// ignoram CORS por completo; isso é a única barreira real pra eles.
+const IPS_BLOQUEADOS = ['170.244.254.30'];
+app.use((req, res, next) => {
+  if (IPS_BLOQUEADOS.includes(req.ip)) {
+    console.warn(`[bloqueado] Requisição de IP bloqueado ${req.ip} — ${req.method} ${req.path}`);
+    return res.status(403).json({ error: 'Acesso bloqueado.' });
+  }
+  next();
+});
+
 // CORS aberto (sem origin definida) deixava qualquer site na internet chamar
 // nossa API — inclusive /api/create-preference, que cria pedido de verdade
 // no Mercado Pago. Restringe só ao próprio site (+ o domínio do próprio painel
