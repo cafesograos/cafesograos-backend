@@ -950,20 +950,32 @@ function logAdminAcao(req, acao, detalhe) {
 app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
-  const filtro = ['pending', 'approved', 'rejected', 'in_process', 'cancelled', 'refunded'].includes(req.query.status)
+  // "a_enviar"/"enviados" não são status de pagamento de verdade (esses
+  // continuam intactos, batendo com o card "Pedidos por status" do painel
+  // geral) — são um recorte à parte, só pra separar visualmente "aprovado
+  // que falta despachar" de "aprovado que já saiu", que antes vinham tudo
+  // junto sob "Aprovado" e misturava o que ainda precisava de ação.
+  const filtro = ['pending', 'approved', 'rejected', 'in_process', 'cancelled', 'refunded', 'a_enviar', 'enviados'].includes(req.query.status)
     ? req.query.status
     : null;
 
+  const CONDICOES = {
+    a_enviar: `status = 'approved' AND (tracking_code IS NULL OR tracking_code = '')`,
+    enviados: `status = 'approved' AND tracking_code IS NOT NULL AND tracking_code != ''`
+  };
+
   const { rows } = await pool.query(
     filtro
-      ? 'SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC LIMIT 200'
+      ? `SELECT * FROM orders WHERE ${CONDICOES[filtro] || 'status = $1'} ORDER BY created_at DESC LIMIT 200`
       : 'SELECT * FROM orders ORDER BY created_at DESC LIMIT 200',
-    filtro ? [filtro] : []
+    filtro && !CONDICOES[filtro] ? [filtro] : []
   );
   const filtroLink = (status) => `/admin/pedidos${status ? `?status=${status}` : ''}`;
+  const FILTROS_EXTRA = { a_enviar: 'A enviar', enviados: 'Enviados' };
   const filtros = `
     <div class="filtros">
       <a href="${filtroLink(null)}" class="${!filtro ? 'ativo' : ''}">Todos</a>
+      ${Object.keys(FILTROS_EXTRA).map((s) => `<a href="${filtroLink(s)}" class="${filtro === s ? 'ativo' : ''}">${escapeHtml(FILTROS_EXTRA[s])}</a>`).join('')}
       ${Object.keys(STATUS_LABEL).map((s) => `<a href="${filtroLink(s)}" class="${filtro === s ? 'ativo' : ''}">${escapeHtml(STATUS_LABEL[s])}</a>`).join('')}
     </div>
   `;
