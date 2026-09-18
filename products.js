@@ -90,7 +90,7 @@ const PRODUCTS = [
     descricao_en: 'Hassle-free filter coffee: the convenience of an individual sachet, without giving up flavor. 100% arabica. Box of 10.',
     descricao_es: 'Café filtrado sin complicaciones: la practicidad del sobre individual, sin renunciar al sabor. 100% arábica. Caja con 10 unidades.',
     descricao_fr: 'Du café filtre sans complication : la praticité du sachet individuel, sans renoncer à la saveur. 100% arabica. Boîte de 10 unités.',
-    preco: 83.70,
+    preco: 65.99,
     precoOriginal: 90.00,
     categoria: 'drip',
     pesoGramas: 400,
