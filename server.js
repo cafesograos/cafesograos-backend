@@ -731,6 +731,7 @@ function adminLayout({ title, ativo, body }) {
     { id: 'leads', label: 'Contatos', href: '/admin/leads' },
     { id: 'ga', label: 'Google Analytics ↗', href: 'https://analytics.google.com/analytics/web/', external: true },
     { id: 'ip', label: 'InfinitePay ↗', href: 'https://app.infinitepay.io/', external: true },
+    { id: 'me', label: 'Melhor Envio ↗', href: 'https://melhorenvio.com.br/painel', external: true },
     { id: 'sair', label: 'Sair', href: '/admin/logout' }
   ];
   const navHtml = nav.map((item) => `
