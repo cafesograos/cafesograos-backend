@@ -23,7 +23,7 @@ async function getServicosHabilitados(token) {
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${token}`,
-        'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com.br)'
+        'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com)'
       }
     });
     if (!res.ok) throw new Error('status ' + res.status);
@@ -92,7 +92,7 @@ async function calcularFrete(cepDestino, pesoKg) {
         Accept: 'application/json',
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
-        'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com.br)'
+        'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com)'
       },
       body: JSON.stringify({
         from: { postal_code: ORIGEM_CEP },
