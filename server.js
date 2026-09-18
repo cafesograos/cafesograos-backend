@@ -14,7 +14,7 @@ app.set('trust proxy', 1); // Railway/Render terminam HTTPS num único proxy; "t
 
 // CORS aberto (sem origin definida) deixava qualquer site na internet chamar
 // nossa API — inclusive /api/create-preference, que cria pedido de verdade
-// no Mercado Pago. Restringe só ao próprio site (+ o domínio do próprio painel
+// na InfinitePay. Restringe só ao próprio site (+ o domínio do próprio painel
 // admin, que roda aqui no backend, + localhost, usado em testes).
 // Importante: nunca chamar o callback com Error — isso derruba a requisição
 // inteira com 500 (inclusive submits de formulário same-origin, que nem
@@ -100,10 +100,9 @@ const formularioLimiter = rateLimit({
   message: { error: 'Muitas requisições. Tente novamente em alguns minutos.' }
 });
 
-// O /webhook do Mercado Pago não tinha limite nenhum — qualquer um podia
-// bombardear a rota, cada chamada gerando uma consulta na API do Mercado
-// Pago. Esse limite é mais folgado que o checkoutLimiter pois o MP às vezes
-// reenvia a mesma notificação várias vezes.
+// Webhook da InfinitePay — mais folgado que o checkoutLimiter porque o
+// provedor pode reenviar a mesma notificação várias vezes, e cada chamada
+// gera uma consulta de confirmação na API deles.
 const webhookLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 200,
@@ -228,9 +227,9 @@ app.post('/api/calcular-frete', bloquearScript, freteLimiter, async (req, res) =
 });
 
 // Validação padrão de CPF (dígitos verificadores) — recusa também sequências
-// óbvias tipo "00000000000". O Mercado Pago usa esse dado pra avaliar risco
-// de fraude em pagamento com cartão; sem ele (ou com lixo), a maioria dos
-// cartões cai em recusa automática "cc_rejected_high_risk".
+// óbvias tipo "00000000000". Garante um documento de verdade antes de
+// salvar: é o CPF do destinatário que a Melhor Envio exige pra emitir a
+// etiqueta de envio depois.
 function cpfValido(cpf) {
   cpf = String(cpf || '').replace(/\D/g, '');
   if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return false;
@@ -450,16 +449,16 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
   }
 });
 
-// Atualiza o status de um pedido a partir de um pagamento do Mercado Pago —
-// usado tanto pelo webhook quanto pela reconciliação manual/automática, pra
-// nunca duplicar a lógica de cupom/e-mail (e nunca duplicar o cupom em si).
+// Atualiza o status de um pedido a partir da confirmação de pagamento da
+// InfinitePay — centralizado aqui pra nunca duplicar a lógica de cupom/e-mail
+// (e nunca duplicar o cupom em si).
 async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
   if (!pool || !preferenceId) return null;
 
   // Guarda o status de antes pra só disparar cupom/e-mails na primeira vez
-  // que o pedido vira "approved" — o Mercado Pago reenvia a mesma notificação
-  // várias vezes, e sem essa checagem cada reenvio gerava um cupom duplicado
-  // e mandava os e-mails de novo.
+  // que o pedido vira "approved" — o provedor pode reenviar a mesma
+  // notificação várias vezes, e sem essa checagem cada reenvio gerava um
+  // cupom duplicado e mandava os e-mails de novo.
   const { rows: antes } = await pool.query('SELECT status FROM orders WHERE preference_id = $1', [preferenceId]);
   if (!antes[0]) return null;
   const statusAnterior = antes[0].status;
