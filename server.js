@@ -196,7 +196,21 @@ app.get('/api/produtos', (req, res) => {
 // Se o subtotal do carrinho já bater o mínimo do frete grátis, zera o valor
 // (mas mantém o prazo real) — mesma regra aplicada de novo, com autoridade,
 // em /api/create-preference na hora de fechar o pedido.
+// Bloqueia só essa rota (não o site todo) pra clientes que se identificam
+// como "curl" — nenhum navegador de verdade manda esse User-Agent, só
+// scripts. Depois do bloqueio por IP ter saído errado (o IP aparecia na
+// cadeia de proxy de toda requisição vinda da mesma região da Railway,
+// não só do script), isso fica restrito a essa rota específica de propósito,
+// pra nunca mais arriscar derrubar o site inteiro por engano.
+function pareceScript(req) {
+  return /^curl\//i.test(String(req.headers['user-agent'] || ''));
+}
+
 app.post('/api/calcular-frete', freteLimiter, async (req, res) => {
+  if (pareceScript(req)) {
+    console.warn(`[bloqueado] User-Agent de script em /api/calcular-frete: "${req.headers['user-agent']}"`);
+    return res.status(403).json({ error: 'Acesso bloqueado.' });
+  }
   try {
     const { cep, pesoKg, subtotal } = req.body;
     const frete = await calcularFrete(cep, Number(pesoKg));
