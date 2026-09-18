@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
-const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 const { pool, initDb } = require('./db');
 const { calcularFrete, inserirNoCarrinho, comprarEtiquetas, gerarEtiquetas, imprimirEtiquetas, rastrearEtiquetas } = require('./shipping');
 const { criarLinkPagamento, consultarStatusPagamento } = require('./infinitepay');
@@ -52,7 +51,6 @@ app.use((req, res, next) => {
   next();
 });
 
-const ACCESS_TOKEN = process.env.MERCADOPAGO_ACCESS_TOKEN;
 const SITE_URL = process.env.SITE_URL || 'https://www.cafesograos.com.br';
 const FRETE_GRATIS_ACIMA_DE = 300;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
@@ -67,12 +65,6 @@ function cepEhSP(cep) {
   const prefixo = Number(digitos.slice(0, 5));
   return prefixo >= 1000 && prefixo <= 19999;
 }
-
-if (!ACCESS_TOKEN) {
-  console.warn('AVISO: MERCADOPAGO_ACCESS_TOKEN não está definido. Configure o .env antes de aceitar pagamentos.');
-}
-
-const client = new MercadoPagoConfig({ accessToken: ACCESS_TOKEN || 'TEST-TOKEN' });
 
 // Limita a rota que cria pagamento de verdade (InfinitePay) — mais apertado
 // porque cada chamada gera um pedido real no banco, pra um IP não conseguir
@@ -258,12 +250,32 @@ function cpfValido(cpf) {
 // salva o pedido no banco e devolve o link (init_point) para o checkout da InfinitePay.
 app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
   try {
-    const { items, cliente, entrega } = req.body;
+    const { items } = req.body;
 
     if (!Array.isArray(items) || items.length === 0 || items.length > 30) {
       return res.status(400).json({ error: 'Carrinho vazio ou inválido.' });
     }
-    if (!cliente?.nome || !cliente?.email || !entrega?.cep) {
+    // Corta e limpa espaço de todo texto vindo do cliente antes de usar em
+    // qualquer lugar (banco, e-mail, painel) — sem isso, nome/endereço sem
+    // limite de tamanho (diferente do formulário de avaliação/newsletter,
+    // que já limitavam) podia sujar o banco e quebrar layout de e-mail/painel
+    // com um valor absurdamente grande.
+    const cliente = {
+      nome: String(req.body?.cliente?.nome || '').trim().slice(0, 100),
+      email: String(req.body?.cliente?.email || '').trim().slice(0, 200),
+      telefone: String(req.body?.cliente?.telefone || '').trim().slice(0, 30),
+      cpf: req.body?.cliente?.cpf
+    };
+    const entrega = {
+      cep: req.body?.entrega?.cep,
+      endereco: String(req.body?.entrega?.endereco || '').trim().slice(0, 200),
+      numero: String(req.body?.entrega?.numero || '').trim().slice(0, 20),
+      complemento: String(req.body?.entrega?.complemento || '').trim().slice(0, 100),
+      bairro: String(req.body?.entrega?.bairro || '').trim().slice(0, 100),
+      cidade: String(req.body?.entrega?.cidade || '').trim().slice(0, 100),
+      estado: String(req.body?.entrega?.estado || '').trim().slice(0, 2).toUpperCase()
+    };
+    if (!cliente.nome || !cliente.email || !entrega.cep) {
       return res.status(400).json({ error: 'Dados de entrega incompletos.' });
     }
     // Sem essa checagem, um e-mail sem ponto no domínio (ex.: "nome@gmailcom",
@@ -477,47 +489,6 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
   }
   return order;
 }
-
-// Recebe as notificações de pagamento do Mercado Pago (webhook/IPN).
-// Aceita GET (teste de URL do painel e IPN antigo) e POST (webhooks novos).
-app.all('/webhook', webhookLimiter, async (req, res) => {
-  try {
-    const topic = req.query.topic || req.query.type || req.body?.type;
-    const id = req.query.id || req.body?.data?.id;
-
-    if (topic === 'payment' && id) {
-      const payment = new Payment(client);
-      const info = await payment.get({ id });
-      console.log(`Notificação de pagamento ${id}: status "${info.status}"`);
-
-      // A API de pagamentos não devolve mais preference_id direto (só o id
-      // da merchant_order) — sem isso a gente nunca conseguia casar o
-      // pagamento com o pedido, e o status ficava pending pra sempre mesmo
-      // com o pagamento aprovado.
-      let preferenceId = info.preference_id;
-      if (!preferenceId && info.order?.id) {
-        const orderRes = await fetch(`https://api.mercadopago.com/merchant_orders/${info.order.id}`, {
-          headers: { Authorization: `Bearer ${ACCESS_TOKEN}` }
-        });
-        if (orderRes.ok) {
-          preferenceId = (await orderRes.json()).preference_id;
-        } else {
-          console.error(`Falha ao buscar merchant_order ${info.order.id} pra achar o preference_id:`, orderRes.status);
-        }
-      }
-
-      if (pool && preferenceId) {
-        await atualizarStatusPedido(preferenceId, info.status, id);
-      }
-    } else {
-      console.log('Notificação recebida do Mercado Pago:', { topic, id });
-    }
-  } catch (err) {
-    console.error('Erro ao processar notificação do Mercado Pago:', err);
-  }
-  // Sempre responde 200 para o Mercado Pago não ficar reenviando a notificação.
-  res.sendStatus(200);
-});
 
 // Notificação de pagamento aprovado da InfinitePay. O payload não é assinado
 // (a criação do link também não usa token, só o handle público), então nunca
