@@ -13,27 +13,6 @@ const app = express();
 app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for reconhecer a stack
 app.set('trust proxy', 1); // Railway/Render terminam HTTPS num único proxy; "true" confiaria em qualquer X-Forwarded-For e quebra o rate limit por IP
 
-// IPs bloqueados na entrada, antes de CORS/rate-limit/qualquer rota — usado
-// pra cortar tráfego abusivo identificado manualmente (ex.: script batendo
-// em /api/calcular-frete de fora do site, sem passar por navegador nenhum,
-// então CORS não segura nada). Curl e outros clientes fora de navegador
-// ignoram CORS por completo; isso é a única barreira real pra eles.
-const IPS_BLOQUEADOS = ['170.244.254.30'];
-app.use((req, res, next) => {
-  // Não confia só em req.ip (depende de acertar exatamente quantos "pulos"
-  // de proxy a Railway usa) — confere também a string crua do cabeçalho
-  // X-Forwarded-For inteiro, pra não deixar passar só por causa de uma
-  // contagem de proxy errada.
-  const xff = String(req.headers['x-forwarded-for'] || '');
-  const enderecos = [req.ip, ...xff.split(',').map((s) => s.trim())].filter(Boolean);
-  const bloqueado = enderecos.some((ip) => IPS_BLOQUEADOS.includes(ip));
-  if (bloqueado) {
-    console.warn(`[bloqueado] Requisição de IP bloqueado (${enderecos.join(' / ')}) — ${req.method} ${req.path}`);
-    return res.status(403).json({ error: 'Acesso bloqueado.' });
-  }
-  next();
-});
-
 // CORS aberto (sem origin definida) deixava qualquer site na internet chamar
 // nossa API — inclusive /api/create-preference, que cria pedido de verdade
 // no Mercado Pago. Restringe só ao próprio site (+ o domínio do próprio painel
