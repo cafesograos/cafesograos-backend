@@ -1076,6 +1076,12 @@ app.post('/admin/pedidos/:id/frete/carrinho', requireAdmin, asyncHandler(async (
     if (!order.customer_cpf) {
       throw new Error('Esse pedido não tem CPF salvo (feito antes dessa funcionalidade existir) — não dá pra automatizar, precisa comprar a etiqueta direto no painel da Melhor Envio.');
     }
+    // Telefone é opcional no checkout, mas a Melhor Envio pode recusar a
+    // inserção no carrinho sem um contato do destinatário — melhor avisar
+    // isso claramente aqui do que deixar a API devolver um erro genérico.
+    if (!order.customer_phone) {
+      throw new Error('Esse pedido não tem telefone do cliente salvo — a Melhor Envio pode recusar sem um contato do destinatário. Confirme o telefone com o cliente antes, ou compre a etiqueta direto no painel da Melhor Envio.');
+    }
 
     const resultado = await inserirNoCarrinho({
       orderId: order.id,
