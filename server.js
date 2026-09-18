@@ -20,8 +20,15 @@ app.set('trust proxy', 1); // Railway/Render terminam HTTPS num único proxy; "t
 // ignoram CORS por completo; isso é a única barreira real pra eles.
 const IPS_BLOQUEADOS = ['170.244.254.30'];
 app.use((req, res, next) => {
-  if (IPS_BLOQUEADOS.includes(req.ip)) {
-    console.warn(`[bloqueado] Requisição de IP bloqueado ${req.ip} — ${req.method} ${req.path}`);
+  // Não confia só em req.ip (depende de acertar exatamente quantos "pulos"
+  // de proxy a Railway usa) — confere também a string crua do cabeçalho
+  // X-Forwarded-For inteiro, pra não deixar passar só por causa de uma
+  // contagem de proxy errada.
+  const xff = String(req.headers['x-forwarded-for'] || '');
+  const enderecos = [req.ip, ...xff.split(',').map((s) => s.trim())].filter(Boolean);
+  const bloqueado = enderecos.some((ip) => IPS_BLOQUEADOS.includes(ip));
+  if (bloqueado) {
+    console.warn(`[bloqueado] Requisição de IP bloqueado (${enderecos.join(' / ')}) — ${req.method} ${req.path}`);
     return res.status(403).json({ error: 'Acesso bloqueado.' });
   }
   next();
