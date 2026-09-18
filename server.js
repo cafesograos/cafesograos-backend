@@ -206,11 +206,21 @@ function pareceScript(req) {
   return /^curl\//i.test(String(req.headers['user-agent'] || ''));
 }
 
-app.post('/api/calcular-frete', freteLimiter, async (req, res) => {
+// Bloqueia ANTES do rate limiter (não depois) — o script insistiu tanto que
+// sozinho esgotava a cota de 15 min, e como o IP dele aparentemente é
+// compartilhado (CGNAT da operadora regional) com clientes de verdade
+// tentando calcular frete de verdade, isso derrubava o cálculo de frete pra
+// gente real na mesma faixa de IP. Bloqueando antes do freteLimiter, o
+// script nunca chega a consumir a cota de quem é de verdade.
+function bloquearScript(req, res, next) {
   if (pareceScript(req)) {
     console.warn(`[bloqueado] User-Agent de script em /api/calcular-frete: "${req.headers['user-agent']}"`);
     return res.status(403).json({ error: 'Acesso bloqueado.' });
   }
+  next();
+}
+
+app.post('/api/calcular-frete', bloquearScript, freteLimiter, async (req, res) => {
   try {
     const { cep, pesoKg, subtotal } = req.body;
     const frete = await calcularFrete(cep, Number(pesoKg));
