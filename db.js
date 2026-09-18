@@ -53,6 +53,23 @@ async function initDb() {
   // pra esse pedido — sem isso, na hora de gerar a etiqueta de verdade era
   // preciso recalcular o frete manualmente só pra descobrir qual usar.
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_carrier TEXT;`);
+  // Id do serviço cotado na Melhor Envio (ex.: 4 = Jadlog .Package) — precisa
+  // ser o mesmo serviço na hora de comprar a etiqueta de verdade, senão o
+  // preço/prazo real pode não bater com o que foi cobrado do cliente.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_service_id INTEGER;`);
+  // Peso total (kg) usado na cotação — guardado pra reutilizar exatamente o
+  // mesmo valor ao montar o volume na hora de comprar a etiqueta (os itens
+  // salvos não guardam o id do produto, só título/quantidade/preço, então não
+  // dava pra recalcular o peso com segurança a partir do pedido já salvo).
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_weight_kg NUMERIC;`);
+  // CPF do cliente — passou a ser guardado (pedidos antigos ficam sem) só
+  // porque a Melhor Envio exige o documento do destinatário pra emitir a
+  // etiqueta. Não é mais descartado após a validação do checkout como antes;
+  // a política de privacidade do site foi atualizada pra refletir isso.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_cpf TEXT;`);
+  // Id do item no carrinho/pedido da Melhor Envio depois de inserido — usado
+  // nas chamadas seguintes (pagar, gerar etiqueta, imprimir, rastrear).
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS melhorenvio_order_id TEXT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reviews (

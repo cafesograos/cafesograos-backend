@@ -4,7 +4,7 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
 const { pool, initDb } = require('./db');
-const { calcularFrete } = require('./shipping');
+const { calcularFrete, inserirNoCarrinho, comprarEtiquetas, gerarEtiquetas, imprimirEtiquetas, rastrearEtiquetas } = require('./shipping');
 const { criarLinkPagamento, consultarStatusPagamento } = require('./infinitepay');
 const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio, enviarEmailBoasVindasLead } = require('./email');
 const { CATEGORIES, PRODUCTS } = require('./products');
@@ -323,17 +323,18 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     );
     if (brindeProduto) pesoTotalKg += (brindeProduto.pesoGramas || 400) / 1000;
 
-    let shippingCost = 0;
-    let shippingCarrier = null;
+    // Sempre cotamos, mesmo quando o frete grátis vai zerar o valor cobrado do
+    // cliente — o pacote ainda precisa ser enviado por alguma transportadora
+    // de verdade, e sem cotar aqui não sobrava id de serviço nenhum pra
+    // comprar a etiqueta desses pedidos depois.
     const freteGratis = subtotalCatalogo >= FRETE_GRATIS_ACIMA_DE && cepEhSP(entrega.cep);
-    if (!freteGratis) {
-      const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
-      shippingCost = freteCalculado.valor;
-      // Guarda qual transportadora/modalidade foi a mais barata pra esse
-      // pedido — sem isso, na hora de gerar a etiqueta de verdade era preciso
-      // recalcular o frete manualmente só pra descobrir qual usar.
-      shippingCarrier = freteCalculado.transportadora || null;
-    }
+    const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
+    const shippingCost = freteGratis ? 0 : freteCalculado.valor;
+    // Guarda qual transportadora/modalidade foi a mais barata pra esse pedido
+    // — sem isso, na hora de gerar a etiqueta de verdade era preciso
+    // recalcular o frete manualmente só pra descobrir qual usar.
+    const shippingCarrier = freteCalculado.transportadora || null;
+    const shippingServiceId = freteCalculado.servicoId || null;
     if (shippingCost > 0) {
       line_items.push({
         title: 'Frete',
@@ -377,13 +378,14 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     if (pool) {
       await pool.query(
         `INSERT INTO orders
-          (preference_id, status, customer_name, customer_email, customer_phone, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, total, free_gift, discount_id, discount_percent)
-         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+          (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
+         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
         [
           orderNsu,
           cliente.nome,
           cliente.email,
           cliente.telefone || null,
+          cpfDigits,
           entrega.cep,
           entrega.endereco,
           entrega.numero,
@@ -394,6 +396,8 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
           JSON.stringify(itensParaPedido),
           shippingCost,
           shippingCarrier,
+          shippingServiceId,
+          Number(pesoTotalKg.toFixed(3)),
           total,
           freeGift,
           desconto ? desconto.id : null,
@@ -762,6 +766,9 @@ function adminLayout({ title, ativo, body }) {
       .card.alerta { box-shadow: 0 1px 3px rgba(33,23,20,.08), inset 3px 0 0 #D66B3E; }
       .card.alerta strong { color: #D66B3E; }
       .card-link { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 700; }
+      .aviso-frete { padding: 10px 14px; border-radius: 8px; font-size: 14px; margin-bottom: 14px; }
+      .aviso-frete-ok { background: #EAF4E9; color: #2E5C31; }
+      .aviso-frete-erro { background: #FBE2E2; color: #C53030; }
 
       table.mini { border-collapse: collapse; width: 100%; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
       table.mini th, table.mini td { padding: 10px 14px; text-align: left; font-size: 13px; border-bottom: 1px solid #F0E9E2; }
@@ -974,6 +981,21 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
           Já dei entrada no sistema de vendas
         </label>
       </form>
+      ${o.status === 'approved' && !o.tracking_code ? `
+        <div class="pedido-acoes">
+          ${!o.melhorenvio_order_id ? `
+            <form method="POST" action="/admin/pedidos/${o.id}/frete/carrinho">
+              <button type="submit" class="btn-mini btn-mini-primary">1. Inserir no carrinho (Melhor Envio)</button>
+            </form>
+          ` : `
+            <span class="selo">📥 No carrinho da Melhor Envio (id ${escapeHtml(o.melhorenvio_order_id)})</span>
+            <form method="POST" action="/admin/pedidos/${o.id}/frete/pagar" onsubmit="return confirm('Confirma que os dados batem? Isso vai debitar da carteira da Melhor Envio de verdade.');">
+              <button type="submit" class="btn-mini btn-mini-primary">2. Pagar e gerar etiqueta</button>
+            </form>
+          `}
+        </div>
+      ` : ''}
+      ${o.melhorenvio_order_id ? `<div class="pedido-acoes"><a href="/admin/pedidos/${o.id}/frete/etiqueta" target="_blank" rel="noopener noreferrer" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;text-align:center;">Baixar etiqueta (PDF)</a></div>` : ''}
       <div class="pedido-acoes">
         <form method="POST" action="/admin/pedidos/${o.id}/rastreio">
           <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
@@ -986,8 +1008,17 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
     </div>
   `).join('');
 
+  const freteOk = req.query.frete_ok;
+  const freteErro = req.query.frete_erro;
+  const avisoFrete = freteOk
+    ? `<p class="aviso-frete aviso-frete-ok">${escapeHtml(freteOk)}</p>`
+    : freteErro
+      ? `<p class="aviso-frete aviso-frete-erro">${escapeHtml(freteErro)}</p>`
+      : '';
+
   const body = `
     <h1>Pedidos — Café Só Grãos</h1>
+    ${avisoFrete}
     ${filtros}
     <div class="pedido-lista">
       ${cartoes || '<div class="lista-vazia">Nenhum pedido encontrado.</div>'}
@@ -1012,6 +1043,118 @@ app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ exten
   logAdminAcao(req, 'rastreio_atualizado', `pedido #${req.params.id} → "${codigo}"`);
 
   res.redirect('/admin/pedidos');
+}));
+
+// Compra de etiqueta pela Melhor Envio, em 2 passos manuais de propósito:
+// 1) insere no carrinho (não cobra nada, só reserva o serviço) — dá pra
+//    conferir preço/endereço antes de gastar da carteira de verdade;
+// 2) paga + gera a etiqueta + pega o código de rastreio, só depois de
+//    confirmado que o passo 1 saiu certo.
+function itensParaDeclaracao(order) {
+  return (order.items || [])
+    .filter((i) => i.title !== 'Frete')
+    .map((i) => ({
+      name: String(i.title).slice(0, 100),
+      quantity: String(i.quantity),
+      unitary_value: String(i.unit_price)
+    }));
+}
+
+app.post('/admin/pedidos/:id/frete/carrinho', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+  const order = rows[0];
+  if (!order) return res.redirect('/admin/pedidos');
+
+  try {
+    if (order.melhorenvio_order_id) {
+      throw new Error(`Esse pedido já tem um item no carrinho da Melhor Envio (id ${order.melhorenvio_order_id}). Pra recomeçar, remova antes no painel da Melhor Envio.`);
+    }
+    if (!order.shipping_service_id) {
+      throw new Error('Esse pedido não tem um serviço de frete cotado (provavelmente a cotação caiu na estimativa de reserva na hora da compra) — não dá pra saber qual transportadora usar.');
+    }
+    if (!order.customer_cpf) {
+      throw new Error('Esse pedido não tem CPF salvo (feito antes dessa funcionalidade existir) — não dá pra automatizar, precisa comprar a etiqueta direto no painel da Melhor Envio.');
+    }
+
+    const resultado = await inserirNoCarrinho({
+      orderId: order.id,
+      orderNsu: order.preference_id,
+      servicoId: order.shipping_service_id,
+      pesoKg: Number(order.shipping_weight_kg) || 0.3,
+      valorSeguro: Math.max(0, Number(order.total) - Number(order.shipping_cost)),
+      destinatario: {
+        name: order.customer_name,
+        phone: String(order.customer_phone || '').replace(/\D/g, ''),
+        email: order.customer_email,
+        document: order.customer_cpf,
+        address: order.address,
+        number: order.address_number,
+        complement: order.address_complement,
+        district: order.neighborhood,
+        city: order.city,
+        state_abbr: order.state,
+        postal_code: String(order.cep || '').replace(/\D/g, '')
+      },
+      produtos: itensParaDeclaracao(order)
+    });
+
+    await pool.query('UPDATE orders SET melhorenvio_order_id = $1 WHERE id = $2', [resultado.id, order.id]);
+    logAdminAcao(req, 'frete_carrinho', `pedido #${order.id} → item Melhor Envio ${resultado.id}`);
+    res.redirect(`/admin/pedidos?frete_ok=${encodeURIComponent(`Inserido no carrinho: ${resultado.price ? 'R$ ' + resultado.price : ''} (id ${resultado.id}). Confira os dados e clique em "Pagar e gerar etiqueta" pra confirmar — ainda não foi cobrado nada.`)}`);
+  } catch (err) {
+    console.error(`Erro ao inserir pedido #${order.id} no carrinho da Melhor Envio:`, err.message);
+    res.redirect(`/admin/pedidos?frete_erro=${encodeURIComponent(err.message)}`);
+  }
+}));
+
+app.post('/admin/pedidos/:id/frete/pagar', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+  const order = rows[0];
+  if (!order) return res.redirect('/admin/pedidos');
+
+  try {
+    if (!order.melhorenvio_order_id) {
+      throw new Error('Esse pedido ainda não foi inserido no carrinho da Melhor Envio.');
+    }
+    if (order.tracking_code) {
+      throw new Error(`Esse pedido já tem código de rastreio (${order.tracking_code}).`);
+    }
+
+    await comprarEtiquetas([order.melhorenvio_order_id]);
+    await gerarEtiquetas([order.melhorenvio_order_id]);
+    const rastreio = await rastrearEtiquetas([order.melhorenvio_order_id]);
+    const codigo = rastreio?.[order.melhorenvio_order_id]?.tracking
+      || (Array.isArray(rastreio) ? rastreio.find((r) => String(r.id) === String(order.melhorenvio_order_id))?.tracking : null);
+    if (!codigo) {
+      throw new Error('Pagamento e etiqueta gerados, mas não veio o código de rastreio na resposta — confira direto no painel da Melhor Envio e cole o código manualmente aqui.');
+    }
+
+    const { rows: atualizado } = await pool.query('UPDATE orders SET tracking_code = $1 WHERE id = $2 RETURNING *', [codigo, order.id]);
+    await enviarEmailRastreio(atualizado[0]);
+    logAdminAcao(req, 'frete_pago', `pedido #${order.id} → rastreio ${codigo}`);
+    res.redirect(`/admin/pedidos?frete_ok=${encodeURIComponent(`Etiqueta paga e gerada! Código de rastreio ${codigo} — e-mail de envio disparado pro cliente.`)}`);
+  } catch (err) {
+    console.error(`Erro ao pagar/gerar etiqueta do pedido #${order.id}:`, err.message);
+    res.redirect(`/admin/pedidos?frete_erro=${encodeURIComponent(err.message)}`);
+  }
+}));
+
+app.get('/admin/pedidos/:id/frete/etiqueta', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+  const order = rows[0];
+  if (!order?.melhorenvio_order_id) return res.redirect('/admin/pedidos');
+
+  try {
+    const resultado = await imprimirEtiquetas([order.melhorenvio_order_id]);
+    if (!resultado.url) throw new Error('Não veio um link de impressão na resposta.');
+    res.redirect(resultado.url);
+  } catch (err) {
+    console.error(`Erro ao imprimir etiqueta do pedido #${order.id}:`, err.message);
+    res.redirect(`/admin/pedidos?frete_erro=${encodeURIComponent(err.message)}`);
+  }
 }));
 
 // Alterna a marcação "já dei entrada no sistema de vendas" — controle manual

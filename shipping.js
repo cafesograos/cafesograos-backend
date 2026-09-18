@@ -4,6 +4,27 @@ const ORIGEM_CEP = '14800360';
 const ME_BASE = 'https://melhorenvio.com.br';
 const FALLBACK_POR_KG = 22; // usado só se a integração com o Melhor Envio estiver fora do ar
 
+// Dados do remetente (Café Só Grãos) exigidos pela Melhor Envio pra inserir um
+// frete real no carrinho — mesmo CEP de origem já usado na cotação. Endereço
+// de onde o pacote sai fisicamente (não precisa ser o mesmo endereço fiscal
+// do CNPJ, que é rural).
+const REMETENTE = {
+  name: 'Café Só Grãos',
+  company_document: '68975236000187',
+  state_register: 'ISENTO',
+  economic_activity_code: '4637101',
+  address: 'Rua Padre Duarte',
+  number: '151',
+  complement: 'Sala 123',
+  district: 'Jardim Nova América',
+  city: 'Araraquara',
+  state_abbr: 'SP',
+  country_id: 'BR',
+  postal_code: ORIGEM_CEP,
+  phone: '16997916459',
+  email: 'alberto.adm@cafesograos.com'
+};
+
 // Sem informar "services" na cotação, a API só retorna a Loggi Ponto (id 34),
 // mesmo com Correios, Jadlog e Total Express disponíveis e habilitados na
 // conta — o site cotava só a Loggi sem nenhum erro aparecer, escondendo opções
@@ -124,6 +145,11 @@ async function calcularFrete(cepDestino, pesoKg) {
       valor: Number(maisBarata.custom_price || maisBarata.price),
       prazoDias: maisBarata.custom_delivery_time || maisBarata.delivery_time,
       transportadora: maisBarata.company?.name || maisBarata.name,
+      // Id do serviço cotado (ex.: 4 = Jadlog .Package) — sem isso, na hora de
+      // comprar a etiqueta de verdade não dava pra saber qual das várias opções
+      // (Correios, Jadlog, Total Express...) foi a que ficou mais barata pra
+      // esse pedido específico.
+      servicoId: maisBarata.id,
       origem: 'melhorenvio'
     };
   } catch (err) {
@@ -133,4 +159,135 @@ async function calcularFrete(cepDestino, pesoKg) {
   }
 }
 
-module.exports = { calcularFrete };
+// Insere o frete de um pedido no carrinho da Melhor Envio — primeiro passo
+// pra comprar a etiqueta de verdade. Não cobra nada ainda (só "reserva" o
+// serviço); o débito da carteira só acontece em comprarEtiquetas(). Devolve
+// o objeto do item do carrinho (o "id" dele é o que as próximas chamadas
+// usam pra pagar/gerar/imprimir/rastrear).
+async function inserirNoCarrinho({ orderId, orderNsu, servicoId, pesoKg, destinatario, produtos, valorSeguro }) {
+  const token = await getValidToken();
+  const res = await fetch(`${ME_BASE}/api/v2/me/cart`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com)'
+    },
+    body: JSON.stringify({
+      service: servicoId,
+      from: REMETENTE,
+      to: {
+        name: destinatario.name,
+        phone: destinatario.phone || '',
+        email: destinatario.email || '',
+        document: destinatario.document,
+        address: destinatario.address,
+        number: destinatario.number,
+        complement: destinatario.complement || '',
+        district: destinatario.district,
+        city: destinatario.city,
+        country_id: 'BR',
+        postal_code: destinatario.postal_code,
+        state_abbr: destinatario.state_abbr,
+        note: ''
+      },
+      products: produtos,
+      volumes: [{ height: 10, width: 15, length: 20, weight: pesoKg }],
+      options: {
+        insurance_value: valorSeguro,
+        receipt: false,
+        own_hand: false,
+        reverse: false,
+        non_commercial: true,
+        platform: 'Café Só Grãos',
+        tags: [{ tag: `Pedido #${orderId} — ${orderNsu}` }]
+      }
+    })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error('Melhor Envio recusou a inserção no carrinho: ' + JSON.stringify(data));
+  return data;
+}
+
+// Debita da carteira Melhor Envio e efetiva a compra do(s) frete(s) já
+// inseridos no carrinho. Depois disso o dinheiro saiu da carteira de verdade.
+async function comprarEtiquetas(meOrderIds) {
+  const token = await getValidToken();
+  const res = await fetch(`${ME_BASE}/api/v2/me/shipment/checkout`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com)'
+    },
+    body: JSON.stringify({ orders: meOrderIds })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error('Melhor Envio recusou o pagamento: ' + JSON.stringify(data));
+  return data;
+}
+
+// Gera a etiqueta de verdade (com código de rastreio) pros fretes já pagos.
+async function gerarEtiquetas(meOrderIds) {
+  const token = await getValidToken();
+  const res = await fetch(`${ME_BASE}/api/v2/me/shipment/generate`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com)'
+    },
+    body: JSON.stringify({ orders: meOrderIds })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error('Melhor Envio recusou a geração da etiqueta: ' + JSON.stringify(data));
+  return data;
+}
+
+// Devolve o link do PDF pra imprimir a(s) etiqueta(s) já gerada(s).
+async function imprimirEtiquetas(meOrderIds) {
+  const token = await getValidToken();
+  const res = await fetch(`${ME_BASE}/api/v2/me/shipment/print`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com)'
+    },
+    body: JSON.stringify({ mode: 'private', orders: meOrderIds })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error('Melhor Envio recusou a impressão da etiqueta: ' + JSON.stringify(data));
+  return data;
+}
+
+// Consulta o código de rastreio de um frete já gerado.
+async function rastrearEtiquetas(meOrderIds) {
+  const token = await getValidToken();
+  const res = await fetch(`${ME_BASE}/api/v2/me/shipment/tracking`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      'User-Agent': 'Cafe So Graos (alberto.adm@cafesograos.com)'
+    },
+    body: JSON.stringify({ orders: meOrderIds })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error('Melhor Envio recusou a consulta de rastreio: ' + JSON.stringify(data));
+  return data;
+}
+
+module.exports = {
+  calcularFrete,
+  inserirNoCarrinho,
+  comprarEtiquetas,
+  gerarEtiquetas,
+  imprimirEtiquetas,
+  rastrearEtiquetas
+};
