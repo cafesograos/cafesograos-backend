@@ -109,6 +109,17 @@ async function initDb() {
     );
   `);
 
+  // Sem esses índices, cada checkout novo (checagem de primeira compra) e
+  // cada carregamento do painel admin fazem varredura completa da tabela de
+  // pedidos — hoje ainda rápido pelo volume baixo, mas silenciosamente mais
+  // lento a cada pedido novo. Índice funcional em lower(trim(...)) porque é
+  // exatamente essa expressão que a consulta de primeira compra usa.
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_email_norm ON orders (lower(trim(customer_email)));`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders (customer_phone);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_discounts_email_norm ON discounts (lower(trim(customer_email)));`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews (status);`);
+
   console.log('Banco de dados pronto (tabelas orders, reviews, discounts, leads).');
 }
 
