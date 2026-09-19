@@ -7,6 +7,7 @@ const { calcularFrete, inserirNoCarrinho, comprarEtiquetas, gerarEtiquetas, impr
 const { criarLinkPagamento, consultarStatusPagamento } = require('./infinitepay');
 const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio, enviarEmailBoasVindasLead } = require('./email');
 const { CATEGORIES, PRODUCTS } = require('./products');
+const { agendarBackupDiario } = require('./backup');
 
 const app = express();
 app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for reconhecer a stack
@@ -1414,4 +1415,5 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 initDb().finally(() => {
   app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+  if (pool) agendarBackupDiario(pool);
 });
