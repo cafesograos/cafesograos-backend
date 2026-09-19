@@ -1,4 +1,6 @@
+require('./instrument');
 require('dotenv').config();
+const Sentry = require('@sentry/node');
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -1399,6 +1401,10 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
 }));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
+
+// Manda pro Sentry antes da rede de segurança final abaixo — precisa vir
+// depois de todas as rotas e antes de qualquer outro error handler.
+Sentry.setupExpressErrorHandler(app);
 
 // Rede de segurança final: qualquer erro que escapou de uma rota (via
 // asyncHandler ou next(err) direto) cai aqui em vez de derrubar o processo.
