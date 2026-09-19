@@ -39,9 +39,25 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static('public')); // ícone do painel admin (favicon / apple-touch-icon)
 
-// Headers básicos de segurança — sem CSP (quebraria fontes/scripts
-// externos do site sem um mapeamento cuidadoso), mas esses três são de
-// baixo risco e fecham golpes comuns (clickjacking, MIME-sniffing).
+// CSP mapeada só pro que o painel admin realmente usa: estilo inline (todo
+// <style> do layout), onclick inline (script-src-attr, nunca script-src —
+// assim uma injeção de <script> continua bloqueada mesmo com os onclick
+// existentes liberados) e a fonte do Fontshare (CSS em api., arquivos em
+// cdn.). Sem isso o painel quebraria (fonte some, botão de refresh para
+// de funcionar); com isso, uma injeção de HTML/JS externo continua bloqueada.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "script-src-attr 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https://api.fontshare.com",
+  "font-src 'self' https://cdn.fontshare.com",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'"
+].join('; ');
+
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -51,6 +67,8 @@ app.use((req, res, next) => {
   // qualquer <meta> ser processada, que senão sairia com a URL completa (com
   // ?senha=...) no Referer pro CDN de fontes.
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
   next();
 });
 
