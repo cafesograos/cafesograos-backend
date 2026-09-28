@@ -872,7 +872,11 @@ function adminLayout({ title, ativo, body }) {
   `;
 }
 
-const STATUS_LABEL = { pending: 'Pendente', approved: 'Aprovado', rejected: 'Recusado', in_process: 'Em análise', cancelled: 'Cancelado', refunded: 'Reembolsado' };
+// "pending" nunca significa "aprovado, falta despachar" (isso é "a_enviar")
+// — significa que o cliente nem terminou de pagar. Chamar de "Pendente" dava
+// a entender que era uma tarefa nossa (enviar o pacote); o rótulo "Não pago"
+// deixa claro que o pedido não foi concluído do lado do cliente.
+const STATUS_LABEL = { pending: 'Não pago', approved: 'Aprovado', rejected: 'Recusado', in_process: 'Em análise', cancelled: 'Cancelado', refunded: 'Reembolsado' };
 
 // Textos fixos pro aviso de erro do fluxo de etiqueta — nunca texto vindo da
 // URL direto (ver comentário em /admin/pedidos), então cada rota só manda um
@@ -1019,9 +1023,9 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
         </div>
       ` : ''}
       ${o.status === 'pending' && (Date.now() - new Date(o.created_at).getTime()) > 10 * 60 * 1000 ? `
-        <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Pendente há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a> pela data/valor acima.</div>
+        <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Não pago há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a> pela data/valor acima${o.customer_phone ? ` ou chame a pessoa no <a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">WhatsApp</a>` : ''}.</div>
       ` : ''}
-      <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${escapeHtml(o.customer_email)} · ${escapeHtml(o.customer_phone || 'sem telefone')}</div>
+      <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${escapeHtml(o.customer_email)} · ${o.customer_phone ? `<a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.customer_phone)} ↗</a>` : 'sem telefone'}</div>
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
       <div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>
