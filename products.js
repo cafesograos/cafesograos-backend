@@ -96,6 +96,23 @@ const PRODUCTS = [
     pesoGramas: 400,
     img: 'assets/produto-drip-coffee.jpg',
     imgs: ['assets/produto-drip-coffee.jpg', 'assets/produto-drip-coffee-rotulo.jpg']
+  },
+  {
+    id: 'drip-coffee-unidade',
+    nome: 'Drip Coffee — Unidade',
+    nome_en: 'Drip Coffee — Single Sachet',
+    nome_es: 'Drip Coffee — Unidad',
+    nome_fr: 'Drip Coffee — Sachet Individuel',
+    descricao: 'Experimente antes de levar a caixa: 1 sachê individual de café coado, prático e saboroso. 100% arábica.',
+    descricao_en: 'Try it before you commit to the box: 1 individual filter coffee sachet, convenient and full of flavor. 100% arabica.',
+    descricao_es: 'Pruébalo antes de llevar la caja: 1 sobre individual de café filtrado, práctico y sabroso. 100% arábica.',
+    descricao_fr: 'Essayez avant la boîte : 1 sachet individuel de café filtre, pratique et savoureux. 100% arabica.',
+    preco: 6.00,
+    precoOriginal: 8.00,
+    categoria: 'drip',
+    pesoGramas: 30,
+    img: 'assets/produto-drip-coffee.jpg',
+    imgs: ['assets/produto-drip-coffee.jpg']
   }
 ];
 
