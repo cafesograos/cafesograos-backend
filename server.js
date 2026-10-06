@@ -1117,7 +1117,11 @@ function itensParaDeclaracao(order) {
     .map((i) => ({
       name: String(i.title).slice(0, 100),
       quantity: String(i.quantity),
-      unitary_value: String(i.unit_price)
+      // toFixed(2) pra sempre virar algo tipo "0.00" ou "65.99" — a Melhor
+      // Envio recusa valores sem casas decimais (ex.: "0" ou "47"), que é
+      // exatamente o que o brinde de boas-vindas (preço 0) e alguns preços
+      // redondos geravam com String() puro.
+      unitary_value: Number(i.unit_price).toFixed(2)
     }));
 }
 
