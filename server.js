@@ -1114,15 +1114,20 @@ app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ exten
 function itensParaDeclaracao(order) {
   return (order.items || [])
     .filter((i) => i.title !== 'Frete')
-    .map((i) => ({
-      name: String(i.title).slice(0, 100),
-      quantity: String(i.quantity),
-      // toFixed(2) pra sempre virar algo tipo "0.00" ou "65.99" — a Melhor
-      // Envio recusa valores sem casas decimais (ex.: "0" ou "47"), que é
-      // exatamente o que o brinde de boas-vindas (preço 0) e alguns preços
-      // redondos geravam com String() puro.
-      unitary_value: Number(i.unit_price).toFixed(2)
-    }));
+    .map((i) => {
+      let valor = Number(i.unit_price);
+      // Brinde de boas-vindas sai com preço 0 pro cliente, mas a Melhor
+      // Envio recusa "0.00" na declaração de conteúdo — precisa de um valor
+      // de mercadoria maior que zero. Usa um valor simbólico.
+      if (!valor) valor = 0.01;
+      return {
+        name: String(i.title).slice(0, 100),
+        quantity: String(i.quantity),
+        // toFixed(2) pra sempre virar algo tipo "6.00" ou "65.99" — a Melhor
+        // Envio também recusa valores sem casas decimais (ex.: "47").
+        unitary_value: valor.toFixed(2)
+      };
+    });
 }
 
 app.post('/admin/pedidos/:id/frete/carrinho', requireAdmin, asyncHandler(async (req, res) => {
