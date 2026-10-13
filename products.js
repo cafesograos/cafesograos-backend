@@ -109,7 +109,7 @@ const PRODUCTS = [
     descricao_fr: 'Juste la boîte organisatrice de notre Drip Coffee, vendue vide — sans les sachets de café à l\'intérieur. Pour qui en a déjà une et veut la remplacer, ou en a simplement besoin pour du rangement.',
     preco: 20.00,
     categoria: 'drip',
-    pesoGramas: 100,
+    pesoGramas: 50,
     img: 'assets/produto-drip-coffee.jpg',
     imgs: ['assets/produto-drip-coffee.jpg']
   },
