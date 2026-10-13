@@ -1038,12 +1038,12 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       ${o.status === 'approved' && !o.tracking_code ? `
         <div class="pedido-acoes">
           ${!o.melhorenvio_order_id ? `
-            <form method="POST" action="/admin/pedidos/${o.id}/frete/carrinho">
+            <form method="POST" action="/admin/pedidos/${o.id}/frete/carrinho" onsubmit="this.querySelector('button').disabled=true;">
               <button type="submit" class="btn-mini btn-mini-primary">1. Inserir no carrinho (Melhor Envio)</button>
             </form>
           ` : `
             <span class="selo">📥 No carrinho da Melhor Envio (id ${escapeHtml(o.melhorenvio_order_id)})</span>
-            <form method="POST" action="/admin/pedidos/${o.id}/frete/pagar" onsubmit="return confirm('Confirma que os dados batem? Isso vai debitar da carteira da Melhor Envio de verdade.');">
+            <form method="POST" action="/admin/pedidos/${o.id}/frete/pagar" onsubmit="if (!confirm('Confirma que os dados batem? Isso vai debitar da carteira da Melhor Envio de verdade.')) return false; this.querySelector('button').disabled=true;">
               <button type="submit" class="btn-mini btn-mini-primary">2. Pagar e gerar etiqueta</button>
             </form>
           `}
