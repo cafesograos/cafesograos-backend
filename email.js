@@ -166,11 +166,13 @@ async function enviarEmailConfirmacaoCliente(order) {
 async function enviarEmailRastreio(order) {
   if (!order.customer_email || !order.tracking_code) return { ok: false, motivo: 'faltam e-mail ou código de rastreio' };
 
+  const transportadora = order.shipping_carrier ? escapeHtml(order.shipping_carrier) : 'transportadora';
+
   const conteudo = `
     <h2 style="font-size:22px;margin:0 0 12px;">Seu pedido foi enviado! 📦</h2>
     <p>Oi, ${escapeHtml(order.customer_name)}! Seu café já está a caminho.</p>
     ${caixaDestaque(`<strong style="color:#B85A32;">Código de rastreio:</strong> ${escapeHtml(order.tracking_code)}`)}
-    <p>Você pode acompanhar a entrega no site dos Correios ou da transportadora usando esse código.</p>
+    <p>Você pode acompanhar a entrega no site da ${transportadora} usando esse código.</p>
     <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99761-6459.</p>
     <p>Obrigado por comprar conosco!<br>Café Só Grãos</p>
   `;
