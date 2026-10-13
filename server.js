@@ -509,8 +509,26 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
       await pool.query('UPDATE discounts SET used_at = now() WHERE id = $1', [order.discount_id]);
     }
 
-    await enviarEmailNovoPedido(order);
-    await enviarEmailConfirmacaoCliente(order);
+    // O pedido já está aprovado e o cupom já foi gerado/queimado nesse ponto —
+    // uma falha ao enviar e-mail (ex.: soluço de rede até o Resend) não pode
+    // mais derrubar isso nem fazer o webhook responder erro pra InfinitePay
+    // reenviar depois: como o pedido já está "approved", o reenvio cairia na
+    // checagem de statusAnterior acima e nunca tentaria o e-mail de novo —
+    // ou seja, sem isso, uma falha nessa hora ficava permanente e silenciosa.
+    // Cada e-mail é isolado (um falhar não impede o outro) e vai pro Sentry
+    // pra aparecer no monitoramento em vez de sumir num console.error perdido.
+    try {
+      await enviarEmailNovoPedido(order);
+    } catch (err) {
+      console.error(`Falha ao enviar e-mail de novo pedido (pedido #${order.id}):`, err);
+      Sentry.captureException(err, { extra: { preferenceId, orderId: order.id, email: 'novo_pedido' } });
+    }
+    try {
+      await enviarEmailConfirmacaoCliente(order);
+    } catch (err) {
+      console.error(`Falha ao enviar e-mail de confirmação pro cliente (pedido #${order.id}):`, err);
+      Sentry.captureException(err, { extra: { preferenceId, orderId: order.id, email: 'confirmacao_cliente' } });
+    }
   }
   return order;
 }
