@@ -1049,7 +1049,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
           `}
         </div>
       ` : ''}
-      ${o.melhorenvio_order_id ? `<div class="pedido-acoes"><a href="/admin/pedidos/${o.id}/frete/etiqueta" target="_blank" rel="noopener noreferrer" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;text-align:center;">Baixar etiqueta (PDF)</a></div>` : ''}
+      ${o.melhorenvio_order_id && o.tracking_code ? `<div class="pedido-acoes"><a href="/admin/pedidos/${o.id}/frete/etiqueta" target="_blank" rel="noopener noreferrer" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;text-align:center;">Baixar etiqueta (PDF)</a></div>` : ''}
       <div class="pedido-acoes">
         <form method="POST" action="/admin/pedidos/${o.id}/rastreio">
           <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
