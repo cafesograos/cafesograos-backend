@@ -360,12 +360,26 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     }));
 
     // Brinde de boas-vindas: um Drip Coffee grátis (item de R$0, aparece de
-    // verdade no pedido) na primeira compra aprovada de cada pessoa.
+    // verdade no pedido) na primeira compra aprovada de cada pessoa. Quem se
+    // cadastrou antes no popup de entrada do site (telefone bate com um
+    // cadastro em "leads" marcado cadastro_popup) ganha 2 em vez de 1 — só
+    // vale pra primeira compra também, igual ao brinde normal.
     let brindeProduto = null;
+    let brindeQuantidade = 0;
     if (freeGift) {
+      brindeQuantidade = 1;
+      const telefoneDigitsCadastro = String(cliente.telefone || '').replace(/\D/g, '');
+      if (pool && telefoneDigitsCadastro.length >= 10) {
+        const { rows: cadastroPopup } = await pool.query(
+          `SELECT 1 FROM leads WHERE cadastro_popup = true AND regexp_replace(phone, '\\D', '', 'g') = $1 LIMIT 1`,
+          [telefoneDigitsCadastro]
+        );
+        if (cadastroPopup.length > 0) brindeQuantidade = 2;
+      }
       brindeProduto = PRODUCTS.find((p) => p.id === 'drip-coffee-caixa-10');
       if (brindeProduto) {
-        itensParaPedido.push({ title: `${brindeProduto.nome} — Brinde de boas-vindas`, quantity: 1, unit_price: 0 });
+        const sufixoBrinde = brindeQuantidade > 1 ? ` — Brinde de boas-vindas (cadastro antecipado)` : ' — Brinde de boas-vindas';
+        itensParaPedido.push({ title: `${brindeProduto.nome}${sufixoBrinde}`, quantity: brindeQuantidade, unit_price: 0 });
       } else {
         // Sem isso, se o id do brinde mudar no catálogo, o brinde de boas-vindas
         // some silenciosamente pro cliente novo, sem erro nenhum aparecer.
@@ -383,7 +397,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       (sum, { produto, quantity }) => sum + ((produto.pesoGramas || 300) * quantity) / 1000,
       0
     );
-    if (brindeProduto) pesoTotalKg += (brindeProduto.pesoGramas || 400) / 1000;
+    if (brindeProduto) pesoTotalKg += ((brindeProduto.pesoGramas || 400) * brindeQuantidade) / 1000;
 
     // Sempre cotamos, mesmo quando o frete grátis vai zerar o valor cobrado do
     // cliente — o pacote ainda precisa ser enviado por alguma transportadora
@@ -1780,6 +1794,32 @@ app.post('/api/newsletter', formularioLimiter, async (req, res) => {
   }
 });
 
+// Popup de cadastro na entrada do site (nome + telefone, sem e-mail) — quem
+// se cadastra aqui e faz a primeira compra ganha 2 Drip Coffee de brinde em
+// vez de 1 (conferido por telefone em /api/create-preference). Diferente do
+// formulário "avise-me" do rodapé, que não dá direito a esse bônus.
+app.post('/api/cadastro-popup', formularioLimiter, async (req, res) => {
+  try {
+    if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
+    const nome = String(req.body?.nome || '').trim().slice(0, 100);
+    const telefone = String(req.body?.telefone || '').trim().slice(0, 30);
+    const telefoneDigits = telefone.replace(/\D/g, '');
+
+    if (!nome || telefoneDigits.length < 10) {
+      return res.status(400).json({ error: 'Informe seu nome e um telefone válido com DDD.' });
+    }
+
+    await pool.query(
+      'INSERT INTO leads (name, phone, cadastro_popup) VALUES ($1, $2, true)',
+      [nome, telefone]
+    );
+    res.json({ ok: true, message: 'Cadastro feito! Na sua primeira compra, você ganha 2 Drip Coffee de brinde.' });
+  } catch (err) {
+    console.error('Erro ao salvar cadastro do popup:', err);
+    res.status(500).json({ error: 'Não foi possível salvar seu cadastro agora.' });
+  }
+});
+
 // Lista de contatos captados, protegida por senha — pra você mesmo chamar
 // no WhatsApp manualmente (não existe envio em massa automático por WhatsApp).
 app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
@@ -1795,7 +1835,8 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
           <div class="pedido-data">${escapeHtml(new Date(l.created_at).toLocaleString('pt-BR'))}</div>
         </div>
       </div>
-      <div class="pedido-detalhe" style="margin-top:10px;"><strong>E-mail:</strong> ${escapeHtml(l.email)}</div>
+      ${l.cadastro_popup ? `<div class="pedido-selos"><span class="selo">🎁 Popup — ganha 2 Drip Coffee na 1ª compra</span></div>` : ''}
+      ${l.email ? `<div class="pedido-detalhe" style="margin-top:10px;"><strong>E-mail:</strong> ${escapeHtml(l.email)}</div>` : ''}
       ${l.phone ? `<div class="pedido-detalhe"><strong>WhatsApp:</strong> ${escapeHtml(l.phone)}</div>` : ''}
     </div>
   `).join('');

@@ -94,9 +94,11 @@ function caixaDestaque(html) {
 
 // E-mail interno (pro admin), só informativo — não precisa da moldura de marca.
 async function enviarEmailNovoPedido(order) {
+  const itemBrindeAdmin = (order.items || []).find((i) => String(i.title).includes('Brinde de boas-vindas'));
+  const qtdBrindeAdmin = itemBrindeAdmin ? Number(itemBrindeAdmin.quantity) : 1;
   const html = `
     <h2>Novo pedido pago — Café Só Grãos</h2>
-    ${order.free_gift ? '<p>🎁 <strong>Primeira compra desse cliente — não esquecer de incluir o Drip Coffee de brinde na caixa.</strong></p>' : ''}
+    ${order.free_gift ? `<p>🎁 <strong>Primeira compra desse cliente — não esquecer de incluir ${qtdBrindeAdmin > 1 ? `${qtdBrindeAdmin} Drip Coffee de brinde` : 'o Drip Coffee de brinde'} na caixa${qtdBrindeAdmin > 1 ? ' (se cadastrou no popup de entrada)' : ''}.</strong></p>` : ''}
     ${order.discount_percent ? `<p>Pedido com ${Number(order.discount_percent)}% de desconto de cliente recorrente aplicado.</p>` : ''}
     <p><strong>Cliente:</strong> ${escapeHtml(order.customer_name)} (${escapeHtml(order.customer_email)}, ${escapeHtml(order.customer_phone || 'sem telefone')})</p>
     <p><strong>Endereço de entrega:</strong><br>
@@ -122,8 +124,14 @@ async function enviarEmailNovoPedido(order) {
 async function enviarEmailConfirmacaoCliente(order) {
   if (!order.customer_email) return { ok: false, motivo: 'pedido sem e-mail do cliente' };
 
+  // Quantidade do brinde vem do próprio item do pedido (1 no brinde normal,
+  // 2 pra quem se cadastrou antes no popup de entrada do site) — não é um
+  // campo à parte no pedido, pra não duplicar a mesma informação em dois
+  // lugares que pudessem ficar dessincronizados.
+  const itemBrinde = (order.items || []).find((i) => String(i.title).includes('Brinde de boas-vindas'));
+  const qtdBrinde = itemBrinde ? Number(itemBrinde.quantity) : 1;
   const brindeHtml = order.free_gift
-    ? `<p>🎁 <strong>De boas-vindas</strong>, incluímos um Drip Coffee grátis no seu pedido! E você já ganhou um cupom de <strong>5% de desconto</strong> para a próxima compra, válido por 30 dias — é automático, basta usar este mesmo e-mail no checkout.</p>`
+    ? `<p>🎁 <strong>De boas-vindas</strong>, incluímos ${qtdBrinde > 1 ? `${qtdBrinde} Drip Coffee grátis` : 'um Drip Coffee grátis'} no seu pedido! E você já ganhou um cupom de <strong>5% de desconto</strong> para a próxima compra, válido por 30 dias — é automático, basta usar este mesmo e-mail no checkout.</p>`
     : '';
   const descontoHtml = order.discount_percent
     ? `<p>🎉 Aplicamos ${Number(order.discount_percent)}% de desconto neste pedido — nosso presente por você ter voltado.</p>`

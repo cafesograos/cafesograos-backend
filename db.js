@@ -103,11 +103,19 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS leads (
       id SERIAL PRIMARY KEY,
       name TEXT,
-      email TEXT NOT NULL UNIQUE,
+      email TEXT UNIQUE,
       phone TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+  // O popup de cadastro na entrada do site (nome + telefone, sem e-mail) usa
+  // essa mesma tabela — por isso email precisa poder ficar em branco agora
+  // (tabela já existia com NOT NULL em produção).
+  await pool.query(`ALTER TABLE leads ALTER COLUMN email DROP NOT NULL;`);
+  // Marca quem se cadastrou especificamente nesse popup (não no formulário
+  // "avise-me" do rodapé) — é o que dá direito ao brinde em dobro (2 Drip
+  // Coffee em vez de 1) na primeira compra, conferido por telefone no checkout.
+  await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS cadastro_popup BOOLEAN DEFAULT false;`);
 
   // Sem esses índices, cada checkout novo (checagem de primeira compra) e
   // cada carregamento do painel admin fazem varredura completa da tabela de
@@ -119,6 +127,7 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders (customer_phone);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_discounts_email_norm ON discounts (lower(trim(customer_email)));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews (status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_phone_popup ON leads (phone) WHERE cadastro_popup = true;`);
 
   console.log('Banco de dados pronto (tabelas orders, reviews, discounts, leads).');
 }
