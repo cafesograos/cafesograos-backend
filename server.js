@@ -659,8 +659,8 @@ function sessaoValida(cookieValue) {
 // variações como "/\evil.com" (barra invertida, que navegadores às vezes
 // tratam como barra normal ao montar a URL final do redirect) nunca batem
 // com essa expressão regular, então nem precisam ser bloqueadas uma a uma.
-function destinoSeguro(valor) {
-  if (typeof valor !== 'string' || !/^\/[a-zA-Z0-9\-_/]*(\?[a-zA-Z0-9\-_=&]*)?$/.test(valor)) return '/admin';
+function destinoSeguro(valor, fallback = '/admin') {
+  if (typeof valor !== 'string' || !/^\/[a-zA-Z0-9\-_/]*(\?[a-zA-Z0-9\-_=&]*)?$/.test(valor)) return fallback;
   return valor;
 }
 
@@ -733,6 +733,367 @@ app.get('/admin/logout', (req, res) => {
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
   res.redirect('/admin/login');
 });
+
+// Painel restrito do vendedor (João): só gera link de pagamento avulso pra
+// mandar pro cliente — login separado do admin, de propósito, pra ele nunca
+// ter acesso a excluir pedido, ver outros painéis, etc. Mesmo esquema de
+// sessão assinada do admin (cookie HttpOnly/Secure, chave derivada da própria
+// senha), só que com senha e cookie próprios — as duas sessões nunca se misturam.
+const VENDEDOR_PASSWORD = process.env.VENDEDOR_PASSWORD;
+const VENDEDOR_SESSION_COOKIE = 'vendedor_sessao';
+
+const vendedorLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Muitas tentativas. Tente novamente em alguns minutos.'
+});
+app.use('/vendedor', vendedorLimiter);
+
+function senhaCorretaVendedor(recebida) {
+  if (!VENDEDOR_PASSWORD) return false;
+  const hashRecebida = crypto.createHash('sha256').update(String(recebida ?? '')).digest();
+  const hashEsperada = crypto.createHash('sha256').update(VENDEDOR_PASSWORD).digest();
+  return crypto.timingSafeEqual(hashRecebida, hashEsperada);
+}
+
+function assinarSessaoVendedor(exp) {
+  const payload = Buffer.from(JSON.stringify({ exp })).toString('base64url');
+  const assinatura = crypto.createHmac('sha256', VENDEDOR_PASSWORD || '').update(payload).digest('base64url');
+  return `${payload}.${assinatura}`;
+}
+
+function sessaoValidaVendedor(cookieValue) {
+  if (!VENDEDOR_PASSWORD || !cookieValue) return false;
+  const partes = String(cookieValue).split('.');
+  if (partes.length !== 2) return false;
+  const [payload, assinatura] = partes;
+  const assinaturaEsperada = crypto.createHmac('sha256', VENDEDOR_PASSWORD).update(payload).digest('base64url');
+  const bufRecebido = Buffer.from(assinatura);
+  const bufEsperado = Buffer.from(assinaturaEsperada);
+  if (bufRecebido.length !== bufEsperado.length) return false;
+  if (!crypto.timingSafeEqual(bufRecebido, bufEsperado)) return false;
+  try {
+    const { exp } = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return typeof exp === 'number' && Date.now() < exp;
+  } catch {
+    return false;
+  }
+}
+
+function requireVendedor(req, res, next) {
+  if (sessaoValidaVendedor(getCookie(req, VENDEDOR_SESSION_COOKIE))) return next();
+  res.redirect(`/vendedor/login?proximo=${encodeURIComponent(req.originalUrl)}`);
+}
+
+function vendedorLoginPage({ erro, proximo } = {}) {
+  return `
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrar - Café Só Grãos</title>
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link href="https://api.fontshare.com/v2/css?f[]=tanker@400&f[]=general-sans@400,500,700&display=swap" rel="stylesheet">
+    <meta name="theme-color" content="#211714">
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        font-family: 'General Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        background: #211714; color: #211714; padding: 16px;
+      }
+      .login-card { background: #fff; border-radius: 16px; padding: 32px 28px; width: 100%; max-width: 340px; }
+      h1 { margin: 0 0 20px; font-size: 22px; font-family: 'Tanker', sans-serif; font-weight: 400; }
+      input[type=password] {
+        width: 100%; padding: 12px 14px; border: 1px solid #ddd; border-radius: 8px;
+        font-size: 15px; font-family: inherit; margin-bottom: 12px;
+      }
+      button {
+        width: 100%; padding: 12px; border-radius: 8px; border: none; background: #D66B3E;
+        color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit;
+      }
+      .erro { color: #C53030; font-size: 13px; margin: -6px 0 12px; }
+    </style>
+    </head><body>
+      <form class="login-card" method="POST" action="/vendedor/login">
+        <h1>Novo pedido — Café Só Grãos</h1>
+        ${erro ? '<p class="erro">Senha incorreta.</p>' : ''}
+        <input type="hidden" name="proximo" value="${escapeHtml(destinoSeguro(proximo, '/vendedor/novo-pedido'))}">
+        <input type="password" name="senha" placeholder="Senha" autofocus required>
+        <button type="submit">Entrar</button>
+      </form>
+    </body></html>
+  `;
+}
+
+app.get('/vendedor/login', (req, res) => {
+  if (sessaoValidaVendedor(getCookie(req, VENDEDOR_SESSION_COOKIE))) {
+    return res.redirect(destinoSeguro(req.query.proximo, '/vendedor/novo-pedido'));
+  }
+  res.send(vendedorLoginPage({ proximo: req.query.proximo }));
+});
+
+app.post('/vendedor/login', express.urlencoded({ extended: false }), (req, res) => {
+  const proximo = destinoSeguro(req.body?.proximo, '/vendedor/novo-pedido');
+  if (!senhaCorretaVendedor(req.body?.senha)) {
+    console.log(`[vendedor] login_falhou — IP ${req.ip}`);
+    return res.status(401).send(vendedorLoginPage({ erro: true, proximo }));
+  }
+  console.log(`[vendedor] login_ok — IP ${req.ip}`);
+  const exp = Date.now() + SESSION_DURATION_MS;
+  const cookie = [
+    `${VENDEDOR_SESSION_COOKIE}=${encodeURIComponent(assinarSessaoVendedor(exp))}`,
+    'HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/',
+    `Max-Age=${Math.floor(SESSION_DURATION_MS / 1000)}`
+  ].join('; ');
+  res.setHeader('Set-Cookie', cookie);
+  res.redirect(proximo);
+});
+
+app.get('/vendedor/logout', (req, res) => {
+  res.setHeader('Set-Cookie', `${VENDEDOR_SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
+  res.redirect('/vendedor/login');
+});
+
+function vendedorLayout(body) {
+  return `
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Novo pedido - Café Só Grãos</title>
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link href="https://api.fontshare.com/v2/css?f[]=tanker@400&f[]=general-sans@400,500,700&display=swap" rel="stylesheet">
+    <meta name="theme-color" content="#211714">
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        font-family: 'General Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        margin: 0; background: #F7F5F4; color: #211714; -webkit-font-smoothing: antialiased;
+      }
+      .topo {
+        position: sticky; top: 0; z-index: 10; background: #211714; color: #fff;
+        padding: 14px 16px; display: flex; align-items: center; justify-content: space-between;
+      }
+      .topo a { color: rgba(255,255,255,.75); font-size: 13px; font-weight: 600; text-decoration: none; }
+      .corpo { padding: 16px; max-width: 640px; margin: 0 auto; }
+      h1 { margin: 4px 0 20px; font-size: 22px; font-family: 'Tanker', sans-serif; color: #211714; font-weight: 400; }
+      section { background: #fff; border-radius: 14px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
+      section h2 { font-size: 12px; font-weight: 700; color: #8a6f5c; text-transform: uppercase; letter-spacing: .04em; margin: 0 0 12px; }
+      .produto-linha { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid #F0E9E2; }
+      .produto-linha:last-child { border-bottom: none; }
+      .produto-linha label { font-size: 14px; font-weight: 600; }
+      .produto-linha span { display: block; font-size: 12px; color: #8a6f5c; }
+      .produto-linha input[type=number] { width: 64px; padding: 8px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; text-align: center; font-family: inherit; }
+      .campo { margin-bottom: 10px; }
+      .campo label { display: block; font-size: 12px; font-weight: 700; color: #5a4a3f; margin-bottom: 4px; }
+      .campo input, .campo select { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; font-family: inherit; }
+      .linha-dupla { display: flex; gap: 10px; }
+      .linha-dupla .campo { flex: 1; }
+      .btn { display: inline-block; width: 100%; padding: 14px; border-radius: 8px; border: none; background: #D66B3E; color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit; }
+      .erro { background: #FBE2E2; color: #C53030; padding: 10px 14px; border-radius: 8px; font-size: 14px; margin-bottom: 14px; }
+      .resultado-ok { background: #EAF4E9; color: #2E5C31; padding: 14px; border-radius: 10px; margin-bottom: 14px; }
+      .link-gerado { width: 100%; padding: 12px; border: 1px solid #B8E0C4; border-radius: 8px; font-size: 13px; font-family: inherit; background: #fff; margin-top: 8px; }
+      .resumo-linha { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 0; }
+      .resumo-linha.total { font-weight: 700; font-size: 16px; border-top: 1px solid #F0E9E2; margin-top: 6px; padding-top: 10px; }
+    </style>
+    </head><body>
+    <div class="topo"><strong>Novo pedido</strong><a href="/vendedor/logout">Sair</a></div>
+    <div class="corpo">${body}</div>
+    </body></html>
+  `;
+}
+
+function novoPedidoForm({ erro } = {}) {
+  const produtosHtml = PRODUCTS.map((p) => `
+    <div class="produto-linha">
+      <div>
+        <label for="qtd_${escapeHtml(p.id)}">${escapeHtml(p.nome)}</label>
+        <span>${reais(p.preco)}</span>
+      </div>
+      <input type="number" id="qtd_${escapeHtml(p.id)}" name="qtd_${escapeHtml(p.id)}" min="0" max="50" value="0" inputmode="numeric">
+    </div>
+  `).join('');
+
+  return vendedorLayout(`
+    <h1>Montar pedido pro cliente</h1>
+    ${erro ? `<p class="erro">${escapeHtml(erro)}</p>` : ''}
+    <form method="POST" action="/vendedor/novo-pedido">
+      <section>
+        <h2>Produtos</h2>
+        ${produtosHtml}
+      </section>
+
+      <section>
+        <h2>Desconto (opcional)</h2>
+        <div class="campo">
+          <label for="desconto">Desconto sobre os produtos (%)</label>
+          <input type="number" id="desconto" name="desconto" min="0" max="90" value="0" inputmode="numeric">
+        </div>
+      </section>
+
+      <section>
+        <h2>Cliente</h2>
+        <div class="campo"><label for="nome">Nome completo</label><input type="text" id="nome" name="nome" required></div>
+        <div class="campo"><label for="email">E-mail</label><input type="email" id="email" name="email" required></div>
+        <div class="linha-dupla">
+          <div class="campo"><label for="telefone">Telefone / WhatsApp</label><input type="tel" id="telefone" name="telefone"></div>
+          <div class="campo"><label for="cpf">CPF</label><input type="text" id="cpf" name="cpf" inputmode="numeric" required></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Endereço de entrega</h2>
+        <div class="campo"><label for="cep">CEP</label><input type="text" id="cep" name="cep" inputmode="numeric" required></div>
+        <div class="campo"><label for="endereco">Rua</label><input type="text" id="endereco" name="endereco" required></div>
+        <div class="linha-dupla">
+          <div class="campo"><label for="numero">Número</label><input type="text" id="numero" name="numero" required></div>
+          <div class="campo"><label for="complemento">Complemento</label><input type="text" id="complemento" name="complemento"></div>
+        </div>
+        <div class="campo"><label for="bairro">Bairro</label><input type="text" id="bairro" name="bairro" required></div>
+        <div class="linha-dupla">
+          <div class="campo"><label for="cidade">Cidade</label><input type="text" id="cidade" name="cidade" required></div>
+          <div class="campo"><label for="estado">UF</label><input type="text" id="estado" name="estado" maxlength="2" required></div>
+        </div>
+      </section>
+
+      <button type="submit" class="btn">Gerar link de pagamento</button>
+    </form>
+  `);
+}
+
+app.get('/vendedor/novo-pedido', requireVendedor, (req, res) => {
+  res.send(novoPedidoForm());
+});
+
+app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+  // Preço e peso sempre vêm do catálogo do servidor — nunca do que o
+  // formulário manda — mesma regra do checkout do site.
+  const itensValidados = PRODUCTS
+    .map((p) => ({ produto: p, quantity: Math.min(50, Math.max(0, parseInt(req.body?.[`qtd_${p.id}`]) || 0)) }))
+    .filter(({ quantity }) => quantity > 0);
+
+  if (itensValidados.length === 0) {
+    return res.status(400).send(novoPedidoForm({ erro: 'Escolha pelo menos um produto.' }));
+  }
+
+  const descontoPercent = Math.min(90, Math.max(0, parseInt(req.body?.desconto) || 0));
+
+  const cliente = {
+    nome: String(req.body?.nome || '').trim().slice(0, 100),
+    email: String(req.body?.email || '').trim().slice(0, 200),
+    telefone: String(req.body?.telefone || '').trim().slice(0, 30),
+    cpf: req.body?.cpf
+  };
+  const entrega = {
+    cep: req.body?.cep,
+    endereco: String(req.body?.endereco || '').trim().slice(0, 200),
+    numero: String(req.body?.numero || '').trim().slice(0, 20),
+    complemento: String(req.body?.complemento || '').trim().slice(0, 100),
+    bairro: String(req.body?.bairro || '').trim().slice(0, 100),
+    cidade: String(req.body?.cidade || '').trim().slice(0, 100),
+    estado: String(req.body?.estado || '').trim().slice(0, 2).toUpperCase()
+  };
+
+  if (!cliente.nome || !entrega.cep || !entrega.endereco || !entrega.numero || !entrega.bairro || !entrega.cidade || !entrega.estado) {
+    return res.status(400).send(novoPedidoForm({ erro: 'Preencha todos os dados obrigatórios do cliente e do endereço.' }));
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cliente.email)) {
+    return res.status(400).send(novoPedidoForm({ erro: 'E-mail inválido.' }));
+  }
+  const cpfDigits = String(cliente.cpf || '').replace(/\D/g, '');
+  if (!cpfValido(cpfDigits)) {
+    return res.status(400).send(novoPedidoForm({ erro: 'CPF inválido.' }));
+  }
+
+  const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
+    title: produto.nome,
+    quantity,
+    unit_price: descontoPercent > 0
+      ? Number((produto.preco * (1 - descontoPercent / 100)).toFixed(2))
+      : produto.preco
+  }));
+
+  const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
+
+  const subtotalCatalogo = itensValidados.reduce((sum, { produto, quantity }) => sum + produto.preco * quantity, 0);
+  const pesoTotalKg = itensValidados.reduce(
+    (sum, { produto, quantity }) => sum + ((produto.pesoGramas || 300) * quantity) / 1000,
+    0
+  );
+
+  let freteCalculado;
+  try {
+    freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
+  } catch (err) {
+    console.error('Erro ao calcular frete (vendedor):', err.message);
+    return res.status(400).send(novoPedidoForm({ erro: 'Não foi possível calcular o frete. Confira o CEP.' }));
+  }
+  const freteGratis = subtotalCatalogo >= FRETE_GRATIS_ACIMA_DE && cepEhSP(entrega.cep);
+  const shippingCost = freteGratis ? 0 : freteCalculado.valor;
+  const shippingCarrier = freteCalculado.transportadora || null;
+  const shippingServiceId = freteCalculado.servicoId || null;
+  if (shippingCost > 0) {
+    line_items.push({ title: 'Frete', quantity: 1, unit_price: shippingCost, currency_id: 'BRL' });
+  }
+
+  const total = Number(line_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0).toFixed(2));
+
+  const telefoneDigits = String(cliente.telefone || '').replace(/\D/g, '');
+  const customer = { name: cliente.nome, email: cliente.email };
+  if (telefoneDigits.length >= 10) customer.phone_number = '+55' + telefoneDigits;
+
+  const orderNsu = crypto.randomUUID();
+  const itensParaPagamento = line_items.filter((i) => i.unit_price > 0);
+
+  let initPoint;
+  try {
+    initPoint = await criarLinkPagamento({
+      items: itensParaPagamento,
+      customer,
+      address: {
+        cep: String(entrega.cep || '').replace(/\D/g, ''),
+        street: entrega.endereco,
+        neighborhood: entrega.bairro,
+        number: entrega.numero,
+        complement: entrega.complemento || undefined
+      },
+      orderNsu,
+      redirectUrl: `${SITE_URL}/sucesso.html`,
+      webhookUrl: `${req.protocol}://${req.get('host')}/webhook-infinitepay`
+    });
+  } catch (err) {
+    console.error('Erro ao criar link de pagamento (vendedor):', err);
+    return res.status(500).send(novoPedidoForm({ erro: 'Erro ao gerar o link de pagamento. Tente de novo.' }));
+  }
+
+  await pool.query(
+    `INSERT INTO orders
+      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
+     VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,false,NULL,$19)`,
+    [
+      orderNsu, cliente.nome, cliente.email, cliente.telefone || null, cpfDigits,
+      entrega.cep, entrega.endereco, entrega.numero, entrega.complemento || null,
+      entrega.bairro, entrega.cidade, entrega.estado, JSON.stringify(itensParaPedido),
+      shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
+      descontoPercent > 0 ? descontoPercent : null
+    ]
+  );
+  logAdminAcao(req, 'pedido_manual_criado', `vendedor → pedido ${orderNsu} (${cliente.nome}, ${reais(total)})`);
+
+  res.send(vendedorLayout(`
+    <h1>Link gerado!</h1>
+    <div class="resultado-ok">Copie o link abaixo e mande pro cliente. Ele só precisa clicar e pagar.</div>
+    <section>
+      <input type="text" class="link-gerado" value="${escapeHtml(initPoint)}" readonly onclick="this.select()">
+    </section>
+    <section>
+      <h2>Resumo</h2>
+      ${itensParaPedido.map((i) => `<div class="resumo-linha"><span>${i.quantity}x ${escapeHtml(i.title)}</span><span>${reais(i.unit_price * i.quantity)}</span></div>`).join('')}
+      <div class="resumo-linha"><span>Frete${shippingCarrier ? ` (${escapeHtml(shippingCarrier)})` : ''}</span><span>${shippingCost === 0 ? 'Grátis' : reais(shippingCost)}</span></div>
+      <div class="resumo-linha total"><span>Total</span><span>${reais(total)}</span></div>
+    </section>
+    <a href="/vendedor/novo-pedido" class="btn" style="text-align:center;text-decoration:none;display:block;">Montar outro pedido</a>
+  `));
+}));
 
 // Layout compartilhado pelos painéis: mesma barra de navegação em todos,
 // pra dar pra pular entre pedidos, avaliações, métricas, GA e InfinitePay
