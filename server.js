@@ -1113,20 +1113,37 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
 // pra dar pra pular entre pedidos, avaliações, métricas, GA e InfinitePay
 // sem digitar URL de novo.
 function adminLayout({ title, ativo, body }) {
-  const nav = [
+  // Nav principal (páginas do próprio painel) separado das ferramentas
+  // externas — antes vinha tudo junto numa fileira só de pílulas, obrigando
+  // scroll horizontal e misturando "onde eu navego" com "onde eu saio pra
+  // outro site". Ferramentas + Sair agora ficam atrás de um menu "⋯".
+  const navPaginas = [
     { id: 'painel', label: 'Painel', href: '/admin' },
     { id: 'pedidos', label: 'Pedidos', href: '/admin/pedidos' },
     { id: 'avaliacoes', label: 'Avaliações', href: '/admin/avaliacoes' },
-    { id: 'leads', label: 'Contatos', href: '/admin/leads' },
-    { id: 'ga', label: 'Google Analytics ↗', href: 'https://analytics.google.com/analytics/web/', external: true },
-    { id: 'ip', label: 'InfinitePay ↗', href: 'https://app.infinitepay.io/', external: true },
-    { id: 'me', label: 'Melhor Envio ↗', href: 'https://melhorenvio.com.br/painel', external: true },
-    { id: 'sair', label: 'Sair', href: '/admin/logout' }
+    { id: 'leads', label: 'Contatos', href: '/admin/leads' }
   ];
-  const navHtml = nav.map((item) => `
-    <a href="${item.href}" ${item.external ? 'target="_blank" rel="noopener noreferrer"' : ''} class="${item.id === ativo ? 'ativo' : ''}">${item.label}</a>
+  const navFerramentas = [
+    { label: 'Google Analytics ↗', href: 'https://analytics.google.com/analytics/web/' },
+    { label: 'InfinitePay ↗', href: 'https://app.infinitepay.io/' },
+    { label: 'Melhor Envio ↗', href: 'https://melhorenvio.com.br/painel' }
+  ];
+  const navHtml = navPaginas.map((item) => `
+    <a href="${item.href}" class="${item.id === ativo ? 'ativo' : ''}">${item.label}</a>
+  `).join('');
+  const ferramentasHtml = navFerramentas.map((item) => `
+    <a href="${item.href}" target="_blank" rel="noopener noreferrer">${item.label}</a>
   `).join('');
   const refreshHtml = `<button class="admin-refresh" onclick="location.reload()" aria-label="Atualizar" title="Atualizar">⟳</button>`;
+  const menuHtml = `
+    <details class="admin-menu">
+      <summary aria-label="Mais opções" title="Mais opções">⋯</summary>
+      <div class="admin-menu-dropdown">
+        ${ferramentasHtml}
+        <a href="/admin/logout">Sair</a>
+      </div>
+    </details>
+  `;
 
   return `
     <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1153,16 +1170,40 @@ function adminLayout({ title, ativo, body }) {
       }
       .admin-nav a {
         color: rgba(255,255,255,.65); font-size: 13px; font-weight: 600; text-decoration: none;
-        padding: 8px 14px; border-radius: 999px; white-space: nowrap; transition: background .15s, color .15s;
+        padding: 10px 16px; border-radius: 999px; white-space: nowrap; transition: background .15s, color .15s;
       }
       .admin-nav a:hover { background: rgba(255,255,255,.08); color: #fff; }
       .admin-nav a.ativo { background: #D66B3E; color: #fff; }
       .admin-refresh {
         flex-shrink: 0; background: rgba(255,255,255,.1); border: none; color: #fff;
-        width: 36px; height: 36px; border-radius: 999px; font-size: 18px; line-height: 1;
+        width: 40px; height: 40px; border-radius: 999px; font-size: 18px; line-height: 1;
         cursor: pointer; display: flex; align-items: center; justify-content: center;
       }
       .admin-refresh:hover { background: rgba(255,255,255,.2); }
+
+      /* Menu "⋯" com as ferramentas externas (Analytics, InfinitePay, Melhor
+         Envio) e Sair — usa <details> nativo, sem precisar de JS pra abrir/
+         fechar. position:relative no <nav> é o que ancora o dropdown. */
+      .admin-nav { position: sticky; }
+      .admin-menu { position: relative; flex-shrink: 0; }
+      .admin-menu summary {
+        list-style: none; width: 40px; height: 40px; border-radius: 999px;
+        background: rgba(255,255,255,.1); color: #fff; font-size: 18px; font-weight: 700;
+        display: flex; align-items: center; justify-content: center; cursor: pointer;
+      }
+      .admin-menu summary::-webkit-details-marker { display: none; }
+      .admin-menu summary:hover { background: rgba(255,255,255,.2); }
+      .admin-menu[open] summary { background: #D66B3E; }
+      .admin-menu-dropdown {
+        position: absolute; top: 48px; right: 0; background: #fff; border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 8px; display: flex; flex-direction: column;
+        min-width: 180px; z-index: 20;
+      }
+      .admin-menu-dropdown a {
+        padding: 12px 14px; border-radius: 8px; font-size: 14px; font-weight: 600;
+        color: #211714; white-space: nowrap;
+      }
+      .admin-menu-dropdown a:hover { background: #FAF6F0; text-decoration: none; }
       .admin-refresh:active { transform: rotate(180deg); transition: transform .3s; }
 
       .admin-body { padding: 16px; max-width: 900px; margin: 0 auto; }
@@ -1202,11 +1243,19 @@ function adminLayout({ title, ativo, body }) {
 
       .filtros { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
       .filtros a {
-        font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 999px;
+        font-size: 12px; font-weight: 700; padding: 9px 16px; border-radius: 999px;
         background: #fff; color: #5a4a3f; box-shadow: 0 1px 3px rgba(33,23,20,.08);
       }
       .filtros a:hover { text-decoration: none; background: #F0E9E2; }
       .filtros a.ativo { background: #211714; color: #fff; }
+
+      /* Busca por nome/e-mail/telefone — filtra os cards com data-busca via
+         public/admin.js, sem precisar recarregar a página nem bater no banco
+         de novo (a lista inteira já está carregada na tela). */
+      .busca-input {
+        width: 100%; padding: 13px 16px; border: 1px solid #ddd; border-radius: 10px;
+        font-size: 15px; font-family: inherit; margin-bottom: 14px; background: #fff;
+      }
 
       .lista-vazia { text-align: center; color: #8a6f5c; padding: 32px 16px; background: #fff; border-radius: 12px; font-size: 14px; }
 
@@ -1235,7 +1284,7 @@ function adminLayout({ title, ativo, body }) {
         color: #5a4a3f; cursor: pointer;
       }
       .pedido-entrada.marcada label { color: #1F8A4C; }
-      .pedido-entrada input[type=checkbox] { width: 18px; height: 18px; cursor: pointer; accent-color: #1F8A4C; }
+      .pedido-entrada input[type=checkbox] { width: 22px; height: 22px; cursor: pointer; accent-color: #1F8A4C; }
 
       .pedido-acoes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #F0E9E2; }
       .pedido-acoes form { display: flex; gap: 6px; flex: 1; min-width: 220px; }
@@ -1243,14 +1292,29 @@ function adminLayout({ title, ativo, body }) {
 
       form { margin: 0; }
       .btn-mini {
-        padding: 10px 16px; border-radius: 8px; border: none; font-size: 13px; font-weight: 700;
-        cursor: pointer; white-space: nowrap; font-family: inherit;
+        padding: 12px 18px; border-radius: 8px; border: none; font-size: 14px; font-weight: 700;
+        cursor: pointer; white-space: nowrap; font-family: inherit; min-height: 44px;
       }
       .btn-mini-primary { background: #211714; color: #fff; }
       .btn-mini-danger { background: #fff; color: #C53030; border: 1px solid #F3C7C7; }
       input[type=text] {
-        padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; font-family: inherit;
+        padding: 12px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; font-family: inherit;
       }
+
+      /* Detalhes e ações do pedido ficam atrás de um <details> nativo — o
+         card mostra só o essencial (status, cliente, total, avisos) de
+         cara, e quem precisar mexer expande. Pedidos que precisam de ação
+         (aprovado sem rastreio, não pago há tempo) vêm com "open" de
+         propósito, pra não esconder o que importa. */
+      .pedido-detalhes { margin-top: 10px; }
+      .pedido-detalhes summary {
+        list-style: none; cursor: pointer; font-size: 13px; font-weight: 700; color: #D66B3E;
+        padding: 10px 0; display: flex; align-items: center; gap: 6px;
+      }
+      .pedido-detalhes summary::-webkit-details-marker { display: none; }
+      .pedido-detalhes summary::before { content: '▸'; font-size: 11px; transition: transform .15s; }
+      .pedido-detalhes[open] summary::before { transform: rotate(90deg); }
+      .pedido-detalhes-corpo { padding-top: 6px; }
 
       @media (max-width: 480px) {
         .admin-body { padding: 12px; }
@@ -1259,8 +1323,9 @@ function adminLayout({ title, ativo, body }) {
       }
     </style>
     </head><body>
-    <nav class="admin-nav"><div class="admin-nav-links">${navHtml}</div>${refreshHtml}</nav>
+    <nav class="admin-nav"><div class="admin-nav-links">${navHtml}</div>${refreshHtml}${menuHtml}</nav>
     <div class="admin-body">${body}</div>
+    <script src="/admin.js" defer></script>
     </body></html>
   `;
 }
@@ -1398,8 +1463,13 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
     </div>
   `;
 
-  const cartoes = rows.map((o) => `
-    <div class="pedido-card">
+  const cartoes = rows.map((o) => {
+    // Abre os detalhes de cara só quando falta alguma ação (etiqueta pra
+    // comprar/gerar) — o resto fica recolhido, o card mostra só o essencial.
+    const precisaAcao = o.status === 'approved' && !o.tracking_code;
+    const busca = [o.customer_name, o.customer_email, o.customer_phone, o.id].filter(Boolean).join(' ');
+    return `
+    <div class="pedido-card" data-busca="${escapeHtml(busca)}">
       <div class="pedido-topo">
         <div>
           <span class="badge badge-${escapeHtml(o.status)}">${escapeHtml(STATUS_LABEL[o.status] || o.status)}</span>
@@ -1418,42 +1488,48 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       ${o.status === 'pending' && (Date.now() - new Date(o.created_at).getTime()) > 10 * 60 * 1000 ? `
         <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Não pago há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a> pela data/valor acima${o.customer_phone ? ` ou chame a pessoa no <a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">WhatsApp</a>` : ''}.</div>
       ` : ''}
-      <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${escapeHtml(o.customer_email)} · ${o.customer_phone ? `<a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.customer_phone)} ↗</a>` : 'sem telefone'}</div>
-      <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
-      <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
-      <div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>
-      <form method="POST" action="/admin/pedidos/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
-        <label>
-          <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''} onchange="this.form.submit()">
-          Já dei entrada no sistema de vendas
-        </label>
-      </form>
-      ${o.status === 'approved' && !o.tracking_code ? `
-        <div class="pedido-acoes">
-          ${!o.melhorenvio_order_id ? `
-            <form method="POST" action="/admin/pedidos/${o.id}/frete/carrinho" onsubmit="this.querySelector('button').disabled=true;">
-              <button type="submit" class="btn-mini btn-mini-primary">1. Inserir no carrinho (Melhor Envio)</button>
+      <details class="pedido-detalhes"${precisaAcao ? ' open' : ''}>
+        <summary>Detalhes e ações</summary>
+        <div class="pedido-detalhes-corpo">
+          <div class="pedido-detalhe"><strong>Contato:</strong> ${escapeHtml(o.customer_email)} · ${o.customer_phone ? `<a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.customer_phone)} ↗</a>` : 'sem telefone'}</div>
+          <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
+          <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
+          <div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>
+          <form method="POST" action="/admin/pedidos/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
+            <label>
+              <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''} onchange="this.form.submit()">
+              Já dei entrada no sistema de vendas
+            </label>
+          </form>
+          ${o.status === 'approved' && !o.tracking_code ? `
+            <div class="pedido-acoes">
+              ${!o.melhorenvio_order_id ? `
+                <form method="POST" action="/admin/pedidos/${o.id}/frete/carrinho" onsubmit="this.querySelector('button').disabled=true;">
+                  <button type="submit" class="btn-mini btn-mini-primary">1. Inserir no carrinho (Melhor Envio)</button>
+                </form>
+              ` : `
+                <span class="selo">📥 No carrinho da Melhor Envio (id ${escapeHtml(o.melhorenvio_order_id)})</span>
+                <form method="POST" action="/admin/pedidos/${o.id}/frete/pagar" onsubmit="if (!confirm('Confirma que os dados batem? Isso vai debitar da carteira da Melhor Envio de verdade.')) return false; this.querySelector('button').disabled=true;">
+                  <button type="submit" class="btn-mini btn-mini-primary">2. Pagar e gerar etiqueta</button>
+                </form>
+              `}
+            </div>
+          ` : ''}
+          ${o.melhorenvio_order_id && o.tracking_code ? `<div class="pedido-acoes"><a href="/admin/pedidos/${o.id}/frete/etiqueta" target="_blank" rel="noopener noreferrer" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;text-align:center;">Baixar etiqueta (PDF)</a></div>` : ''}
+          <div class="pedido-acoes">
+            <form method="POST" action="/admin/pedidos/${o.id}/rastreio">
+              <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
+              <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
             </form>
-          ` : `
-            <span class="selo">📥 No carrinho da Melhor Envio (id ${escapeHtml(o.melhorenvio_order_id)})</span>
-            <form method="POST" action="/admin/pedidos/${o.id}/frete/pagar" onsubmit="if (!confirm('Confirma que os dados batem? Isso vai debitar da carteira da Melhor Envio de verdade.')) return false; this.querySelector('button').disabled=true;">
-              <button type="submit" class="btn-mini btn-mini-primary">2. Pagar e gerar etiqueta</button>
+            <form method="POST" action="/admin/pedidos/${o.id}/excluir" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
+              <button type="submit" class="btn-mini btn-mini-danger">Excluir</button>
             </form>
-          `}
+          </div>
         </div>
-      ` : ''}
-      ${o.melhorenvio_order_id && o.tracking_code ? `<div class="pedido-acoes"><a href="/admin/pedidos/${o.id}/frete/etiqueta" target="_blank" rel="noopener noreferrer" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;text-align:center;">Baixar etiqueta (PDF)</a></div>` : ''}
-      <div class="pedido-acoes">
-        <form method="POST" action="/admin/pedidos/${o.id}/rastreio">
-          <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
-          <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
-        </form>
-        <form method="POST" action="/admin/pedidos/${o.id}/excluir" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
-          <button type="submit" class="btn-mini btn-mini-danger">Excluir</button>
-        </form>
-      </div>
+      </details>
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   // Mensagem do aviso de frete vem de um código fixo (nunca de texto livre na
   // URL) — antes qualquer um podia montar um link tipo
@@ -1473,9 +1549,11 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
   const body = `
     <h1>Pedidos — Café Só Grãos</h1>
     ${avisoFrete}
+    <input type="text" id="buscaLista" class="busca-input" placeholder="Buscar por nome, e-mail ou telefone...">
     ${filtros}
     <div class="pedido-lista">
       ${cartoes || '<div class="lista-vazia">Nenhum pedido encontrado.</div>'}
+      <div class="lista-vazia" id="buscaSemResultado" hidden>Nenhum pedido bate com essa busca.</div>
     </div>
   `;
   res.send(adminLayout({ title: 'Pedidos', ativo: 'pedidos', body }));
@@ -1827,8 +1905,10 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
 
   const { rows } = await pool.query('SELECT * FROM leads ORDER BY created_at DESC LIMIT 500');
 
-  const cartoes = rows.map((l) => `
-    <div class="pedido-card">
+  const cartoes = rows.map((l) => {
+    const busca = [l.name, l.email, l.phone].filter(Boolean).join(' ');
+    return `
+    <div class="pedido-card" data-busca="${escapeHtml(busca)}">
       <div class="pedido-topo">
         <div>
           <div class="pedido-cliente">${escapeHtml(l.name || 'Sem nome')}</div>
@@ -1845,13 +1925,16 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
         </label>
       </form>
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   const body = `
     <h1>Contatos — Café Só Grãos</h1>
     <p class="pedido-detalhe" style="margin-bottom:14px;">${rows.length} contato${rows.length === 1 ? '' : 's'} captado${rows.length === 1 ? '' : 's'} pelo formulário do site. Envio de novidades por e-mail e WhatsApp continua manual, feito por você.</p>
+    <input type="text" id="buscaLista" class="busca-input" placeholder="Buscar por nome, e-mail ou telefone...">
     <div class="pedido-lista">
       ${cartoes || '<div class="lista-vazia">Nenhum contato captado ainda.</div>'}
+      <div class="lista-vazia" id="buscaSemResultado" hidden>Nenhum contato bate com essa busca.</div>
     </div>
   `;
   res.send(adminLayout({ title: 'Contatos', ativo: 'leads', body }));
