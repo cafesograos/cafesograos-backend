@@ -1444,6 +1444,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
       <div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>
       <form method="POST" action="/admin/pedidos/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
+        <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
         <label>
           <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''} onchange="this.form.submit()">
           Já dei entrada no sistema de vendas
@@ -1466,6 +1467,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       ${o.melhorenvio_order_id && o.tracking_code ? `<div class="pedido-acoes"><a href="/admin/pedidos/${o.id}/frete/etiqueta" target="_blank" rel="noopener noreferrer" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;text-align:center;">Baixar etiqueta (PDF)</a></div>` : ''}
       <div class="pedido-acoes">
         <form method="POST" action="/admin/pedidos/${o.id}/rastreio">
+          <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
           <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
           <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
         </form>
@@ -1502,6 +1504,18 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
   res.send(adminLayout({ title: 'Pedidos', ativo: 'pedidos', body }));
 }));
 
+// Monta o redirect de volta pra /admin/pedidos preservando o filtro que
+// estava ativo (manda num campo hidden do form) + a âncora pro card — sem
+// isso, marcar "já dei entrada" ou salvar rastreio sempre voltava pro
+// filtro padrão ("Novos"), que podia nem conter o pedido que acabou de ser
+// mexido, dando a impressão de que a página "voltou pro início".
+function voltarParaPedido(statusBody, pedidoId) {
+  const valido = ['pending', 'approved', 'rejected', 'in_process', 'cancelled', 'refunded', 'a_enviar', 'enviados', 'todos'].includes(statusBody)
+    ? statusBody
+    : 'todos';
+  return `/admin/pedidos?status=${valido}#pedido-${pedidoId}`;
+}
+
 // Salva o código de rastreio de um pedido e avisa o cliente por e-mail.
 app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
@@ -1517,7 +1531,7 @@ app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ exten
   if (order) await enviarEmailRastreio(order);
   logAdminAcao(req, 'rastreio_atualizado', `pedido #${req.params.id} → "${codigo}"`);
 
-  res.redirect(`/admin/pedidos#pedido-${req.params.id}`);
+  res.redirect(voltarParaPedido(req.body?.status, req.params.id));
 }));
 
 // Compra de etiqueta pela Melhor Envio, em 2 passos manuais de propósito:
@@ -1660,15 +1674,13 @@ app.get('/admin/pedidos/:id/frete/etiqueta', requireAdmin, asyncHandler(async (r
 
 // Alterna a marcação "já dei entrada no sistema de vendas" — controle manual
 // do admin, sem relação com o status de pagamento/rastreio do pedido.
-app.post('/admin/pedidos/:id/entrada', requireAdmin, asyncHandler(async (req, res) => {
+app.post('/admin/pedidos/:id/entrada', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   await pool.query('UPDATE orders SET entrada_sistema = NOT COALESCE(entrada_sistema, false) WHERE id = $1', [req.params.id]);
   logAdminAcao(req, 'entrada_alternada', `pedido #${req.params.id}`);
 
-  // Âncora pro próprio card — sem isso, a página recarrega do zero e volta
-  // pro topo, perdendo a posição de quem tava no meio de uma lista longa.
-  res.redirect(`/admin/pedidos#pedido-${req.params.id}`);
+  res.redirect(voltarParaPedido(req.body?.status, req.params.id));
 }));
 
 // Exclui um pedido (ex.: pedidos de teste feitos durante o desenvolvimento).
