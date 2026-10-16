@@ -116,6 +116,10 @@ async function initDb() {
   // "avise-me" do rodapé) — é o que dá direito ao brinde em dobro (2 Drip
   // Coffee em vez de 1) na primeira compra, conferido por telefone no checkout.
   await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS cadastro_popup BOOLEAN DEFAULT false;`);
+  // Marcação manual do admin: "já entrei em contato com esse lead" — pra não
+  // se perder entre quem já foi chamado e quem ainda falta, mesma ideia do
+  // "já dei entrada no sistema de vendas" que já existe pros pedidos.
+  await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS contatado BOOLEAN DEFAULT false;`);
 
   // Sem esses índices, cada checkout novo (checagem de primeira compra) e
   // cada carregamento do painel admin fazem varredura completa da tabela de

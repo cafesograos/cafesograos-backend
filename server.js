@@ -1838,6 +1838,12 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
       ${l.cadastro_popup ? `<div class="pedido-selos"><span class="selo">🎁 Popup — ganha 2 Drip Coffee na 1ª compra</span></div>` : ''}
       ${l.email ? `<div class="pedido-detalhe" style="margin-top:10px;"><strong>E-mail:</strong> ${escapeHtml(l.email)}</div>` : ''}
       ${l.phone ? `<div class="pedido-detalhe"><strong>WhatsApp:</strong> ${escapeHtml(l.phone)}</div>` : ''}
+      <form method="POST" action="/admin/leads/${l.id}/contato" class="pedido-entrada${l.contatado ? ' marcada' : ''}">
+        <label>
+          <input type="checkbox" ${l.contatado ? 'checked' : ''} onchange="this.form.submit()">
+          Já entrei em contato
+        </label>
+      </form>
     </div>
   `).join('');
 
@@ -1849,6 +1855,17 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
     </div>
   `;
   res.send(adminLayout({ title: 'Contatos', ativo: 'leads', body }));
+}));
+
+// Alterna a marcação "já entrei em contato" de um lead — controle manual do
+// admin, só pra não se perder entre quem já foi chamado e quem falta.
+app.post('/admin/leads/:id/contato', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+  await pool.query('UPDATE leads SET contatado = NOT COALESCE(contatado, false) WHERE id = $1', [req.params.id]);
+  logAdminAcao(req, 'lead_contato_alternado', `lead #${req.params.id}`);
+
+  res.redirect('/admin/leads');
 }));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
