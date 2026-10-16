@@ -131,8 +131,12 @@ const webhookLimiter = rateLimit({
   legacyHeaders: false
 });
 
-// Trava bruteforce de senha nas rotas /admin* — a senha é forte, mas sem
-// limite alguém poderia tentar milhares de valores por script.
+// Trava bruteforce de senha — só na rota que recebe a senha (POST
+// /admin/login), não em todo /admin/*. Antes esse limite (60 a cada 15 min)
+// valia pra qualquer requisição do painel já logado, e cada clique numa
+// caixinha "já dei entrada"/"já entrei em contato" recarrega a página
+// inteira (1 GET + 1 POST) — uso normal esbarrava no limite de brute-force
+// sem nenhuma tentativa de senha de verdade estar rolando.
 const adminLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 60,
@@ -140,7 +144,16 @@ const adminLimiter = rateLimit({
   legacyHeaders: false,
   message: 'Muitas tentativas. Tente novamente em alguns minutos.'
 });
-app.use('/admin', adminLimiter);
+// Teto bem mais folgado pro painel já autenticado — é só rede de segurança
+// contra script correndo solto, não brute-force (quem chega aqui já tem
+// sessão válida, que exige a senha correta pra existir).
+const adminAutenticadoLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 1000,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+app.use('/admin', adminAutenticadoLimiter);
 
 // Autorização OAuth do Melhor Envio (rodar uma vez, manualmente, logado como admin).
 // Antes essas duas rotas eram públicas, sem checagem nenhuma — qualquer um
@@ -726,7 +739,7 @@ app.get('/admin/login', (req, res) => {
   res.send(loginPage({ proximo: req.query.proximo }));
 });
 
-app.post('/admin/login', express.urlencoded({ extended: false }), (req, res) => {
+app.post('/admin/login', adminLimiter, express.urlencoded({ extended: false }), (req, res) => {
   const proximo = destinoSeguro(req.body?.proximo);
   if (!senhaCorreta(req.body?.senha)) {
     console.log(`[admin] login_falhou — IP ${req.ip}`);
