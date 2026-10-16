@@ -1274,6 +1274,7 @@ function adminLayout({ title, ativo, body }) {
     </head><body>
     <nav class="admin-nav"><div class="admin-nav-links">${navHtml}</div>${refreshHtml}</nav>
     <div class="admin-body">${body}</div>
+    <script src="/admin.js" defer></script>
     </body></html>
   `;
 }
@@ -1446,7 +1447,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       <form method="POST" action="/admin/pedidos/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
         <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
         <label>
-          <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''} onchange="this.form.submit()">
+          <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''}>
           Já dei entrada no sistema de vendas
         </label>
       </form>
@@ -1875,7 +1876,7 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
       ${l.phone ? `<div class="pedido-detalhe"><strong>WhatsApp:</strong> ${escapeHtml(l.phone)}</div>` : ''}
       <form method="POST" action="/admin/leads/${l.id}/contato" class="pedido-entrada${l.contatado ? ' marcada' : ''}">
         <label>
-          <input type="checkbox" ${l.contatado ? 'checked' : ''} onchange="this.form.submit()">
+          <input type="checkbox" ${l.contatado ? 'checked' : ''}>
           Já entrei em contato
         </label>
       </form>
