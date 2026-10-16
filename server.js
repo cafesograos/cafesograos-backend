@@ -284,6 +284,21 @@ function cpfValido(cpf) {
   return resto === parseInt(cpf[10], 10);
 }
 
+// Telefone no formato que a InfinitePay aceita (+55 e só os dígitos do
+// DDD+número). Sem isso, quem digita o telefone já com o "55" na frente
+// (comum ao copiar de uma conversa do WhatsApp, ex.: "+55 16 99999-8888")
+// acabava com o "55" duplicado ("+5555169999988") e a InfinitePay recusava
+// o link inteiro com "not a valid phone number" — foi o que aconteceu com
+// o primeiro pedido que o João tentou gerar no painel de vendedor.
+function telefoneParaE164(telefoneRaw) {
+  let digitos = String(telefoneRaw || '').replace(/\D/g, '');
+  if ((digitos.length === 12 || digitos.length === 13) && digitos.startsWith('55')) {
+    digitos = digitos.slice(2);
+  }
+  if (digitos.length < 10 || digitos.length > 11) return null;
+  return '+55' + digitos;
+}
+
 // Cria um link de pagamento a partir dos itens do carrinho + dados de entrega,
 // salva o pedido no banco e devolve o link (init_point) para o checkout da InfinitePay.
 app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
@@ -435,9 +450,9 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
 
     const total = Number(line_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0).toFixed(2));
 
-    const telefoneDigits = String(cliente.telefone || '').replace(/\D/g, '');
     const customer = { name: cliente.nome, email: cliente.email };
-    if (telefoneDigits.length >= 10) customer.phone_number = '+55' + telefoneDigits;
+    const telefoneE164 = telefoneParaE164(cliente.telefone);
+    if (telefoneE164) customer.phone_number = telefoneE164;
 
     // Identificador do pedido gerado por nós (a InfinitePay não devolve um id
     // próprio na criação do link) — é com ele que casamos webhook e o pedido
@@ -1064,9 +1079,9 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
 
   const total = Number(line_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0).toFixed(2));
 
-  const telefoneDigits = String(cliente.telefone || '').replace(/\D/g, '');
   const customer = { name: cliente.nome, email: cliente.email };
-  if (telefoneDigits.length >= 10) customer.phone_number = '+55' + telefoneDigits;
+  const telefoneE164 = telefoneParaE164(cliente.telefone);
+  if (telefoneE164) customer.phone_number = telefoneE164;
 
   const orderNsu = crypto.randomUUID();
   const itensParaPagamento = line_items.filter((i) => i.unit_price > 0);
