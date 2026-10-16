@@ -973,7 +973,7 @@ function novoPedidoForm({ erro } = {}) {
       <section>
         <h2>Cliente</h2>
         <div class="campo"><label for="nome">Nome completo</label><input type="text" id="nome" name="nome" required></div>
-        <div class="campo"><label for="email">E-mail</label><input type="email" id="email" name="email" required></div>
+        <div class="campo"><label for="email">E-mail (opcional)</label><input type="email" id="email" name="email"></div>
         <div class="linha-dupla">
           <div class="campo"><label for="telefone">Telefone / WhatsApp</label><input type="tel" id="telefone" name="telefone"></div>
           <div class="campo"><label for="cpf">CPF</label><input type="text" id="cpf" name="cpf" inputmode="numeric" required></div>
@@ -1038,7 +1038,10 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
   if (!cliente.nome || !entrega.cep || !entrega.endereco || !entrega.numero || !entrega.bairro || !entrega.cidade || !entrega.estado) {
     return res.status(400).send(novoPedidoForm({ erro: 'Preencha todos os dados obrigatórios do cliente e do endereço.' }));
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cliente.email)) {
+  // E-mail é opcional aqui (diferente do checkout do site): o João monta o
+  // pedido por telefone/WhatsApp direto com o cliente, às vezes sem pegar
+  // o e-mail na hora. Só valida o formato se a pessoa preencheu alguma coisa.
+  if (cliente.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cliente.email)) {
     return res.status(400).send(novoPedidoForm({ erro: 'E-mail inválido.' }));
   }
   const cpfDigits = String(cliente.cpf || '').replace(/\D/g, '');
@@ -1079,7 +1082,8 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
 
   const total = Number(line_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0).toFixed(2));
 
-  const customer = { name: cliente.nome, email: cliente.email };
+  const customer = { name: cliente.nome };
+  if (cliente.email) customer.email = cliente.email;
   const telefoneE164 = telefoneParaE164(cliente.telefone);
   if (telefoneE164) customer.phone_number = telefoneE164;
 
@@ -1455,7 +1459,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       ${o.status === 'pending' && (Date.now() - new Date(o.created_at).getTime()) > 10 * 60 * 1000 ? `
         <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Não pago há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a> pela data/valor acima${o.customer_phone ? ` ou chame a pessoa no <a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">WhatsApp</a>` : ''}.</div>
       ` : ''}
-      <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${escapeHtml(o.customer_email)} · ${o.customer_phone ? `<a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.customer_phone)} ↗</a>` : 'sem telefone'}</div>
+      <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${o.customer_email ? escapeHtml(o.customer_email) : 'sem e-mail'} · ${o.customer_phone ? `<a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.customer_phone)} ↗</a>` : 'sem telefone'}</div>
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
       <div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>
