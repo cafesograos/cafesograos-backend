@@ -1722,7 +1722,7 @@ app.post('/admin/pedidos/:id/excluir', requireAdmin, asyncHandler(async (req, re
 // Avaliações de clientes (estilo Google: nome, nota de 1-5, comentário).
 // Toda avaliação nova entra como "pending" e só aparece no site depois de
 // aprovada manualmente — evita comentário falso de concorrente ou spam.
-const LINHAS_PRODUTO = ['Tradicional', 'Gourmet', 'Especial', 'Drip Coffee'];
+const LINHAS_PRODUTO = ['Tradicional', 'Especial', 'Drip Coffee'];
 
 app.post('/api/avaliacoes', formularioLimiter, async (req, res) => {
   try {
