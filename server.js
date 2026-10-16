@@ -1373,9 +1373,17 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
   // geral) — são um recorte à parte, só pra separar visualmente "aprovado
   // que falta despachar" de "aprovado que já saiu", que antes vinham tudo
   // junto sob "Aprovado" e misturava o que ainda precisava de ação.
-  const filtro = ['pending', 'approved', 'rejected', 'in_process', 'cancelled', 'refunded', 'a_enviar', 'enviados'].includes(req.query.status)
-    ? req.query.status
-    : null;
+  //
+  // "Novos" (ex-"A enviar") é a aba principal: quem abre /admin/pedidos sem
+  // escolher nada cai direto em "o que precisa de ação agora", não na lista
+  // inteira de pedidos (que já aprovou/enviou/recusou faz tempo). "Todos"
+  // vira uma aba à parte, acessada de propósito via ?status=todos.
+  const statusQuery = req.query.status;
+  const filtro = statusQuery === 'todos'
+    ? null
+    : ['pending', 'approved', 'rejected', 'in_process', 'cancelled', 'refunded', 'a_enviar', 'enviados'].includes(statusQuery)
+      ? statusQuery
+      : 'a_enviar';
 
   const CONDICOES = {
     a_enviar: `status = 'approved' AND (tracking_code IS NULL OR tracking_code = '')`,
@@ -1389,17 +1397,17 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
     filtro && !CONDICOES[filtro] ? [filtro] : []
   );
   const filtroLink = (status) => `/admin/pedidos${status ? `?status=${status}` : ''}`;
-  const FILTROS_EXTRA = { a_enviar: 'A enviar', enviados: 'Enviados' };
+  const FILTROS_EXTRA = { a_enviar: 'Novos', enviados: 'Enviados' };
   const filtros = `
     <div class="filtros">
-      <a href="${filtroLink(null)}" class="${!filtro ? 'ativo' : ''}">Todos</a>
       ${Object.keys(FILTROS_EXTRA).map((s) => `<a href="${filtroLink(s)}" class="${filtro === s ? 'ativo' : ''}">${escapeHtml(FILTROS_EXTRA[s])}</a>`).join('')}
       ${Object.keys(STATUS_LABEL).map((s) => `<a href="${filtroLink(s)}" class="${filtro === s ? 'ativo' : ''}">${escapeHtml(STATUS_LABEL[s])}</a>`).join('')}
+      <a href="${filtroLink('todos')}" class="${!filtro ? 'ativo' : ''}">Todos</a>
     </div>
   `;
 
   const cartoes = rows.map((o) => `
-    <div class="pedido-card">
+    <div class="pedido-card" id="pedido-${o.id}">
       <div class="pedido-topo">
         <div>
           <span class="badge badge-${escapeHtml(o.status)}">${escapeHtml(STATUS_LABEL[o.status] || o.status)}</span>
@@ -1496,7 +1504,7 @@ app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ exten
   if (order) await enviarEmailRastreio(order);
   logAdminAcao(req, 'rastreio_atualizado', `pedido #${req.params.id} → "${codigo}"`);
 
-  res.redirect('/admin/pedidos');
+  res.redirect(`/admin/pedidos#pedido-${req.params.id}`);
 }));
 
 // Compra de etiqueta pela Melhor Envio, em 2 passos manuais de propósito:
@@ -1645,7 +1653,9 @@ app.post('/admin/pedidos/:id/entrada', requireAdmin, asyncHandler(async (req, re
   await pool.query('UPDATE orders SET entrada_sistema = NOT COALESCE(entrada_sistema, false) WHERE id = $1', [req.params.id]);
   logAdminAcao(req, 'entrada_alternada', `pedido #${req.params.id}`);
 
-  res.redirect('/admin/pedidos');
+  // Âncora pro próprio card — sem isso, a página recarrega do zero e volta
+  // pro topo, perdendo a posição de quem tava no meio de uma lista longa.
+  res.redirect(`/admin/pedidos#pedido-${req.params.id}`);
 }));
 
 // Exclui um pedido (ex.: pedidos de teste feitos durante o desenvolvimento).
@@ -1828,7 +1838,7 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM leads ORDER BY created_at DESC LIMIT 500');
 
   const cartoes = rows.map((l) => `
-    <div class="pedido-card">
+    <div class="pedido-card" id="lead-${l.id}">
       <div class="pedido-topo">
         <div>
           <div class="pedido-cliente">${escapeHtml(l.name || 'Sem nome')}</div>
@@ -1865,7 +1875,9 @@ app.post('/admin/leads/:id/contato', requireAdmin, asyncHandler(async (req, res)
   await pool.query('UPDATE leads SET contatado = NOT COALESCE(contatado, false) WHERE id = $1', [req.params.id]);
   logAdminAcao(req, 'lead_contato_alternado', `lead #${req.params.id}`);
 
-  res.redirect('/admin/leads');
+  // Âncora pro próprio card — mesma correção do checkbox de pedidos, pra
+  // não voltar pro topo da lista toda vez que marcar um contato.
+  res.redirect(`/admin/leads#lead-${req.params.id}`);
 }));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
