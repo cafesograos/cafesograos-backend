@@ -938,25 +938,31 @@ function vendedorLayout(body) {
     </head><body>
     <div class="topo"><strong>Novo pedido</strong><a href="/vendedor/logout">Sair</a></div>
     <div class="corpo">${body}</div>
+    <script src="/admin.js" defer></script>
     </body></html>
   `;
 }
 
 function novoPedidoForm({ erro } = {}) {
+  // Máximo de 10 por produto de propósito — é um pedido manual por telefone,
+  // nunca precisa de mais que isso. Foi exatamente um "50" digitado sem
+  // querer (devia ser "1") que gerou um link de R$1.600 por engano e pode
+  // ter disparado uma trava antifraude na conta da InfinitePay, derrubando
+  // até o pedido certo que veio logo depois.
   const produtosHtml = PRODUCTS.map((p) => `
     <div class="produto-linha">
       <div>
         <label for="qtd_${escapeHtml(p.id)}">${escapeHtml(p.nome)}</label>
         <span>${reais(p.preco)}</span>
       </div>
-      <input type="number" id="qtd_${escapeHtml(p.id)}" name="qtd_${escapeHtml(p.id)}" min="0" max="50" value="0" inputmode="numeric">
+      <input type="number" id="qtd_${escapeHtml(p.id)}" name="qtd_${escapeHtml(p.id)}" min="0" max="10" value="0" inputmode="numeric" data-preco="${p.preco}">
     </div>
   `).join('');
 
   return vendedorLayout(`
     <h1>Montar pedido pro cliente</h1>
     ${erro ? `<p class="erro">${escapeHtml(erro)}</p>` : ''}
-    <form method="POST" action="/vendedor/novo-pedido">
+    <form method="POST" action="/vendedor/novo-pedido" id="formNovoPedido">
       <section>
         <h2>Produtos</h2>
         ${produtosHtml}
@@ -1010,7 +1016,7 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
   // Preço e peso sempre vêm do catálogo do servidor — nunca do que o
   // formulário manda — mesma regra do checkout do site.
   const itensValidados = PRODUCTS
-    .map((p) => ({ produto: p, quantity: Math.min(50, Math.max(0, parseInt(req.body?.[`qtd_${p.id}`]) || 0)) }))
+    .map((p) => ({ produto: p, quantity: Math.min(10, Math.max(0, parseInt(req.body?.[`qtd_${p.id}`]) || 0)) }))
     .filter(({ quantity }) => quantity > 0);
 
   if (itensValidados.length === 0) {
