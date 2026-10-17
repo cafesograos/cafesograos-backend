@@ -4,12 +4,18 @@ const Sentry = require('@sentry/node');
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const QRCode = require('qrcode');
 const { pool, initDb } = require('./db');
 const { calcularFrete, inserirNoCarrinho, comprarEtiquetas, gerarEtiquetas, imprimirEtiquetas, rastrearEtiquetas } = require('./shipping');
 const { criarLinkPagamento, consultarStatusPagamento } = require('./infinitepay');
 const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio, enviarEmailBoasVindasLead } = require('./email');
 const { CATEGORIES, PRODUCTS } = require('./products');
 const { agendarBackupDiario } = require('./backup');
+const {
+  iniciarWhatsApp, desconectarWhatsApp, enviarMensagemWhatsApp,
+  mensagemBoasVindasLead, mensagemConfirmacaoCompra,
+  getStatusConexao: getStatusWhatsApp, getQrAtual: getQrAtualWhatsApp
+} = require('./whatsapp');
 
 const app = express();
 app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for reconhecer a stack
@@ -570,6 +576,15 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
     } catch (err) {
       console.error(`Falha ao enviar e-mail de confirmação pro cliente (pedido #${order.id}):`, err);
       Sentry.captureException(err, { extra: { preferenceId, orderId: order.id, email: 'confirmacao_cliente' } });
+    }
+    // WhatsApp é um extra sobre o e-mail (que já confirma o pedido de
+    // verdade) — se não estiver conectado ou o envio falhar, só loga e segue,
+    // nunca impede o pedido de ser aprovado.
+    try {
+      const telefoneOrder = telefoneParaE164(order.customer_phone);
+      if (telefoneOrder) await enviarMensagemWhatsApp(telefoneOrder, mensagemConfirmacaoCompra(order));
+    } catch (err) {
+      console.error(`Falha ao enviar WhatsApp de confirmação (pedido #${order.id}):`, err.message);
     }
   }
   return order;
@@ -1156,6 +1171,7 @@ function adminLayout({ title, ativo, body }) {
     { id: 'pedidos', label: 'Pedidos', href: '/admin/pedidos' },
     { id: 'avaliacoes', label: 'Avaliações', href: '/admin/avaliacoes' },
     { id: 'leads', label: 'Contatos', href: '/admin/leads' },
+    { id: 'whatsapp', label: 'WhatsApp', href: '/admin/whatsapp' },
     { id: 'ga', label: 'Google Analytics ↗', href: 'https://analytics.google.com/analytics/web/', external: true },
     { id: 'ip', label: 'InfinitePay ↗', href: 'https://app.infinitepay.io/', external: true },
     { id: 'me', label: 'Melhor Envio ↗', href: 'https://melhorenvio.com.br/painel', external: true },
@@ -1881,8 +1897,9 @@ app.post('/api/cadastro-popup', formularioLimiter, async (req, res) => {
   }
 });
 
-// Lista de contatos captados, protegida por senha — pra você mesmo chamar
-// no WhatsApp manualmente (não existe envio em massa automático por WhatsApp).
+// Lista de contatos captados, protegida por senha. Quem se cadastra no popup
+// recebe uma mensagem automática de boas-vindas no WhatsApp 3 min depois (ver
+// /admin/whatsapp) — fora isso, contato continua manual, feito por você.
 app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
@@ -1910,7 +1927,7 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
 
   const body = `
     <h1>Contatos — Café Só Grãos</h1>
-    <p class="pedido-detalhe" style="margin-bottom:14px;">${rows.length} contato${rows.length === 1 ? '' : 's'} captado${rows.length === 1 ? '' : 's'} pelo formulário do site. Envio de novidades por e-mail e WhatsApp continua manual, feito por você.</p>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">${rows.length} contato${rows.length === 1 ? '' : 's'} captado${rows.length === 1 ? '' : 's'} pelo formulário do site. Quem se cadastrou no popup recebe boas-vindas automáticas no WhatsApp — veja em <a href="/admin/whatsapp">Configurar WhatsApp</a>.</p>
     <div class="pedido-lista">
       ${cartoes || '<div class="lista-vazia">Nenhum contato captado ainda.</div>'}
     </div>
@@ -1931,6 +1948,65 @@ app.post('/admin/leads/:id/contato', requireAdmin, asyncHandler(async (req, res)
   res.redirect(`/admin/leads#lead-${req.params.id}`);
 }));
 
+// Pareamento do número de WhatsApp dedicado à automação (ver whatsapp.js).
+// Escaneia o QR code com o WhatsApp do celular dedicado (Aparelhos conectados
+// → Conectar um aparelho) — depois disso a sessão fica salva no banco e não
+// precisa escanear de novo, só se desconectar.
+app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
+  const status = getStatusWhatsApp();
+  const qr = getQrAtualWhatsApp();
+  const qrImg = qr ? await QRCode.toDataURL(qr, { width: 280 }) : null;
+
+  const statusLabel = {
+    conectado: '🟢 Conectado',
+    aguardando_qr: '🟡 Aguardando leitura do QR code',
+    desconectado: '🔴 Desconectado'
+  }[status] || status;
+
+  const body = `
+    <h1>WhatsApp — Café Só Grãos</h1>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">Conexão gratuita (não-oficial, tipo WhatsApp Web) usada pra mandar automaticamente a mensagem de boas-vindas (3 min depois do cadastro no popup) e a confirmação de compra aprovada. Use um número dedicado só pra isso, separado do número de atendimento — existe risco de bloqueio pelo WhatsApp por ser uma conexão não-oficial.</p>
+    <div class="pedido-card" style="max-width:360px;">
+      <div class="pedido-topo"><div class="pedido-cliente">Status: ${statusLabel}</div></div>
+      ${qrImg ? `
+        <div style="text-align:center;margin:16px 0;">
+          <img src="${qrImg}" alt="QR code do WhatsApp" style="width:100%;max-width:280px;border-radius:8px;">
+        </div>
+        <p class="pedido-detalhe">No celular dedicado: WhatsApp → Aparelhos conectados → Conectar um aparelho, e escaneie o código acima. Ele expira em cerca de 1 minuto — atualize a página se sumir antes de escanear.</p>
+      ` : ''}
+      ${status === 'conectado' ? `
+        <form method="POST" action="/admin/whatsapp/desconectar" onsubmit="return confirm('Desconectar o WhatsApp? Será preciso escanear o QR code de novo pra reconectar.');">
+          <button type="submit" class="btn-mini btn-mini-danger" style="margin-top:12px;">Desconectar</button>
+        </form>
+      ` : ''}
+      ${status === 'desconectado' && !qrImg ? `
+        <p class="pedido-detalhe">Gerando QR code, atualize a página em alguns segundos. Se continuar assim, tente conectar de novo:</p>
+        <form method="POST" action="/admin/whatsapp/conectar">
+          <button type="submit" class="btn-mini btn-mini-primary" style="margin-top:8px;">Tentar conectar</button>
+        </form>
+      ` : ''}
+    </div>
+  `;
+  res.send(adminLayout({ title: 'WhatsApp', ativo: 'whatsapp', body }));
+}));
+
+// Reconecta sem apagar a sessão salva — pra quando a tentativa automática no
+// boot do servidor falhar (ex.: soluço de rede), sem precisar escanear o QR
+// de novo se já tinha uma sessão válida.
+app.post('/admin/whatsapp/conectar', requireAdmin, asyncHandler(async (req, res) => {
+  if (pool) iniciarWhatsApp(pool).catch((err) => console.error('Erro ao conectar WhatsApp:', err));
+  res.redirect('/admin/whatsapp');
+}));
+
+// Desconecta o número e apaga a sessão salva — usado quando quiser trocar de
+// número dedicado ou se o número atual foi bloqueado pelo WhatsApp.
+app.post('/admin/whatsapp/desconectar', requireAdmin, asyncHandler(async (req, res) => {
+  await desconectarWhatsApp();
+  logAdminAcao(req, 'whatsapp_desconectado', '');
+  if (pool) iniciarWhatsApp(pool).catch((err) => console.error('Erro ao reiniciar WhatsApp:', err));
+  res.redirect('/admin/whatsapp');
+}));
+
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 // Manda pro Sentry antes da rede de segurança final abaixo — precisa vir
@@ -1949,8 +2025,44 @@ app.use((err, req, res, next) => {
   }
 });
 
+// Roda a cada 30s: manda a mensagem de boas-vindas no WhatsApp pra quem se
+// cadastrou no popup há mais de 3 minutos e ainda não recebeu — o atraso é
+// de propósito (pedido do dono), não é só processar assim que cadastra.
+async function processarFilaBoasVindasWhatsApp() {
+  if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, phone FROM leads
+       WHERE cadastro_popup = true AND COALESCE(whatsapp_enviado, false) = false
+         AND created_at <= now() - interval '3 minutes'
+       ORDER BY created_at ASC LIMIT 10`
+    );
+    for (const lead of rows) {
+      const telefone = telefoneParaE164(lead.phone);
+      if (telefone) {
+        const primeiroNome = String(lead.name || '').trim().split(' ')[0] || '';
+        try {
+          await enviarMensagemWhatsApp(telefone, mensagemBoasVindasLead(primeiroNome));
+          console.log(`WhatsApp de boas-vindas enviado pro lead #${lead.id}.`);
+        } catch (err) {
+          console.error(`Falha ao enviar WhatsApp de boas-vindas pro lead #${lead.id}:`, err.message);
+        }
+      }
+      // Marca como processado mesmo em falha — evita ficar tentando pro
+      // mesmo número a cada 30s pra sempre (ex.: telefone inválido).
+      await pool.query('UPDATE leads SET whatsapp_enviado = true WHERE id = $1', [lead.id]);
+    }
+  } catch (err) {
+    console.error('Erro ao processar fila de boas-vindas do WhatsApp:', err);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 initDb().finally(() => {
   app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
-  if (pool) agendarBackupDiario(pool);
+  if (pool) {
+    agendarBackupDiario(pool);
+    iniciarWhatsApp(pool).catch((err) => console.error('Erro ao iniciar WhatsApp:', err));
+    setInterval(processarFilaBoasVindasWhatsApp, 30_000);
+  }
 });

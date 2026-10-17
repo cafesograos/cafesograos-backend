@@ -120,6 +120,20 @@ async function initDb() {
   // se perder entre quem já foi chamado e quem ainda falta, mesma ideia do
   // "já dei entrada no sistema de vendas" que já existe pros pedidos.
   await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS contatado BOOLEAN DEFAULT false;`);
+  // Controla se já mandamos a mensagem automática de boas-vindas no WhatsApp
+  // (3 min depois do cadastro no popup) — evita reenviar pro mesmo lead a
+  // cada vez que a fila roda.
+  await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_enviado BOOLEAN DEFAULT false;`);
+
+  // Sessão do WhatsApp (Baileys) guardada no banco em vez de em arquivo —
+  // o disco do Railway não persiste entre deploys, então sem isso cada
+  // deploy novo exigiria escanear o QR code de novo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_auth (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL
+    );
+  `);
 
   // Sem esses índices, cada checkout novo (checagem de primeira compra) e
   // cada carregamento do painel admin fazem varredura completa da tabela de
