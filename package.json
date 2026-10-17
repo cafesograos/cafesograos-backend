@@ -4,7 +4,7 @@
   "description": "Backend do checkout Café Só Grãos (cria preferências de pagamento no Mercado Pago)",
   "main": "server.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "start": "node server.js"
