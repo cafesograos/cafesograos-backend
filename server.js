@@ -2028,14 +2028,33 @@ app.use((err, req, res, next) => {
 // Roda a cada 30s: manda a mensagem de boas-vindas no WhatsApp pra quem se
 // cadastrou no popup há mais de 3 minutos e ainda não recebeu — o atraso é
 // de propósito (pedido do dono), não é só processar assim que cadastra.
+//
+// Dois cuidados que vieram de um incidente real (conta entrou em revisão do
+// WhatsApp logo na primeira conexão, porque a fila represada mandou 4
+// mensagens de uma vez pra contatos antigos — exatamente o padrão que o
+// WhatsApp mais pune: número novo mandando mensagem em lote pra quem nunca
+// falou com ele):
+// 1) Só manda pra quem cadastrou nas últimas 24h — cadastro mais antigo que
+//    isso (ex.: fila represada depois de um tempo desconectado) é só
+//    descartado, nunca "estoura" tudo de uma vez quando reconecta.
+// 2) No máximo 1 mensagem por rodada (a cada 30s) — espaça os envios em vez
+//    de mandar vários em sequência na mesma rodada.
 async function processarFilaBoasVindasWhatsApp() {
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
   try {
+    // Descarta (sem enviar) cadastros represados há mais de 24h — evita
+    // rajada de mensagens antigas quando a conexão volta depois de um tempo.
+    await pool.query(
+      `UPDATE leads SET whatsapp_enviado = true
+       WHERE cadastro_popup = true AND COALESCE(whatsapp_enviado, false) = false
+         AND created_at < now() - interval '24 hours'`
+    );
+
     const { rows } = await pool.query(
       `SELECT id, name, phone FROM leads
        WHERE cadastro_popup = true AND COALESCE(whatsapp_enviado, false) = false
          AND created_at <= now() - interval '3 minutes'
-       ORDER BY created_at ASC LIMIT 10`
+       ORDER BY created_at ASC LIMIT 1`
     );
     for (const lead of rows) {
       const telefone = telefoneParaE164(lead.phone);
