@@ -84,6 +84,14 @@ let sock = null;
 let authAtual = null;
 let qrAtual = null;
 let statusConexao = 'desconectado'; // desconectado | aguardando_qr | conectado
+let handlerMensagem = null;
+
+// Registra quem trata uma mensagem recebida de verdade (ver server.js, que
+// liga isso na IA de atendimento) — mantém esse arquivo só como camada de
+// transporte do WhatsApp, sem lógica de negócio aqui dentro.
+function definirHandlerMensagem(callback) {
+  handlerMensagem = callback;
+}
 
 async function iniciarWhatsApp(pool) {
   if (!pool) return;
@@ -99,6 +107,23 @@ async function iniciarWhatsApp(pool) {
   });
 
   sock.ev.on('creds.update', authAtual.saveCreds);
+
+  // "notify" = mensagem nova chegando agora; "append"/outros tipos aparecem
+  // em sincronizações de histórico (ex.: logo depois de conectar) — sem esse
+  // filtro, a IA responderia mensagens antigas toda vez que reconectasse.
+  sock.ev.on('messages.upsert', ({ messages, type }) => {
+    if (type !== 'notify' || !handlerMensagem) return;
+    for (const msg of messages) {
+      if (msg.key.fromMe || msg.key.remoteJid?.endsWith('@g.us')) continue;
+      const texto = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+      if (!texto) continue;
+      const telefone = msg.key.remoteJid?.split('@')[0];
+      if (!telefone) continue;
+      Promise.resolve(handlerMensagem(telefone, texto)).catch((err) => {
+        console.error('[whatsapp] erro ao processar mensagem recebida:', err.message);
+      });
+    }
+  });
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -161,6 +186,7 @@ module.exports = {
   enviarMensagemWhatsApp,
   mensagemBoasVindasLead,
   mensagemConfirmacaoCompra,
+  definirHandlerMensagem,
   getStatusConexao: () => statusConexao,
   getQrAtual: () => qrAtual
 };

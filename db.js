@@ -135,6 +135,20 @@ async function initDb() {
     );
   `);
 
+  // Histórico de conversa da IA de atendimento no WhatsApp — por telefone,
+  // pra ela lembrar o que já foi dito na mesma conversa (nome, endereço,
+  // se já confirmou ser de Araraquara, etc.) sem precisar perguntar de novo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_mensagens (
+      id SERIAL PRIMARY KEY,
+      phone TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_mensagens_phone ON whatsapp_mensagens (phone, created_at);`);
+
   // Sem esses índices, cada checkout novo (checagem de primeira compra) e
   // cada carregamento do painel admin fazem varredura completa da tabela de
   // pedidos — hoje ainda rápido pelo volume baixo, mas silenciosamente mais

@@ -13,9 +13,10 @@ const { CATEGORIES, PRODUCTS } = require('./products');
 const { agendarBackupDiario } = require('./backup');
 const {
   iniciarWhatsApp, desconectarWhatsApp, enviarMensagemWhatsApp,
-  mensagemBoasVindasLead, mensagemConfirmacaoCompra,
+  mensagemBoasVindasLead, mensagemConfirmacaoCompra, definirHandlerMensagem,
   getStatusConexao: getStatusWhatsApp, getQrAtual: getQrAtualWhatsApp
 } = require('./whatsapp');
+const { responderMensagem } = require('./whatsapp-ia');
 
 const app = express();
 app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for reconhecer a stack
@@ -79,6 +80,12 @@ app.use((req, res, next) => {
 });
 
 const SITE_URL = process.env.SITE_URL || 'https://www.cafesograos.com.br';
+// URL pública do próprio backend — usada pro webhook da InfinitePay quando
+// não tem um "req" de verdade à mão (ex.: pedido criado pela IA do WhatsApp,
+// fora de uma requisição HTTP). RAILWAY_PUBLIC_DOMAIN é injetado sozinho pelo Railway.
+const BACKEND_URL = process.env.RAILWAY_PUBLIC_DOMAIN
+  ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+  : 'https://cafesograos-backend-production.up.railway.app';
 const FRETE_GRATIS_ACIMA_DE = 300;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
@@ -1162,6 +1169,133 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
   `));
 }));
 
+// Cria um pedido de verdade (com link de pagamento InfinitePay) a partir da
+// conversa da IA no WhatsApp — mesma ideia do "/vendedor/novo-pedido" (preço
+// e peso sempre do catálogo do servidor, nunca do que a IA "disse"), mas com
+// duas diferenças: aplica o brinde de boas-vindas automático (igual ao
+// checkout do site) e entende a regra especial de frete grátis de Araraquara.
+// Sem desconto por enquanto (decisão do dono, Araraquara/CRM ainda em teste).
+async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, numero, complemento, bairro, cidade, estado, itens, araraquaraConfirmado }) {
+  if (!pool) throw new Error('Banco de dados não configurado.');
+
+  const itensValidados = (itens || [])
+    .map((item) => ({
+      produto: PRODUCTS.find((p) => p.id === item.produtoId),
+      quantity: Math.min(10, Math.max(0, parseInt(item.quantity) || 0))
+    }))
+    .filter(({ produto, quantity }) => produto && quantity > 0);
+  if (itensValidados.length === 0) throw new Error('Nenhum item válido informado.');
+
+  const cpfDigits = String(cpf || '').replace(/\D/g, '');
+  if (!cpfValido(cpfDigits)) throw new Error('CPF inválido.');
+  if (!nome || !cep || !endereco || !numero || !bairro || !cidade || !estado) {
+    throw new Error('Faltam dados obrigatórios do cliente ou do endereço.');
+  }
+
+  // Brinde de boas-vindas: mesma detecção de "primeira compra" do checkout
+  // do site (por telefone, já que aqui não necessariamente temos e-mail) —
+  // 1 Drip Coffee grátis, ou 2 se o telefone bate com um cadastro no popup.
+  let brindeQuantidade = 0;
+  const { rows: jaComprou } = await pool.query(
+    `SELECT 1 FROM orders WHERE status = 'approved'
+     AND RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace($1, '\\D', '', 'g'), 11) LIMIT 1`,
+    [telefone || '']
+  );
+  if (jaComprou.length === 0) {
+    brindeQuantidade = 1;
+    const telefoneDigits = String(telefone || '').replace(/\D/g, '');
+    if (telefoneDigits.length >= 10) {
+      const { rows: cadastroPopup } = await pool.query(
+        `SELECT 1 FROM leads WHERE cadastro_popup = true AND regexp_replace(phone, '\\D', '', 'g') = $1 LIMIT 1`,
+        [telefoneDigits]
+      );
+      if (cadastroPopup.length > 0) brindeQuantidade = 2;
+    }
+  }
+
+  const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
+    title: produto.nome, quantity, unit_price: produto.preco
+  }));
+  const brindeProduto = brindeQuantidade > 0 ? PRODUCTS.find((p) => p.id === 'drip-coffee-caixa-10') : null;
+  if (brindeProduto) {
+    const sufixo = brindeQuantidade > 1 ? ' — Brinde de boas-vindas (cadastro antecipado)' : ' — Brinde de boas-vindas';
+    itensParaPedido.push({ title: `${brindeProduto.nome}${sufixo}`, quantity: brindeQuantidade, unit_price: 0 });
+  }
+
+  const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
+  const subtotalCatalogo = itensValidados.reduce((sum, { produto, quantity }) => sum + produto.preco * quantity, 0);
+  let pesoTotalKg = itensValidados.reduce((sum, { produto, quantity }) => sum + ((produto.pesoGramas || 300) * quantity) / 1000, 0);
+  if (brindeProduto) pesoTotalKg += ((brindeProduto.pesoGramas || 400) * brindeQuantidade) / 1000;
+
+  const freteCalculado = await calcularFrete(cep, pesoTotalKg);
+  // Araraquara (confirmado na conversa, não só pelo DDD) tem frete grátis a
+  // partir de R$100 — mais generoso que a regra geral de SP (R$300).
+  const freteGratis = (araraquaraConfirmado && subtotalCatalogo >= 100)
+    || (subtotalCatalogo >= FRETE_GRATIS_ACIMA_DE && cepEhSP(cep));
+  const shippingCost = freteGratis ? 0 : freteCalculado.valor;
+  const shippingCarrier = freteCalculado.transportadora || null;
+  const shippingServiceId = freteCalculado.servicoId || null;
+  if (shippingCost > 0) line_items.push({ title: 'Frete', quantity: 1, unit_price: shippingCost, currency_id: 'BRL' });
+
+  const total = Number(line_items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0).toFixed(2));
+
+  const customer = { name: nome };
+  const telefoneE164 = telefoneParaE164(telefone);
+  if (telefoneE164) customer.phone_number = telefoneE164;
+
+  const orderNsu = crypto.randomUUID();
+  const itensParaPagamento = line_items.filter((i) => i.unit_price > 0);
+
+  const initPoint = await criarLinkPagamento({
+    items: itensParaPagamento,
+    customer,
+    address: { cep: String(cep || '').replace(/\D/g, ''), street: endereco, neighborhood: bairro, number: numero, complement: complemento || undefined },
+    orderNsu,
+    redirectUrl: `${SITE_URL}/sucesso.html`,
+    webhookUrl: `${BACKEND_URL}/webhook-infinitepay`
+  });
+
+  await pool.query(
+    `INSERT INTO orders
+      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
+     VALUES ($1,'pending',$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULL,NULL)`,
+    [
+      orderNsu, nome, telefone || null, cpfDigits, cep, endereco, numero, complemento || null,
+      bairro, cidade, estado, JSON.stringify(itensParaPedido),
+      shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
+      brindeQuantidade > 0
+    ]
+  );
+  console.log(`[whatsapp-ia] pedido criado — ${orderNsu} (${nome}, ${reais(total)})`);
+
+  return { link: initPoint, resumo: itensParaPedido, shippingCost, shippingCarrier, total };
+}
+
+// Usado pela ferramenta "consultar_pedido" da IA do WhatsApp — pega o pedido
+// mais recente desse telefone, sem precisar que o cliente informe o número.
+async function consultarPedidoPorTelefone(telefone) {
+  if (!pool) return { erro: 'Banco de dados não configurado.' };
+  // Compara só os últimos 11 dígitos — o checkout do site guarda o telefone
+  // como a pessoa digitou (sem "55" na frente), mas o WhatsApp sempre manda
+  // com "55"; comparação exata nunca bateria entre os dois canais.
+  const { rows } = await pool.query(
+    `SELECT id, status, items, total, tracking_code FROM orders
+     WHERE RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace($1, '\\D', '', 'g'), 11)
+     ORDER BY created_at DESC LIMIT 1`,
+    [telefone]
+  );
+  if (!rows[0]) return { encontrado: false };
+  const o = rows[0];
+  return {
+    encontrado: true,
+    numero: o.id,
+    status: o.status,
+    total: Number(o.total),
+    itens: o.items,
+    codigo_rastreio: o.tracking_code || null
+  };
+}
+
 // Layout compartilhado pelos painéis: mesma barra de navegação em todos,
 // pra dar pra pular entre pedidos, avaliações, métricas, GA e InfinitePay
 // sem digitar URL de novo.
@@ -2075,6 +2209,21 @@ async function processarFilaBoasVindasWhatsApp() {
     console.error('Erro ao processar fila de boas-vindas do WhatsApp:', err);
   }
 }
+
+// Liga a IA só pra quem manda mensagem primeiro (reativo) — nunca inicia
+// conversa sozinha. Sem ANTHROPIC_API_KEY, só ignora e fica em silêncio (as
+// mensagens automáticas de boas-vindas/confirmação continuam funcionando).
+definirHandlerMensagem(async (telefone, texto) => {
+  if (!process.env.ANTHROPIC_API_KEY) return;
+  try {
+    const resposta = await responderMensagem(telefone, texto, {
+      pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone
+    });
+    if (resposta) await enviarMensagemWhatsApp(telefone, resposta);
+  } catch (err) {
+    console.error(`[whatsapp-ia] falha ao responder ${telefone}:`, err.message);
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 initDb().finally(() => {
