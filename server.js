@@ -2247,6 +2247,7 @@ async function processarFilaBoasVindasWhatsApp() {
     );
     for (const lead of rows) {
       const telefone = telefoneParaE164(lead.phone);
+      let enviouComSucesso = false;
       if (telefone) {
         const primeiroNomeLead = String(lead.name || '').trim().split(' ')[0];
         const nomeFormatado = primeiroNomeLead ? `, ${primeiroNomeLead}` : '';
@@ -2254,13 +2255,19 @@ async function processarFilaBoasVindasWhatsApp() {
           const template = await buscarMensagemConfig('boas_vindas');
           await enviarMensagemWhatsApp(telefone, substituirPlaceholders(template, { nome: nomeFormatado }));
           console.log(`WhatsApp de boas-vindas enviado pro lead #${lead.id}.`);
+          enviouComSucesso = true;
         } catch (err) {
           console.error(`Falha ao enviar WhatsApp de boas-vindas pro lead #${lead.id}:`, err.message);
         }
       }
       // Marca como processado mesmo em falha — evita ficar tentando pro
-      // mesmo número a cada 30s pra sempre (ex.: telefone inválido).
-      await pool.query('UPDATE leads SET whatsapp_enviado = true WHERE id = $1', [lead.id]);
+      // mesmo número a cada 30s pra sempre (ex.: telefone inválido). Só
+      // marca "já entrei em contato" quando a mensagem saiu de verdade —
+      // é a IA/sistema contatando por conta própria, pedido do dono.
+      await pool.query(
+        `UPDATE leads SET whatsapp_enviado = true${enviouComSucesso ? ', contatado = true' : ''} WHERE id = $1`,
+        [lead.id]
+      );
     }
   } catch (err) {
     console.error('Erro ao processar fila de boas-vindas do WhatsApp:', err);
