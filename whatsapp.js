@@ -85,6 +85,15 @@ let authAtual = null;
 let qrAtual = null;
 let statusConexao = 'desconectado'; // desconectado | aguardando_qr | conectado
 let handlerMensagem = null;
+let tentativasSeguidas = 0;
+let ultimoMotivoQueda = null;
+// Depois de várias quedas seguidas sem nunca conectar, para de tentar sozinho
+// em vez de martelar o servidor do WhatsApp pra sempre — fica parado até
+// alguém mandar reconectar manualmente em /admin/whatsapp. Isso já aconteceu
+// de verdade (ver histórico): o número ficou derrubando a conexão a cada 5s
+// por um tempo longo sem nunca conseguir entrar, o que por si só já é um
+// padrão de uso que pode levantar suspeita de automação pro WhatsApp.
+const MAX_TENTATIVAS_SEGUIDAS = 8;
 
 // Registra quem trata uma mensagem recebida de verdade (ver server.js, que
 // liga isso na IA de atendimento) — mantém esse arquivo só como camada de
@@ -93,8 +102,9 @@ function definirHandlerMensagem(callback) {
   handlerMensagem = callback;
 }
 
-async function iniciarWhatsApp(pool) {
+async function iniciarWhatsApp(pool, { manual = false } = {}) {
   if (!pool) return;
+  if (manual) tentativasSeguidas = 0;
   const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = await carregarBaileys();
   authAtual = await usePostgresAuthState(pool);
   const { version } = await fetchLatestBaileysVersion();
@@ -134,15 +144,24 @@ async function iniciarWhatsApp(pool) {
     if (connection === 'open') {
       qrAtual = null;
       statusConexao = 'conectado';
+      tentativasSeguidas = 0;
       console.log('WhatsApp conectado.');
     }
     if (connection === 'close') {
       statusConexao = 'desconectado';
       const motivo = lastDisconnect?.error?.output?.statusCode;
+      const motivoTexto = lastDisconnect?.error?.message || motivo || 'desconhecido';
+      ultimoMotivoQueda = motivoTexto;
       if (motivo === DisconnectReason.loggedOut) {
+        tentativasSeguidas = 0;
         console.log('WhatsApp desconectado (logout) — escaneie o QR de novo em /admin/whatsapp.');
       } else {
-        console.log('WhatsApp caiu, reconectando em 5s...');
+        tentativasSeguidas++;
+        if (tentativasSeguidas > MAX_TENTATIVAS_SEGUIDAS) {
+          console.error(`[whatsapp] ${tentativasSeguidas} quedas seguidas (última: ${motivoTexto}) — parando de tentar sozinho. Reconecte manualmente em /admin/whatsapp.`);
+          return;
+        }
+        console.log(`WhatsApp caiu (motivo: ${motivoTexto}), reconectando em 5s... (tentativa ${tentativasSeguidas}/${MAX_TENTATIVAS_SEGUIDAS})`);
         setTimeout(() => iniciarWhatsApp(pool), 5000);
       }
     }
@@ -157,6 +176,7 @@ async function desconectarWhatsApp() {
   sock = null;
   qrAtual = null;
   statusConexao = 'desconectado';
+  tentativasSeguidas = 0;
 }
 
 async function enviarMensagemWhatsApp(telefoneE164, texto) {
@@ -188,5 +208,6 @@ module.exports = {
   mensagemConfirmacaoCompra,
   definirHandlerMensagem,
   getStatusConexao: () => statusConexao,
-  getQrAtual: () => qrAtual
+  getQrAtual: () => qrAtual,
+  getUltimoMotivoQueda: () => ultimoMotivoQueda
 };

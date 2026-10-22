@@ -14,7 +14,8 @@ const { agendarBackupDiario } = require('./backup');
 const {
   iniciarWhatsApp, desconectarWhatsApp, enviarMensagemWhatsApp,
   mensagemBoasVindasLead, mensagemConfirmacaoCompra, definirHandlerMensagem,
-  getStatusConexao: getStatusWhatsApp, getQrAtual: getQrAtualWhatsApp
+  getStatusConexao: getStatusWhatsApp, getQrAtual: getQrAtualWhatsApp,
+  getUltimoMotivoQueda: getUltimoMotivoQuedaWhatsApp
 } = require('./whatsapp');
 const { responderMensagem } = require('./whatsapp-ia');
 
@@ -2090,6 +2091,7 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
   const status = getStatusWhatsApp();
   const qr = getQrAtualWhatsApp();
   const qrImg = qr ? await QRCode.toDataURL(qr, { width: 280 }) : null;
+  const ultimoMotivo = getUltimoMotivoQuedaWhatsApp();
 
   const statusLabel = {
     conectado: '🟢 Conectado',
@@ -2102,6 +2104,7 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
     <p class="pedido-detalhe" style="margin-bottom:14px;">Conexão gratuita (não-oficial, tipo WhatsApp Web) usada pra mandar automaticamente a mensagem de boas-vindas (3 min depois do cadastro no popup) e a confirmação de compra aprovada. Use um número dedicado só pra isso, separado do número de atendimento — existe risco de bloqueio pelo WhatsApp por ser uma conexão não-oficial.</p>
     <div class="pedido-card" style="max-width:360px;">
       <div class="pedido-topo"><div class="pedido-cliente">Status: ${statusLabel}</div></div>
+      ${status === 'desconectado' && ultimoMotivo ? `<div class="pedido-detalhe" style="margin-top:4px;color:#8a5a3b;">Último motivo da queda: ${escapeHtml(String(ultimoMotivo))}</div>` : ''}
       ${qrImg ? `
         <div style="text-align:center;margin:16px 0;">
           <img src="${qrImg}" alt="QR code do WhatsApp" style="width:100%;max-width:280px;border-radius:8px;">
@@ -2128,7 +2131,7 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
 // boot do servidor falhar (ex.: soluço de rede), sem precisar escanear o QR
 // de novo se já tinha uma sessão válida.
 app.post('/admin/whatsapp/conectar', requireAdmin, asyncHandler(async (req, res) => {
-  if (pool) iniciarWhatsApp(pool).catch((err) => console.error('Erro ao conectar WhatsApp:', err));
+  if (pool) iniciarWhatsApp(pool, { manual: true }).catch((err) => console.error('Erro ao conectar WhatsApp:', err));
   res.redirect('/admin/whatsapp');
 }));
 
@@ -2137,7 +2140,7 @@ app.post('/admin/whatsapp/conectar', requireAdmin, asyncHandler(async (req, res)
 app.post('/admin/whatsapp/desconectar', requireAdmin, asyncHandler(async (req, res) => {
   await desconectarWhatsApp();
   logAdminAcao(req, 'whatsapp_desconectado', '');
-  if (pool) iniciarWhatsApp(pool).catch((err) => console.error('Erro ao reiniciar WhatsApp:', err));
+  if (pool) iniciarWhatsApp(pool, { manual: true }).catch((err) => console.error('Erro ao reiniciar WhatsApp:', err));
   res.redirect('/admin/whatsapp');
 }));
 
