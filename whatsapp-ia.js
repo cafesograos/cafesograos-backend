@@ -48,6 +48,17 @@ const TOOLS = [
       },
       required: ['nome', 'cpf', 'cep', 'endereco', 'numero', 'bairro', 'cidade', 'estado', 'itens']
     }
+  },
+  {
+    name: 'escalar_atendimento',
+    description: 'Avisa um humano da equipe que essa conversa precisa de atenção (algo fora do que você consegue resolver sozinha: reclamação, troca, problema que consultar_pedido não explica, etc.). Chame isso toda vez que disser que "alguém da equipe vai dar continuidade".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        motivo: { type: 'string', description: 'Resumo curto do que o cliente precisa, pro humano entender rápido ao abrir a conversa.' }
+      },
+      required: ['motivo']
+    }
   }
 ];
 
@@ -75,9 +86,11 @@ DESCONTO: não ofereça nenhum desconto. Trabalhe só com o preço de tabela aci
 
 FECHAMENTO: pra gerar o link de pagamento você precisa, antes de chamar a ferramenta criar_pedido: nome completo, CPF, endereço completo (CEP, rua, número, bairro, cidade, estado) e os itens/quantidades escolhidos. Peça esses dados de forma natural, não como formulário. Nunca invente nenhum desses dados.
 
-TOM: respostas curtas (é WhatsApp, não e-mail), simpática, direta, em português do Brasil. Sem emoji em excesso.
+TOM: respostas curtas (é WhatsApp, não e-mail), simpática, direta, em português do Brasil. Sem emoji em excesso. Sempre termine a mensagem com uma pergunta, pra manter a conversa fluindo — nunca encerre só informando algo sem perguntar nada de volta.
 
-LIMITES: se o cliente perguntar algo fora disso (reclamação, troca, problema com pedido que você não consegue resolver com a ferramenta consultar_pedido), diga que alguém da equipe vai dar continuidade — não invente política nem prometa prazo que você não sabe.`;
+ABORDAGEM: seja consultiva, não insistente. Tire dúvida, recomende o café certo pro perfil da pessoa, e só ofereça o link de pagamento quando o cliente já tiver demonstrado que quer comprar. Nunca empurre a venda sem o cliente sinalizar interesse.
+
+LIMITES: se o cliente perguntar algo fora disso (reclamação, troca, problema com pedido que você não consegue resolver com a ferramenta consultar_pedido), diga que alguém da equipe vai dar continuidade e chame a ferramenta escalar_atendimento — não invente política nem prometa prazo que você não sabe.`;
 }
 
 async function carregarHistorico(pool, telefone) {
@@ -96,7 +109,7 @@ async function salvarMensagem(pool, telefone, role, content) {
 }
 
 async function responderMensagem(telefone, textoCliente, deps) {
-  const { pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone } = deps;
+  const { pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento } = deps;
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
 
   await salvarMensagem(pool, telefone, 'user', textoCliente);
@@ -128,6 +141,9 @@ async function responderMensagem(telefone, textoCliente, deps) {
           resultado = await consultarPedidoPorTelefone(telefone);
         } else if (block.name === 'criar_pedido') {
           resultado = await criarPedidoViaAtendimento({ ...block.input, telefone });
+        } else if (block.name === 'escalar_atendimento') {
+          await escalarAtendimento(telefone, block.input?.motivo || '');
+          resultado = { ok: true };
         } else {
           resultado = { erro: 'Ferramenta desconhecida.' };
         }

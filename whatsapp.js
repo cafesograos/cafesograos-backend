@@ -189,15 +189,16 @@ async function enviarMensagemWhatsApp(telefoneE164, texto) {
   await sock.sendMessage(jid, { text: texto });
 }
 
-// Textos ainda provisórios — já avisado que vamos personalizar depois.
+// Toda mensagem termina com uma pergunta de propósito (pedido do dono) — pra
+// puxar resposta e manter a conversa fluindo em vez de ficar só informativa.
 function mensagemBoasVindasLead(primeiroNome) {
   const nome = primeiroNome ? `, ${primeiroNome}` : '';
-  return `Oi${nome}! 👋 Aqui é da Café Só Grãos.\n\nVimos que você se cadastrou no nosso site — seu brinde em dobro (2 Drip Coffee grátis) já está garantido na sua primeira compra! 🎁☕\n\nSe quiser, posso te ajudar a escolher o café ideal e já te passo o link pra finalizar o pedido. Qualquer dúvida, é só chamar aqui!`;
+  return `Oi${nome}! 👋 Aqui é o Alberto, do Café Só Grãos.\n\nVimos que você se cadastrou no nosso site — seu brinde em dobro (2 Drip Coffee grátis) já está garantido na sua primeira compra! 🎁☕\n\nQuer que eu te ajude a escolher o café ideal pro seu gosto?`;
 }
 
 function mensagemConfirmacaoCompra(order) {
   const nome = order?.customer_name ? `, ${String(order.customer_name).trim().split(' ')[0]}` : '';
-  return `Oi${nome}! Seu pedido #${order.id} na Café Só Grãos foi confirmado. ☕✅\n\nJá está sendo preparado e vamos despachar no próximo dia útil. Assim que sair pra entrega, te mandamos o código de rastreio por aqui também. Obrigado pela compra!`;
+  return `Oi${nome}! Seu pedido #${order.id} na Café Só Grãos foi confirmado. ☕✅\n\nJá está sendo preparado e vamos despachar no próximo dia útil. Assim que sair pra entrega, te mandamos o código de rastreio por aqui também. Ficou alguma dúvida sobre o pedido?`;
 }
 
 module.exports = {

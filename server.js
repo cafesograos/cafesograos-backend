@@ -2213,6 +2213,22 @@ async function processarFilaBoasVindasWhatsApp() {
   }
 }
 
+// Número pessoal do Alberto — já é o mesmo número público usado em todo o
+// site (e-mails, link "Falar no WhatsApp"), não é segredo nenhum.
+const OWNER_WHATSAPP_NUMBER = '5516997616459';
+
+// Avisa o dono pelo WhatsApp quando a IA de atendimento não consegue
+// resolver algo sozinha, pra ele saber que precisa entrar na conversa sem
+// precisar ficar checando o celular dedicado de tempos em tempos.
+async function escalarAtendimento(telefoneCliente, motivo) {
+  const texto = `⚠️ Um cliente no WhatsApp da loja precisa de você.\n\nTelefone: +${telefoneCliente}\nMotivo: ${motivo || 'não especificado'}`;
+  try {
+    await enviarMensagemWhatsApp(OWNER_WHATSAPP_NUMBER, texto);
+  } catch (err) {
+    console.error('[whatsapp-ia] falha ao avisar o dono sobre escalação:', err.message);
+  }
+}
+
 // Liga a IA só pra quem manda mensagem primeiro (reativo) — nunca inicia
 // conversa sozinha. Sem ANTHROPIC_API_KEY, só ignora e fica em silêncio (as
 // mensagens automáticas de boas-vindas/confirmação continuam funcionando).
@@ -2220,7 +2236,7 @@ definirHandlerMensagem(async (telefone, texto) => {
   if (!process.env.ANTHROPIC_API_KEY) return;
   try {
     const resposta = await responderMensagem(telefone, texto, {
-      pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone
+      pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento
     });
     if (resposta) await enviarMensagemWhatsApp(telefone, resposta);
   } catch (err) {
