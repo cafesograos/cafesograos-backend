@@ -82,6 +82,9 @@ async function initDb() {
     );
   `);
   await pool.query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS product_line TEXT;`);
+  // Comentário deixou de ser obrigatório — quem só quer deixar a nota (estrelas)
+  // sem escrever nada também pode avaliar.
+  await pool.query(`ALTER TABLE reviews ALTER COLUMN comment DROP NOT NULL;`);
 
   // Cupom de 5% gerado após a primeira compra aprovada, válido por 30 dias,
   // aplicado automaticamente pelo e-mail do cliente na próxima compra.

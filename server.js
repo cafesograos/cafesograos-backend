@@ -1882,13 +1882,13 @@ app.post('/api/avaliacoes', formularioLimiter, async (req, res) => {
     const comentario = String(req.body?.comentario || '').trim().slice(0, 600);
     const produto = String(req.body?.produto || '').trim();
 
-    if (!nome || !comentario || !(nota >= 1 && nota <= 5) || !LINHAS_PRODUTO.includes(produto)) {
-      return res.status(400).json({ error: 'Preencha nome, nota (1 a 5), qual produto comprou e o comentário.' });
+    if (!nome || !(nota >= 1 && nota <= 5) || !LINHAS_PRODUTO.includes(produto)) {
+      return res.status(400).json({ error: 'Preencha nome, nota (1 a 5) e qual produto comprou.' });
     }
 
     await pool.query(
       'INSERT INTO reviews (customer_name, rating, comment, product_line) VALUES ($1, $2, $3, $4)',
-      [nome, nota, comentario, produto]
+      [nome, nota, comentario || null, produto]
     );
     res.json({ ok: true, message: 'Recebemos sua avaliação! Ela vai aparecer no site assim que for revisada.' });
   } catch (err) {
@@ -1941,7 +1941,7 @@ app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
         </div>
         <div class="pedido-total" style="color:#D66B3E;">${estrelas(r.rating)}</div>
       </div>
-      <div class="pedido-itens">"${escapeHtml(r.comment)}"</div>
+      <div class="pedido-itens">${r.comment ? `"${escapeHtml(r.comment)}"` : '<em>(sem comentário)</em>'}</div>
       <div class="pedido-acoes">
         ${r.status !== 'approved' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/aprovar"><button type="submit" class="btn-mini btn-mini-primary">Aprovar</button></form>` : ''}
         ${r.status !== 'rejected' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/rejeitar"><button type="submit" class="btn-mini btn-mini-danger">Rejeitar</button></form>` : ''}
