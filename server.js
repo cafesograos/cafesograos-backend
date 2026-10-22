@@ -13,7 +13,7 @@ const { CATEGORIES, PRODUCTS } = require('./products');
 const { agendarBackupDiario } = require('./backup');
 const {
   iniciarWhatsApp, desconectarWhatsApp, enviarMensagemWhatsApp,
-  mensagemBoasVindasLead, mensagemConfirmacaoCompra, definirHandlerMensagem,
+  definirHandlerMensagem,
   getStatusConexao: getStatusWhatsApp, getQrAtual: getQrAtualWhatsApp,
   getUltimoMotivoQueda: getUltimoMotivoQuedaWhatsApp
 } = require('./whatsapp');
@@ -590,7 +590,11 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
     // nunca impede o pedido de ser aprovado.
     try {
       const telefoneOrder = telefoneParaE164(order.customer_phone);
-      if (telefoneOrder) await enviarMensagemWhatsApp(telefoneOrder, mensagemConfirmacaoCompra(order));
+      if (telefoneOrder) {
+        const primeiroNomeOrder = order.customer_name ? `, ${String(order.customer_name).trim().split(' ')[0]}` : '';
+        const template = await buscarMensagemConfig('confirmacao_compra');
+        await enviarMensagemWhatsApp(telefoneOrder, substituirPlaceholders(template, { nome: primeiroNomeOrder, pedido: order.id }));
+      }
     } catch (err) {
       console.error(`Falha ao enviar WhatsApp de confirmação (pedido #${order.id}):`, err.message);
     }
@@ -1295,6 +1299,23 @@ async function consultarPedidoPorTelefone(telefone) {
     itens: o.items,
     codigo_rastreio: o.tracking_code || null
   };
+}
+
+// Textos das mensagens automáticas do WhatsApp, editáveis em /admin/whatsapp
+// sem precisar mexer em código — db.js já garante que as duas chaves
+// existem com um texto padrão (ON CONFLICT DO NOTHING no boot).
+async function buscarMensagemConfig(chave) {
+  if (!pool) return '';
+  const { rows } = await pool.query('SELECT texto FROM mensagens_config WHERE chave = $1', [chave]);
+  return rows[0]?.texto || '';
+}
+
+function substituirPlaceholders(texto, vars) {
+  let resultado = texto;
+  for (const [chave, valor] of Object.entries(vars)) {
+    resultado = resultado.split(`{${chave}}`).join(valor);
+  }
+  return resultado;
 }
 
 // Layout compartilhado pelos painéis: mesma barra de navegação em todos,
@@ -2092,6 +2113,8 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
   const qr = getQrAtualWhatsApp();
   const qrImg = qr ? await QRCode.toDataURL(qr, { width: 280 }) : null;
   const ultimoMotivo = getUltimoMotivoQuedaWhatsApp();
+  const msgBoasVindas = await buscarMensagemConfig('boas_vindas');
+  const msgConfirmacao = await buscarMensagemConfig('confirmacao_compra');
 
   const statusLabel = {
     conectado: '🟢 Conectado',
@@ -2123,8 +2146,37 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
         </form>
       ` : ''}
     </div>
+
+    <h2 style="margin-top:28px;">Mensagens automáticas</h2>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">Edite o texto livremente. Placeholders disponíveis: <code>{nome}</code> (já vem com ", " na frente, ex: ", Maria") e, só na confirmação de compra, <code>{pedido}</code> (número do pedido).</p>
+    <form method="POST" action="/admin/whatsapp/mensagens" class="pedido-card" style="max-width:480px;display:block;">
+      <label style="display:block;font-weight:700;margin-bottom:6px;">Boas-vindas (3 min após cadastro no popup)</label>
+      <textarea name="boas_vindas" rows="6" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;">${escapeHtml(msgBoasVindas)}</textarea>
+
+      <label style="display:block;font-weight:700;margin-bottom:6px;">Confirmação de compra (pagamento aprovado)</label>
+      <textarea name="confirmacao_compra" rows="6" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;">${escapeHtml(msgConfirmacao)}</textarea>
+
+      <button type="submit" class="btn-mini btn-mini-primary">Salvar mensagens</button>
+    </form>
   `;
   res.send(adminLayout({ title: 'WhatsApp', ativo: 'whatsapp', body }));
+}));
+
+// Salva o texto das mensagens automáticas — editável pelo dono sem precisar
+// mexer em código.
+app.post('/admin/whatsapp/mensagens', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const boasVindas = String(req.body?.boas_vindas || '').trim().slice(0, 1000);
+  const confirmacao = String(req.body?.confirmacao_compra || '').trim().slice(0, 1000);
+  if (!boasVindas || !confirmacao) return res.status(400).send('Preencha as duas mensagens.');
+
+  await pool.query(
+    `INSERT INTO mensagens_config (chave, texto) VALUES ('boas_vindas', $1), ('confirmacao_compra', $2)
+     ON CONFLICT (chave) DO UPDATE SET texto = EXCLUDED.texto`,
+    [boasVindas, confirmacao]
+  );
+  logAdminAcao(req, 'mensagens_whatsapp_atualizadas', '');
+  res.redirect('/admin/whatsapp');
 }));
 
 // Reconecta sem apagar a sessão salva — pra quando a tentativa automática no
@@ -2196,9 +2248,11 @@ async function processarFilaBoasVindasWhatsApp() {
     for (const lead of rows) {
       const telefone = telefoneParaE164(lead.phone);
       if (telefone) {
-        const primeiroNome = String(lead.name || '').trim().split(' ')[0] || '';
+        const primeiroNomeLead = String(lead.name || '').trim().split(' ')[0];
+        const nomeFormatado = primeiroNomeLead ? `, ${primeiroNomeLead}` : '';
         try {
-          await enviarMensagemWhatsApp(telefone, mensagemBoasVindasLead(primeiroNome));
+          const template = await buscarMensagemConfig('boas_vindas');
+          await enviarMensagemWhatsApp(telefone, substituirPlaceholders(template, { nome: nomeFormatado }));
           console.log(`WhatsApp de boas-vindas enviado pro lead #${lead.id}.`);
         } catch (err) {
           console.error(`Falha ao enviar WhatsApp de boas-vindas pro lead #${lead.id}:`, err.message);

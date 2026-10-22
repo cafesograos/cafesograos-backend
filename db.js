@@ -152,6 +152,23 @@ async function initDb() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_mensagens_phone ON whatsapp_mensagens (phone, created_at);`);
 
+  // Textos das mensagens automáticas do WhatsApp (boas-vindas, confirmação
+  // de compra), editáveis pelo dono direto no painel admin — sem precisar
+  // mexer em código pra ajustar uma palavra. Placeholders tipo {nome} são
+  // substituídos na hora de enviar.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mensagens_config (
+      chave TEXT PRIMARY KEY,
+      texto TEXT NOT NULL
+    );
+  `);
+  await pool.query(
+    `INSERT INTO mensagens_config (chave, texto) VALUES
+      ('boas_vindas', 'Oi{nome}! 👋 Aqui é o Alberto, do Café Só Grãos.\n\nVimos que você se cadastrou no nosso site — seu brinde em dobro (2 Drip Coffee grátis) já está garantido na sua primeira compra! 🎁☕\n\nQuer que eu te ajude a escolher o café ideal pro seu gosto?'),
+      ('confirmacao_compra', 'Oi{nome}! Seu pedido #{pedido} na Café Só Grãos foi confirmado. ☕✅\n\nJá está sendo preparado e vamos despachar no próximo dia útil. Assim que sair pra entrega, te mandamos o código de rastreio por aqui também. Ficou alguma dúvida sobre o pedido?')
+    ON CONFLICT (chave) DO NOTHING`
+  );
+
   // Sem esses índices, cada checkout novo (checagem de primeira compra) e
   // cada carregamento do painel admin fazem varredura completa da tabela de
   // pedidos — hoje ainda rápido pelo volume baixo, mas silenciosamente mais
