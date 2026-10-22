@@ -122,13 +122,21 @@ async function iniciarWhatsApp(pool, { manual = false } = {}) {
   // em sincronizações de histórico (ex.: logo depois de conectar) — sem esse
   // filtro, a IA responderia mensagens antigas toda vez que reconectasse.
   sock.ev.on('messages.upsert', ({ messages, type }) => {
+    console.log(`[whatsapp] messages.upsert recebido — type: ${type}, qtd: ${messages?.length}, handler definido: ${!!handlerMensagem}`);
     if (type !== 'notify' || !handlerMensagem) return;
     for (const msg of messages) {
-      if (msg.key.fromMe || msg.key.remoteJid?.endsWith('@g.us')) continue;
+      if (msg.key.fromMe || msg.key.remoteJid?.endsWith('@g.us')) {
+        console.log('[whatsapp] mensagem ignorada (fromMe ou grupo).');
+        continue;
+      }
       const texto = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-      if (!texto) continue;
+      if (!texto) {
+        console.log('[whatsapp] mensagem ignorada (sem texto reconhecido, tipo:', Object.keys(msg.message || {}), ').');
+        continue;
+      }
       const telefone = msg.key.remoteJid?.split('@')[0];
       if (!telefone) continue;
+      console.log(`[whatsapp] processando mensagem de ${telefone}: "${texto.slice(0, 60)}"`);
       Promise.resolve(handlerMensagem(telefone, texto)).catch((err) => {
         console.error('[whatsapp] erro ao processar mensagem recebida:', err.message);
       });

@@ -2294,11 +2294,16 @@ async function escalarAtendimento(telefoneCliente, motivo) {
 // conversa sozinha. Sem ANTHROPIC_API_KEY, só ignora e fica em silêncio (as
 // mensagens automáticas de boas-vindas/confirmação continuam funcionando).
 definirHandlerMensagem(async (telefone, texto) => {
-  if (!process.env.ANTHROPIC_API_KEY) return;
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.log(`[whatsapp-ia] ANTHROPIC_API_KEY não definida — ignorando mensagem de ${telefone}.`);
+    return;
+  }
+  console.log(`[whatsapp-ia] gerando resposta pra ${telefone}...`);
   try {
     const resposta = await responderMensagem(telefone, texto, {
       pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento
     });
+    console.log(`[whatsapp-ia] resposta gerada pra ${telefone}: "${(resposta || '').slice(0, 80)}"`);
     if (resposta) await enviarMensagemWhatsApp(telefone, resposta);
   } catch (err) {
     console.error(`[whatsapp-ia] falha ao responder ${telefone}:`, err.message);
