@@ -102,19 +102,35 @@ function definirHandlerMensagem(callback) {
   handlerMensagem = callback;
 }
 
-async function iniciarWhatsApp(pool, { manual = false } = {}) {
-  if (!pool) return;
-  if (manual) tentativasSeguidas = 0;
-  const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = await carregarBaileys();
-  authAtual = await usePostgresAuthState(pool);
-  const { version } = await fetchLatestBaileysVersion();
+// Sem essa trava, duas chamadas simultâneas (ex.: alguém clicando "Tentar
+// conectar" enquanto uma reconexão automática já estava em andamento) criam
+// dois sockets ao mesmo tempo disputando a mesma sessão — o WhatsApp detecta
+// isso como "conflict" e derruba os dois várias vezes por segundo, sem nunca
+// estabilizar. Já aconteceu de verdade (ver histórico).
+let conectando = false;
 
-  sock = makeWASocket({
-    version,
-    auth: authAtual.state,
-    logger: loggerMudo(),
-    printQRInTerminal: false
-  });
+async function iniciarWhatsApp(pool, { manual = false } = {}) {
+  if (!pool || conectando) return;
+  conectando = true;
+  try {
+    if (manual) tentativasSeguidas = 0;
+    const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = await carregarBaileys();
+    authAtual = await usePostgresAuthState(pool);
+    const { version } = await fetchLatestBaileysVersion();
+
+    // Socket anterior (se sobrou algum de uma tentativa concorrente) não
+    // deve continuar ouvindo eventos depois que um novo assume — sem isso,
+    // os dois ficam processando connection.update ao mesmo tempo.
+    if (sock) {
+      try { sock.ev.removeAllListeners(); } catch (_) { /* já pode estar morto */ }
+    }
+
+    sock = makeWASocket({
+      version,
+      auth: authAtual.state,
+      logger: loggerMudo(),
+      printQRInTerminal: false
+    });
 
   sock.ev.on('creds.update', authAtual.saveCreds);
 
@@ -192,6 +208,9 @@ async function iniciarWhatsApp(pool, { manual = false } = {}) {
       }
     }
   });
+  } finally {
+    conectando = false;
+  }
 }
 
 async function desconectarWhatsApp() {
