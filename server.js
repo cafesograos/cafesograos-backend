@@ -2304,7 +2304,13 @@ definirHandlerMensagem(async (telefone, texto) => {
       pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento
     });
     console.log(`[whatsapp-ia] resposta gerada pra ${telefone}: "${(resposta || '').slice(0, 80)}"`);
-    if (resposta) await enviarMensagemWhatsApp(telefone, resposta);
+    if (resposta) {
+      // Espera de 30s a 1min antes de enviar, pra não parecer resposta
+      // instantânea de robô — dá a sensação de alguém de verdade digitando.
+      const esperaMs = 30000 + Math.floor(Math.random() * 30000);
+      await new Promise((resolve) => setTimeout(resolve, esperaMs));
+      await enviarMensagemWhatsApp(telefone, resposta);
+    }
   } catch (err) {
     console.error(`[whatsapp-ia] falha ao responder ${telefone}:`, err.message);
   }
