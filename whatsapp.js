@@ -144,10 +144,11 @@ async function iniciarWhatsApp(pool, { manual = false } = {}) {
         console.log('[whatsapp] mensagem ignorada (sem texto reconhecido, tipo:', Object.keys(msg.message || {}), ').');
         continue;
       }
-      const telefone = msg.key.remoteJid?.split('@')[0];
+      const jidOriginal = msg.key.remoteJid;
+      const telefone = jidOriginal?.split('@')[0];
       if (!telefone) continue;
       console.log(`[whatsapp] processando mensagem de ${telefone}: "${texto.slice(0, 60)}"`);
-      Promise.resolve(handlerMensagem(telefone, texto)).catch((err) => {
+      Promise.resolve(handlerMensagem(telefone, texto, jidOriginal)).catch((err) => {
         console.error('[whatsapp] erro ao processar mensagem recebida:', err.message);
       });
     }
@@ -197,13 +198,24 @@ async function desconectarWhatsApp() {
   tentativasSeguidas = 0;
 }
 
-async function enviarMensagemWhatsApp(telefoneE164, texto) {
+async function enviarMensagemWhatsApp(telefoneOuJid, texto) {
   if (!sock || statusConexao !== 'conectado') {
     throw new Error('WhatsApp não conectado. Escaneie o QR em /admin/whatsapp.');
   }
-  const numero = String(telefoneE164 || '').replace(/\D/g, '');
-  if (!numero) throw new Error('Telefone inválido.');
-  const jid = `${numero}@s.whatsapp.net`;
+  const valor = String(telefoneOuJid || '');
+  // Alguns contatos (sem o número salvo na agenda de quem está falando com
+  // eles) aparecem com JID "@lid" em vez de "@s.whatsapp.net" — reconstruir
+  // sempre como @s.whatsapp.net manda a mensagem pra um número que não existe.
+  // Se já vier um JID completo (com "@"), usa ele direto; senão, monta a
+  // partir do número puro como antes.
+  let jid;
+  if (valor.includes('@')) {
+    jid = valor;
+  } else {
+    const numero = valor.replace(/\D/g, '');
+    if (!numero) throw new Error('Telefone inválido.');
+    jid = `${numero}@s.whatsapp.net`;
+  }
   await sock.sendMessage(jid, { text: texto });
 }
 

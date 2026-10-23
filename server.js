@@ -2293,7 +2293,7 @@ async function escalarAtendimento(telefoneCliente, motivo) {
 // Liga a IA só pra quem manda mensagem primeiro (reativo) — nunca inicia
 // conversa sozinha. Sem ANTHROPIC_API_KEY, só ignora e fica em silêncio (as
 // mensagens automáticas de boas-vindas/confirmação continuam funcionando).
-definirHandlerMensagem(async (telefone, texto) => {
+definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   if (!process.env.ANTHROPIC_API_KEY) {
     console.log(`[whatsapp-ia] ANTHROPIC_API_KEY não definida — ignorando mensagem de ${telefone}.`);
     return;
@@ -2309,7 +2309,10 @@ definirHandlerMensagem(async (telefone, texto) => {
       // instantânea de robô — dá a sensação de alguém de verdade digitando.
       const esperaMs = 30000 + Math.floor(Math.random() * 30000);
       await new Promise((resolve) => setTimeout(resolve, esperaMs));
-      await enviarMensagemWhatsApp(telefone, resposta);
+      // Responde pro JID exato que mandou a mensagem (pode ser "@lid", não
+      // necessariamente "@s.whatsapp.net") — ver nota em enviarMensagemWhatsApp.
+      await enviarMensagemWhatsApp(jidOriginal || telefone, resposta);
+      console.log(`[whatsapp-ia] resposta enviada pra ${jidOriginal || telefone}.`);
     }
   } catch (err) {
     console.error(`[whatsapp-ia] falha ao responder ${telefone}:`, err.message);
