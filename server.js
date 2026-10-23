@@ -923,10 +923,28 @@ app.get('/vendedor/logout', (req, res) => {
   res.redirect('/vendedor/login');
 });
 
-function vendedorLayout(body) {
+// Painel do João dá acesso a pedidos (sem valor em dinheiro nenhum — só o
+// dono vê preço/total/frete), emissão de etiqueta da Melhor Envio, avaliações
+// e contatos. Reaproveita a sessão/login já existentes do vendedor (o
+// comentário acima já é sobre o João) só acrescentando mais telas.
+const VENDEDOR_NAV = [
+  { id: 'novo-pedido', label: 'Novo pedido', href: '/vendedor/novo-pedido' },
+  { id: 'pedidos', label: 'Pedidos', href: '/vendedor/pedidos' },
+  { id: 'avaliacoes', label: 'Avaliações', href: '/vendedor/avaliacoes' },
+  { id: 'leads', label: 'Contatos', href: '/vendedor/contatos' },
+  // Reembolso em si é feito direto no painel da InfinitePay (não é algo que
+  // o nosso sistema processa) — o link só leva pra lá, não mostra valor.
+  { id: 'ip', label: 'InfinitePay ↗', href: 'https://app.infinitepay.io/', external: true },
+  { id: 'sair', label: 'Sair', href: '/vendedor/logout' }
+];
+
+function vendedorLayout({ title, ativo, body }) {
+  const navHtml = VENDEDOR_NAV.map((item) => `
+    <a href="${item.href}" ${item.external ? 'target="_blank" rel="noopener noreferrer"' : ''} class="${item.id === ativo ? 'ativo' : ''}">${item.label}</a>
+  `).join('');
   return `
     <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Novo pedido - Café Só Grãos</title>
+    <title>${escapeHtml(title)} - Café Só Grãos</title>
     <link rel="icon" href="/favicon.ico" sizes="any">
     <link href="https://api.fontshare.com/v2/css?f[]=tanker@400&f[]=general-sans@400,500,700&display=swap" rel="stylesheet">
     <meta name="theme-color" content="#211714">
@@ -936,11 +954,17 @@ function vendedorLayout(body) {
         font-family: 'General Sans', -apple-system, BlinkMacSystemFont, sans-serif;
         margin: 0; background: #F7F5F4; color: #211714; -webkit-font-smoothing: antialiased;
       }
+      a { color: #D66B3E; text-decoration: none; }
       .topo {
         position: sticky; top: 0; z-index: 10; background: #211714; color: #fff;
-        padding: 14px 16px; display: flex; align-items: center; justify-content: space-between;
+        padding: 10px 12px; display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch;
       }
-      .topo a { color: rgba(255,255,255,.75); font-size: 13px; font-weight: 600; text-decoration: none; }
+      .topo a {
+        color: rgba(255,255,255,.65); font-size: 13px; font-weight: 600; text-decoration: none;
+        padding: 8px 14px; border-radius: 999px; white-space: nowrap; transition: background .15s, color .15s;
+      }
+      .topo a:hover { background: rgba(255,255,255,.08); color: #fff; }
+      .topo a.ativo { background: #D66B3E; color: #fff; }
       .corpo { padding: 16px; max-width: 640px; margin: 0 auto; }
       h1 { margin: 4px 0 20px; font-size: 22px; font-family: 'Tanker', sans-serif; color: #211714; font-weight: 400; }
       section { background: #fff; border-radius: 14px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
@@ -961,9 +985,53 @@ function vendedorLayout(body) {
       .link-gerado { width: 100%; padding: 12px; border: 1px solid #B8E0C4; border-radius: 8px; font-size: 13px; font-family: inherit; background: #fff; margin-top: 8px; }
       .resumo-linha { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 0; }
       .resumo-linha.total { font-weight: 700; font-size: 16px; border-top: 1px solid #F0E9E2; margin-top: 6px; padding-top: 10px; }
+
+      /* Listas de pedidos/avaliações/contatos — mesmo visual do painel admin. */
+      .filtros { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+      .filtros a {
+        font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 999px;
+        background: #fff; color: #5a4a3f; box-shadow: 0 1px 3px rgba(33,23,20,.08);
+      }
+      .filtros a:hover { text-decoration: none; background: #F0E9E2; }
+      .filtros a.ativo { background: #211714; color: #fff; }
+      .lista-vazia { text-align: center; color: #8a6f5c; padding: 32px 16px; background: #fff; border-radius: 12px; font-size: 14px; }
+      .pedido-lista, .avaliacao-lista { display: flex; flex-direction: column; gap: 12px; }
+      .pedido-card, .avaliacao-card-admin { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
+      .pedido-topo { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
+      .pedido-cliente { font-weight: 700; font-size: 15px; margin-top: 6px; }
+      .pedido-data { font-size: 12px; color: #8a6f5c; }
+      .pedido-total { font-size: 18px; font-weight: 700; white-space: nowrap; }
+      .pedido-selos { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+      .selo { font-size: 11px; background: #FDF0DD; color: #8a5a1f; padding: 4px 10px; border-radius: 999px; font-weight: 700; }
+      .pedido-detalhe { font-size: 13px; color: #5a4a3f; line-height: 1.5; }
+      .pedido-detalhe strong { color: #211714; }
+      .pedido-itens { font-size: 13px; color: #5a4a3f; margin: 10px 0; padding: 10px 12px; background: #FAF6F0; border-radius: 8px; }
+      .pedido-linhas { display: flex; justify-content: space-between; font-size: 13px; color: #5a4a3f; }
+      .pedido-entrada { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #FAF6F0; border: 1px solid #F0E9E2; }
+      .pedido-entrada.marcada { background: #DEF3E5; border-color: #B8E0C4; }
+      .pedido-entrada label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: #5a4a3f; cursor: pointer; }
+      .pedido-entrada.marcada label { color: #1F8A4C; }
+      .pedido-entrada input[type=checkbox] { width: 18px; height: 18px; cursor: pointer; accent-color: #1F8A4C; }
+      .pedido-acoes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #F0E9E2; }
+      .pedido-acoes form { display: flex; gap: 6px; flex: 1; min-width: 220px; }
+      .pedido-acoes input[type=text] { flex: 1; min-width: 0; }
+      .btn-mini { padding: 10px 16px; border-radius: 8px; border: none; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; font-family: inherit; }
+      .btn-mini-primary { background: #211714; color: #fff; }
+      .btn-mini-danger { background: #fff; color: #C53030; border: 1px solid #F3C7C7; }
+      input[type=text] { padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; font-family: inherit; }
+      .badge { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 4px 10px; border-radius: 999px; }
+      .badge-pending { background: #FDF0DD; color: #B7791F; }
+      .badge-approved { background: #DEF3E5; color: #1F8A4C; }
+      .badge-rejected { background: #FBE2E2; color: #C53030; }
+      .badge-in_process { background: #E4E9FB; color: #3651C7; }
+      .badge-cancelled, .badge-refunded { background: #EDEAE6; color: #6B5B4F; }
+      .aviso-frete { padding: 10px 14px; border-radius: 8px; font-size: 14px; margin-bottom: 14px; }
+      .aviso-frete-ok { background: #EAF4E9; color: #2E5C31; }
+      .aviso-frete-erro { background: #FBE2E2; color: #C53030; }
+      @media (max-width: 480px) { .pedido-acoes form { min-width: 100%; } }
     </style>
     </head><body>
-    <div class="topo"><strong>Novo pedido</strong><a href="/vendedor/logout">Sair</a></div>
+    <nav class="topo">${navHtml}</nav>
     <div class="corpo">${body}</div>
     <script src="/admin.js" defer></script>
     </body></html>
@@ -986,7 +1054,7 @@ function novoPedidoForm({ erro } = {}) {
     </div>
   `).join('');
 
-  return vendedorLayout(`
+  return vendedorLayout({ title: 'Novo pedido', ativo: 'novo-pedido', body: `
     <h1>Montar pedido pro cliente</h1>
     ${erro ? `<p class="erro">${escapeHtml(erro)}</p>` : ''}
     <form method="POST" action="/vendedor/novo-pedido" id="formNovoPedido">
@@ -1030,7 +1098,7 @@ function novoPedidoForm({ erro } = {}) {
 
       <button type="submit" class="btn">Gerar link de pagamento</button>
     </form>
-  `);
+  ` });
 }
 
 app.get('/vendedor/novo-pedido', requireVendedor, (req, res) => {
@@ -1576,7 +1644,11 @@ function logAdminAcao(req, acao, detalhe) {
   console.log(`[admin] ${acao} — ${detalhe} — IP ${req.ip}`);
 }
 
-app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
+// Lista de pedidos compartilhada entre o admin (vê tudo, inclusive valores) e
+// o painel do João (vê pra despachar/gerar etiqueta, mas sem nenhum valor em
+// dinheiro — isso fica só com o dono — e sem excluir pedido nem marcar
+// "entrada no sistema", que são controles internos do dono).
+async function renderizarPedidos(req, res, { urlBase, layout, ocultarValores, mostrarAcoesDono }) {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   // "a_enviar"/"enviados" não são status de pagamento de verdade (esses
@@ -1585,7 +1657,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
   // que falta despachar" de "aprovado que já saiu", que antes vinham tudo
   // junto sob "Aprovado" e misturava o que ainda precisava de ação.
   //
-  // "Novos" (ex-"A enviar") é a aba principal: quem abre /admin/pedidos sem
+  // "Novos" (ex-"A enviar") é a aba principal: quem abre a lista sem
   // escolher nada cai direto em "o que precisa de ação agora", não na lista
   // inteira de pedidos (que já aprovou/enviou/recusou faz tempo). "Todos"
   // vira uma aba à parte, acessada de propósito via ?status=todos.
@@ -1607,7 +1679,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       : 'SELECT * FROM orders ORDER BY created_at DESC LIMIT 200',
     filtro && !CONDICOES[filtro] ? [filtro] : []
   );
-  const filtroLink = (status) => `/admin/pedidos${status ? `?status=${status}` : ''}`;
+  const filtroLink = (status) => `${urlBase}${status ? `?status=${status}` : ''}`;
   const FILTROS_EXTRA = { a_enviar: 'Novos', enviados: 'Enviados' };
   const filtros = `
     <div class="filtros">
@@ -1625,62 +1697,66 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
           <div class="pedido-cliente">${escapeHtml(o.customer_name)}</div>
           <div class="pedido-data">${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
         </div>
-        <div class="pedido-total">${reais(o.total)}</div>
+        ${ocultarValores ? '' : `<div class="pedido-total">${reais(o.total)}</div>`}
       </div>
       ${(o.free_gift || o.discount_percent || o.tracking_code) ? `
         <div class="pedido-selos">
           ${o.free_gift ? '<span class="selo">🎁 Brinde</span>' : ''}
-          ${o.discount_percent ? `<span class="selo">-${escapeHtml(o.discount_percent)}% cupom</span>` : ''}
+          ${(o.discount_percent && !ocultarValores) ? `<span class="selo">-${escapeHtml(o.discount_percent)}% cupom</span>` : ''}
           ${o.tracking_code ? `<span class="selo">📦 Enviado: ${escapeHtml(o.tracking_code)}</span>` : ''}
         </div>
       ` : ''}
       ${o.status === 'pending' && (Date.now() - new Date(o.created_at).getTime()) > 10 * 60 * 1000 ? `
-        <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Não pago há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a> pela data/valor acima${o.customer_phone ? ` ou chame a pessoa no <a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">WhatsApp</a>` : ''}.</div>
+        <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Não pago há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a>${ocultarValores ? '' : ' pela data/valor acima'}${o.customer_phone ? ` ou chame a pessoa no <a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">WhatsApp</a>` : ''}.</div>
       ` : ''}
       <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${o.customer_email ? escapeHtml(o.customer_email) : 'sem e-mail'} · ${o.customer_phone ? `<a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.customer_phone)} ↗</a>` : 'sem telefone'}</div>
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
-      <div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>
-      <form method="POST" action="/admin/pedidos/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
-        <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
-        <label>
-          <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''}>
-          Já dei entrada no sistema de vendas
-        </label>
-      </form>
+      ${ocultarValores ? '' : `<div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>`}
+      ${mostrarAcoesDono ? `
+        <form method="POST" action="${urlBase}/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
+          <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
+          <label>
+            <input type="checkbox" ${o.entrada_sistema ? 'checked' : ''}>
+            Já dei entrada no sistema de vendas
+          </label>
+        </form>
+      ` : ''}
       ${o.status === 'approved' && !o.tracking_code ? `
         <div class="pedido-acoes">
           ${!o.melhorenvio_order_id ? `
-            <form method="POST" action="/admin/pedidos/${o.id}/frete/carrinho" onsubmit="this.querySelector('button').disabled=true;">
+            <form method="POST" action="${urlBase}/${o.id}/frete/carrinho" onsubmit="this.querySelector('button').disabled=true;">
               <button type="submit" class="btn-mini btn-mini-primary">1. Inserir no carrinho (Melhor Envio)</button>
             </form>
           ` : `
             <span class="selo">📥 No carrinho da Melhor Envio (id ${escapeHtml(o.melhorenvio_order_id)})</span>
-            <form method="POST" action="/admin/pedidos/${o.id}/frete/pagar" onsubmit="if (!confirm('Confirma que os dados batem? Isso vai debitar da carteira da Melhor Envio de verdade.')) return false; this.querySelector('button').disabled=true;">
+            <form method="POST" action="${urlBase}/${o.id}/frete/pagar" onsubmit="if (!confirm('Confirma que os dados batem? Isso vai debitar da carteira da Melhor Envio de verdade.')) return false; this.querySelector('button').disabled=true;">
               <button type="submit" class="btn-mini btn-mini-primary">2. Pagar e gerar etiqueta</button>
             </form>
           `}
         </div>
       ` : ''}
-      ${o.melhorenvio_order_id && o.tracking_code ? `<div class="pedido-acoes"><a href="/admin/pedidos/${o.id}/frete/etiqueta" target="_blank" rel="noopener noreferrer" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;text-align:center;">Baixar etiqueta (PDF)</a></div>` : ''}
+      ${o.melhorenvio_order_id && o.tracking_code ? `<div class="pedido-acoes"><a href="${urlBase}/${o.id}/frete/etiqueta" target="_blank" rel="noopener noreferrer" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;text-align:center;">Baixar etiqueta (PDF)</a></div>` : ''}
       <div class="pedido-acoes">
-        <form method="POST" action="/admin/pedidos/${o.id}/rastreio">
+        <form method="POST" action="${urlBase}/${o.id}/rastreio">
           <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
           <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
           <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
         </form>
-        <form method="POST" action="/admin/pedidos/${o.id}/excluir" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
-          <button type="submit" class="btn-mini btn-mini-danger">Excluir</button>
-        </form>
+        ${mostrarAcoesDono ? `
+          <form method="POST" action="${urlBase}/${o.id}/excluir" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
+            <button type="submit" class="btn-mini btn-mini-danger">Excluir</button>
+          </form>
+        ` : ''}
       </div>
     </div>
   `).join('');
 
   // Mensagem do aviso de frete vem de um código fixo (nunca de texto livre na
   // URL) — antes qualquer um podia montar um link tipo
-  // "/admin/pedidos?frete_ok=qualquer coisa" e fazer aparecer uma mensagem
-  // forjada pro admin já logado. Com código fixo, o texto exibido só pode
-  // ser um dos que a gente mesmo escreveu abaixo.
+  // "?frete_ok=qualquer coisa" e fazer aparecer uma mensagem forjada pra
+  // quem já está logado. Com código fixo, o texto exibido só pode ser um
+  // dos que a gente mesmo escreveu abaixo.
   let avisoFrete = '';
   if (req.query.frete_ok === 'carrinho') {
     avisoFrete = `<p class="aviso-frete aviso-frete-ok">Inserido no carrinho da Melhor Envio. Confira os dados e clique em "Pagar e gerar etiqueta" pra confirmar — ainda não foi cobrado nada.</p>`;
@@ -1699,44 +1775,58 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
       ${cartoes || '<div class="lista-vazia">Nenhum pedido encontrado.</div>'}
     </div>
   `;
-  res.send(adminLayout({ title: 'Pedidos', ativo: 'pedidos', body }));
-}));
+  res.send(layout({ title: 'Pedidos', ativo: 'pedidos', body }));
+}
 
-// Monta o redirect de volta pra /admin/pedidos preservando o filtro que
+app.get('/admin/pedidos', requireAdmin, asyncHandler((req, res) => renderizarPedidos(req, res, {
+  urlBase: '/admin/pedidos', layout: adminLayout, ocultarValores: false, mostrarAcoesDono: true
+})));
+
+app.get('/vendedor/pedidos', requireVendedor, asyncHandler((req, res) => renderizarPedidos(req, res, {
+  urlBase: '/vendedor/pedidos', layout: vendedorLayout, ocultarValores: true, mostrarAcoesDono: false
+})));
+
+// Monta o redirect de volta pra lista de pedidos preservando o filtro que
 // estava ativo (manda num campo hidden do form) + a âncora pro card — sem
 // isso, marcar "já dei entrada" ou salvar rastreio sempre voltava pro
 // filtro padrão ("Novos"), que podia nem conter o pedido que acabou de ser
 // mexido, dando a impressão de que a página "voltou pro início".
-function voltarParaPedido(statusBody, pedidoId) {
+function voltarParaPedido(urlBase, statusBody, pedidoId) {
   const valido = ['pending', 'approved', 'rejected', 'in_process', 'cancelled', 'refunded', 'a_enviar', 'enviados', 'todos'].includes(statusBody)
     ? statusBody
     : 'todos';
-  return `/admin/pedidos?status=${valido}#pedido-${pedidoId}`;
+  return `${urlBase}?status=${valido}#pedido-${pedidoId}`;
 }
 
 // Salva o código de rastreio de um pedido e avisa o cliente por e-mail.
-app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
-  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+// Compartilhado entre admin e vendedor (João também despacha pedido).
+function handlerRastreio(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
-  const codigo = String(req.body?.codigo || '').trim().slice(0, 100);
-  if (!codigo) return res.status(400).send('Informe um código de rastreio.');
+    const codigo = String(req.body?.codigo || '').trim().slice(0, 100);
+    if (!codigo) return res.status(400).send('Informe um código de rastreio.');
 
-  const { rows } = await pool.query(
-    'UPDATE orders SET tracking_code = $1 WHERE id = $2 RETURNING *',
-    [codigo, req.params.id]
-  );
-  const order = rows[0];
-  if (order) await enviarEmailRastreio(order);
-  logAdminAcao(req, 'rastreio_atualizado', `pedido #${req.params.id} → "${codigo}"`);
+    const { rows } = await pool.query(
+      'UPDATE orders SET tracking_code = $1 WHERE id = $2 RETURNING *',
+      [codigo, req.params.id]
+    );
+    const order = rows[0];
+    if (order) await enviarEmailRastreio(order);
+    logAdminAcao(req, 'rastreio_atualizado', `pedido #${req.params.id} → "${codigo}"`);
 
-  res.redirect(voltarParaPedido(req.body?.status, req.params.id));
-}));
+    res.redirect(voltarParaPedido(urlBase, req.body?.status, req.params.id));
+  });
+}
+app.post('/admin/pedidos/:id/rastreio', requireAdmin, express.urlencoded({ extended: false }), handlerRastreio('/admin/pedidos'));
+app.post('/vendedor/pedidos/:id/rastreio', requireVendedor, express.urlencoded({ extended: false }), handlerRastreio('/vendedor/pedidos'));
 
 // Compra de etiqueta pela Melhor Envio, em 2 passos manuais de propósito:
 // 1) insere no carrinho (não cobra nada, só reserva o serviço) — dá pra
 //    conferir preço/endereço antes de gastar da carteira de verdade;
 // 2) paga + gera a etiqueta + pega o código de rastreio, só depois de
 //    confirmado que o passo 1 saiu certo.
+// Compartilhado entre admin e vendedor (João também emite etiqueta).
 function itensParaDeclaracao(order) {
   return (order.items || [])
     .filter((i) => i.title !== 'Frete')
@@ -1756,132 +1846,147 @@ function itensParaDeclaracao(order) {
     });
 }
 
-app.post('/admin/pedidos/:id/frete/carrinho', requireAdmin, asyncHandler(async (req, res) => {
-  if (!pool) return res.status(500).send('Banco de dados não configurado.');
-  const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
-  const order = rows[0];
-  if (!order) return res.redirect('/admin/pedidos');
+function handlerFreteCarrinho(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
+    const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+    const order = rows[0];
+    if (!order) return res.redirect(urlBase);
 
-  try {
-    if (order.melhorenvio_order_id) {
-      throw new Error('ja_no_carrinho');
+    try {
+      if (order.melhorenvio_order_id) {
+        throw new Error('ja_no_carrinho');
+      }
+      if (!order.shipping_service_id) {
+        throw new Error('sem_servico');
+      }
+      if (!order.customer_cpf) {
+        throw new Error('sem_cpf');
+      }
+      // Telefone é opcional no checkout, mas a Melhor Envio pode recusar a
+      // inserção no carrinho sem um contato do destinatário — melhor avisar
+      // isso claramente aqui do que deixar a API devolver um erro genérico.
+      if (!order.customer_phone) {
+        throw new Error('sem_telefone');
+      }
+
+      const resultado = await inserirNoCarrinho({
+        orderId: order.id,
+        orderNsu: order.preference_id,
+        servicoId: order.shipping_service_id,
+        pesoKg: Number(order.shipping_weight_kg) || 0.3,
+        valorSeguro: Math.max(0, Number(order.total) - Number(order.shipping_cost)),
+        destinatario: {
+          name: order.customer_name,
+          phone: String(order.customer_phone || '').replace(/\D/g, ''),
+          email: order.customer_email,
+          document: order.customer_cpf,
+          address: order.address,
+          number: order.address_number,
+          complement: order.address_complement,
+          district: order.neighborhood,
+          city: order.city,
+          state_abbr: order.state,
+          postal_code: String(order.cep || '').replace(/\D/g, '')
+        },
+        produtos: itensParaDeclaracao(order)
+      });
+
+      await pool.query('UPDATE orders SET melhorenvio_order_id = $1 WHERE id = $2', [resultado.id, order.id]);
+      logAdminAcao(req, 'frete_carrinho', `pedido #${order.id} → item Melhor Envio ${resultado.id}`);
+      res.redirect(`${urlBase}?frete_ok=carrinho`);
+    } catch (err) {
+      console.error(`Erro ao inserir pedido #${order.id} no carrinho da Melhor Envio:`, err.message);
+      const codigo = FRETE_ERRO_MSG[err.message] ? err.message : 'api_recusou';
+      res.redirect(`${urlBase}?frete_erro=${codigo}`);
     }
-    if (!order.shipping_service_id) {
-      throw new Error('sem_servico');
+  });
+}
+app.post('/admin/pedidos/:id/frete/carrinho', requireAdmin, handlerFreteCarrinho('/admin/pedidos'));
+app.post('/vendedor/pedidos/:id/frete/carrinho', requireVendedor, handlerFreteCarrinho('/vendedor/pedidos'));
+
+function handlerFretePagar(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
+    const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+    const order = rows[0];
+    if (!order) return res.redirect(urlBase);
+
+    try {
+      if (!order.melhorenvio_order_id) {
+        throw new Error('nao_no_carrinho');
+      }
+      if (order.tracking_code) {
+        throw new Error('ja_tem_rastreio');
+      }
+
+      await comprarEtiquetas([order.melhorenvio_order_id]);
+      await gerarEtiquetas([order.melhorenvio_order_id]);
+
+      // A transportadora não devolve o código de rastreio na hora — leva alguns
+      // segundos entre a etiqueta ser gerada e a Melhor Envio receber o código
+      // de volta. Sem essa espera, a consulta abaixo quase sempre vem vazia.
+      let codigo = null;
+      for (let tentativa = 0; tentativa < 5 && !codigo; tentativa++) {
+        if (tentativa > 0) await new Promise((resolve) => setTimeout(resolve, 4000));
+        const rastreio = await rastrearEtiquetas([order.melhorenvio_order_id]);
+        codigo = rastreio?.[order.melhorenvio_order_id]?.tracking
+          || (Array.isArray(rastreio) ? rastreio.find((r) => String(r.id) === String(order.melhorenvio_order_id))?.tracking : null);
+      }
+      if (!codigo) {
+        throw new Error('sem_codigo_rastreio');
+      }
+
+      const { rows: atualizado } = await pool.query('UPDATE orders SET tracking_code = $1 WHERE id = $2 RETURNING *', [codigo, order.id]);
+      await enviarEmailRastreio(atualizado[0]);
+      logAdminAcao(req, 'frete_pago', `pedido #${order.id} → rastreio ${codigo}`);
+      res.redirect(`${urlBase}?frete_ok=pago&id=${order.id}`);
+    } catch (err) {
+      console.error(`Erro ao pagar/gerar etiqueta do pedido #${order.id}:`, err.message);
+      const codigo = FRETE_ERRO_MSG[err.message] ? err.message : 'api_recusou';
+      res.redirect(`${urlBase}?frete_erro=${codigo}`);
     }
-    if (!order.customer_cpf) {
-      throw new Error('sem_cpf');
+  });
+}
+app.post('/admin/pedidos/:id/frete/pagar', requireAdmin, handlerFretePagar('/admin/pedidos'));
+app.post('/vendedor/pedidos/:id/frete/pagar', requireVendedor, handlerFretePagar('/vendedor/pedidos'));
+
+function handlerFreteEtiqueta(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
+    const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+    const order = rows[0];
+    if (!order?.melhorenvio_order_id) return res.redirect(urlBase);
+
+    try {
+      const resultado = await imprimirEtiquetas([order.melhorenvio_order_id]);
+      if (!resultado.url) throw new Error('sem_link_impressao');
+      res.redirect(resultado.url);
+    } catch (err) {
+      console.error(`Erro ao imprimir etiqueta do pedido #${order.id}:`, err.message);
+      const codigo = FRETE_ERRO_MSG[err.message] ? err.message : 'api_recusou';
+      res.redirect(`${urlBase}?frete_erro=${codigo}`);
     }
-    // Telefone é opcional no checkout, mas a Melhor Envio pode recusar a
-    // inserção no carrinho sem um contato do destinatário — melhor avisar
-    // isso claramente aqui do que deixar a API devolver um erro genérico.
-    if (!order.customer_phone) {
-      throw new Error('sem_telefone');
-    }
-
-    const resultado = await inserirNoCarrinho({
-      orderId: order.id,
-      orderNsu: order.preference_id,
-      servicoId: order.shipping_service_id,
-      pesoKg: Number(order.shipping_weight_kg) || 0.3,
-      valorSeguro: Math.max(0, Number(order.total) - Number(order.shipping_cost)),
-      destinatario: {
-        name: order.customer_name,
-        phone: String(order.customer_phone || '').replace(/\D/g, ''),
-        email: order.customer_email,
-        document: order.customer_cpf,
-        address: order.address,
-        number: order.address_number,
-        complement: order.address_complement,
-        district: order.neighborhood,
-        city: order.city,
-        state_abbr: order.state,
-        postal_code: String(order.cep || '').replace(/\D/g, '')
-      },
-      produtos: itensParaDeclaracao(order)
-    });
-
-    await pool.query('UPDATE orders SET melhorenvio_order_id = $1 WHERE id = $2', [resultado.id, order.id]);
-    logAdminAcao(req, 'frete_carrinho', `pedido #${order.id} → item Melhor Envio ${resultado.id}`);
-    res.redirect('/admin/pedidos?frete_ok=carrinho');
-  } catch (err) {
-    console.error(`Erro ao inserir pedido #${order.id} no carrinho da Melhor Envio:`, err.message);
-    const codigo = FRETE_ERRO_MSG[err.message] ? err.message : 'api_recusou';
-    res.redirect(`/admin/pedidos?frete_erro=${codigo}`);
-  }
-}));
-
-app.post('/admin/pedidos/:id/frete/pagar', requireAdmin, asyncHandler(async (req, res) => {
-  if (!pool) return res.status(500).send('Banco de dados não configurado.');
-  const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
-  const order = rows[0];
-  if (!order) return res.redirect('/admin/pedidos');
-
-  try {
-    if (!order.melhorenvio_order_id) {
-      throw new Error('nao_no_carrinho');
-    }
-    if (order.tracking_code) {
-      throw new Error('ja_tem_rastreio');
-    }
-
-    await comprarEtiquetas([order.melhorenvio_order_id]);
-    await gerarEtiquetas([order.melhorenvio_order_id]);
-
-    // A transportadora não devolve o código de rastreio na hora — leva alguns
-    // segundos entre a etiqueta ser gerada e a Melhor Envio receber o código
-    // de volta. Sem essa espera, a consulta abaixo quase sempre vem vazia.
-    let codigo = null;
-    for (let tentativa = 0; tentativa < 5 && !codigo; tentativa++) {
-      if (tentativa > 0) await new Promise((resolve) => setTimeout(resolve, 4000));
-      const rastreio = await rastrearEtiquetas([order.melhorenvio_order_id]);
-      codigo = rastreio?.[order.melhorenvio_order_id]?.tracking
-        || (Array.isArray(rastreio) ? rastreio.find((r) => String(r.id) === String(order.melhorenvio_order_id))?.tracking : null);
-    }
-    if (!codigo) {
-      throw new Error('sem_codigo_rastreio');
-    }
-
-    const { rows: atualizado } = await pool.query('UPDATE orders SET tracking_code = $1 WHERE id = $2 RETURNING *', [codigo, order.id]);
-    await enviarEmailRastreio(atualizado[0]);
-    logAdminAcao(req, 'frete_pago', `pedido #${order.id} → rastreio ${codigo}`);
-    res.redirect(`/admin/pedidos?frete_ok=pago&id=${order.id}`);
-  } catch (err) {
-    console.error(`Erro ao pagar/gerar etiqueta do pedido #${order.id}:`, err.message);
-    const codigo = FRETE_ERRO_MSG[err.message] ? err.message : 'api_recusou';
-    res.redirect(`/admin/pedidos?frete_erro=${codigo}`);
-  }
-}));
-
-app.get('/admin/pedidos/:id/frete/etiqueta', requireAdmin, asyncHandler(async (req, res) => {
-  if (!pool) return res.status(500).send('Banco de dados não configurado.');
-  const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
-  const order = rows[0];
-  if (!order?.melhorenvio_order_id) return res.redirect('/admin/pedidos');
-
-  try {
-    const resultado = await imprimirEtiquetas([order.melhorenvio_order_id]);
-    if (!resultado.url) throw new Error('sem_link_impressao');
-    res.redirect(resultado.url);
-  } catch (err) {
-    console.error(`Erro ao imprimir etiqueta do pedido #${order.id}:`, err.message);
-    const codigo = FRETE_ERRO_MSG[err.message] ? err.message : 'api_recusou';
-    res.redirect(`/admin/pedidos?frete_erro=${codigo}`);
-  }
-}));
+  });
+}
+app.get('/admin/pedidos/:id/frete/etiqueta', requireAdmin, handlerFreteEtiqueta('/admin/pedidos'));
+app.get('/vendedor/pedidos/:id/frete/etiqueta', requireVendedor, handlerFreteEtiqueta('/vendedor/pedidos'));
 
 // Alterna a marcação "já dei entrada no sistema de vendas" — controle manual
-// do admin, sem relação com o status de pagamento/rastreio do pedido.
+// do dono, sem relação com o status de pagamento/rastreio do pedido. Só no
+// painel admin de propósito (não é algo que o João precise mexer).
 app.post('/admin/pedidos/:id/entrada', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   await pool.query('UPDATE orders SET entrada_sistema = NOT COALESCE(entrada_sistema, false) WHERE id = $1', [req.params.id]);
   logAdminAcao(req, 'entrada_alternada', `pedido #${req.params.id}`);
 
-  res.redirect(voltarParaPedido(req.body?.status, req.params.id));
+  res.redirect(voltarParaPedido('/admin/pedidos', req.body?.status, req.params.id));
 }));
 
 // Exclui um pedido (ex.: pedidos de teste feitos durante o desenvolvimento).
+// Só no painel admin de propósito — ação destrutiva, não faz parte do que o
+// João precisa pra administrar o site.
 app.post('/admin/pedidos/:id/excluir', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
@@ -1932,7 +2037,9 @@ app.get('/api/avaliacoes', asyncHandler(async (req, res) => {
 // Painel de moderação das avaliações, protegido por senha.
 const REVIEW_STATUS_LABEL = { pending: 'Pendente', approved: 'Aprovada', rejected: 'Rejeitada' };
 
-app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
+// Sem valor em dinheiro nenhum aqui, então a mesma lógica serve pro admin e
+// pro painel do João, só muda o layout/urlBase.
+async function renderizarAvaliacoes(req, res, { urlBase, layout }) {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const filtro = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null;
@@ -1945,7 +2052,7 @@ app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
   );
   const estrelas = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
 
-  const filtroLink = (status) => `/admin/avaliacoes${status ? `?status=${status}` : ''}`;
+  const filtroLink = (status) => `${urlBase}${status ? `?status=${status}` : ''}`;
   const filtros = `
     <div class="filtros">
       <a href="${filtroLink(null)}" class="${!filtro ? 'ativo' : ''}">Todas</a>
@@ -1965,8 +2072,8 @@ app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
       </div>
       <div class="pedido-itens">${r.comment ? `"${escapeHtml(r.comment)}"` : '<em>(sem comentário)</em>'}</div>
       <div class="pedido-acoes">
-        ${r.status !== 'approved' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/aprovar"><button type="submit" class="btn-mini btn-mini-primary">Aprovar</button></form>` : ''}
-        ${r.status !== 'rejected' ? `<form method="POST" action="/admin/avaliacoes/${r.id}/rejeitar"><button type="submit" class="btn-mini btn-mini-danger">Rejeitar</button></form>` : ''}
+        ${r.status !== 'approved' ? `<form method="POST" action="${urlBase}/${r.id}/aprovar"><button type="submit" class="btn-mini btn-mini-primary">Aprovar</button></form>` : ''}
+        ${r.status !== 'rejected' ? `<form method="POST" action="${urlBase}/${r.id}/rejeitar"><button type="submit" class="btn-mini btn-mini-danger">Rejeitar</button></form>` : ''}
       </div>
     </div>
   `).join('');
@@ -1978,18 +2085,25 @@ app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
       ${cartoes || '<div class="lista-vazia">Nenhuma avaliação encontrada.</div>'}
     </div>
   `;
-  res.send(adminLayout({ title: 'Avaliações', ativo: 'avaliacoes', body }));
-}));
+  res.send(layout({ title: 'Avaliações', ativo: 'avaliacoes', body }));
+}
 
-app.post('/admin/avaliacoes/:id/:acao', requireAdmin, asyncHandler(async (req, res) => {
-  if (!pool) return res.status(500).send('Banco de dados não configurado.');
-  const acao = req.params.acao;
-  if (!['aprovar', 'rejeitar'].includes(acao)) return res.status(400).send('Ação inválida.');
-  const status = acao === 'aprovar' ? 'approved' : 'rejected';
-  await pool.query('UPDATE reviews SET status = $1 WHERE id = $2', [status, req.params.id]);
-  logAdminAcao(req, 'avaliacao_' + acao, `avaliação #${req.params.id}`);
-  res.redirect('/admin/avaliacoes');
-}));
+app.get('/admin/avaliacoes', requireAdmin, asyncHandler((req, res) => renderizarAvaliacoes(req, res, { urlBase: '/admin/avaliacoes', layout: adminLayout })));
+app.get('/vendedor/avaliacoes', requireVendedor, asyncHandler((req, res) => renderizarAvaliacoes(req, res, { urlBase: '/vendedor/avaliacoes', layout: vendedorLayout })));
+
+function handlerAvaliacaoAcao(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
+    const acao = req.params.acao;
+    if (!['aprovar', 'rejeitar'].includes(acao)) return res.status(400).send('Ação inválida.');
+    const status = acao === 'aprovar' ? 'approved' : 'rejected';
+    await pool.query('UPDATE reviews SET status = $1 WHERE id = $2', [status, req.params.id]);
+    logAdminAcao(req, 'avaliacao_' + acao, `avaliação #${req.params.id}`);
+    res.redirect(urlBase);
+  });
+}
+app.post('/admin/avaliacoes/:id/:acao', requireAdmin, handlerAvaliacaoAcao('/admin/avaliacoes'));
+app.post('/vendedor/avaliacoes/:id/:acao', requireVendedor, handlerAvaliacaoAcao('/vendedor/avaliacoes'));
 
 // Formulário "avise-me" do site: captura contato de quem visitou mas ainda
 // não comprou, pra dar pra reengajar depois (novidade de torra, promoção).
@@ -2056,7 +2170,9 @@ app.post('/api/cadastro-popup', formularioLimiter, async (req, res) => {
 // Lista de contatos captados, protegida por senha. Quem se cadastra no popup
 // recebe uma mensagem automática de boas-vindas no WhatsApp 3 min depois (ver
 // /admin/whatsapp) — fora isso, contato continua manual, feito por você.
-app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
+// Sem valor em dinheiro nenhum aqui também — mesma lógica serve pro admin e
+// pro painel do João.
+async function renderizarLeads(req, res, { urlBase, layout, mostrarLinkWhatsapp }) {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const { rows } = await pool.query('SELECT * FROM leads ORDER BY created_at DESC LIMIT 500');
@@ -2072,7 +2188,7 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
       ${l.cadastro_popup ? `<div class="pedido-selos"><span class="selo">🎁 Popup — ganha 2 Drip Coffee na 1ª compra</span></div>` : ''}
       ${l.email ? `<div class="pedido-detalhe" style="margin-top:10px;"><strong>E-mail:</strong> ${escapeHtml(l.email)}</div>` : ''}
       ${l.phone ? `<div class="pedido-detalhe"><strong>WhatsApp:</strong> ${escapeHtml(l.phone)}</div>` : ''}
-      <form method="POST" action="/admin/leads/${l.id}/contato" class="pedido-entrada${l.contatado ? ' marcada' : ''}">
+      <form method="POST" action="${urlBase}/${l.id}/contato" class="pedido-entrada${l.contatado ? ' marcada' : ''}">
         <label>
           <input type="checkbox" ${l.contatado ? 'checked' : ''}>
           Já entrei em contato
@@ -2083,26 +2199,33 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
 
   const body = `
     <h1>Contatos — Café Só Grãos</h1>
-    <p class="pedido-detalhe" style="margin-bottom:14px;">${rows.length} contato${rows.length === 1 ? '' : 's'} captado${rows.length === 1 ? '' : 's'} pelo formulário do site. Quem se cadastrou no popup recebe boas-vindas automáticas no WhatsApp — veja em <a href="/admin/whatsapp">Configurar WhatsApp</a>.</p>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">${rows.length} contato${rows.length === 1 ? '' : 's'} captado${rows.length === 1 ? '' : 's'} pelo formulário do site.${mostrarLinkWhatsapp ? ` Quem se cadastrou no popup recebe boas-vindas automáticas no WhatsApp — veja em <a href="/admin/whatsapp">Configurar WhatsApp</a>.` : ''}</p>
     <div class="pedido-lista">
       ${cartoes || '<div class="lista-vazia">Nenhum contato captado ainda.</div>'}
     </div>
   `;
-  res.send(adminLayout({ title: 'Contatos', ativo: 'leads', body }));
-}));
+  res.send(layout({ title: 'Contatos', ativo: 'leads', body }));
+}
 
-// Alterna a marcação "já entrei em contato" de um lead — controle manual do
-// admin, só pra não se perder entre quem já foi chamado e quem falta.
-app.post('/admin/leads/:id/contato', requireAdmin, asyncHandler(async (req, res) => {
-  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+app.get('/admin/leads', requireAdmin, asyncHandler((req, res) => renderizarLeads(req, res, { urlBase: '/admin/leads', layout: adminLayout, mostrarLinkWhatsapp: true })));
+app.get('/vendedor/contatos', requireVendedor, asyncHandler((req, res) => renderizarLeads(req, res, { urlBase: '/vendedor/contatos', layout: vendedorLayout, mostrarLinkWhatsapp: false })));
 
-  await pool.query('UPDATE leads SET contatado = NOT COALESCE(contatado, false) WHERE id = $1', [req.params.id]);
-  logAdminAcao(req, 'lead_contato_alternado', `lead #${req.params.id}`);
+// Alterna a marcação "já entrei em contato" de um lead — controle manual, só
+// pra não se perder entre quem já foi chamado e quem falta.
+function handlerLeadContato(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
-  // Âncora pro próprio card — mesma correção do checkbox de pedidos, pra
-  // não voltar pro topo da lista toda vez que marcar um contato.
-  res.redirect(`/admin/leads#lead-${req.params.id}`);
-}));
+    await pool.query('UPDATE leads SET contatado = NOT COALESCE(contatado, false) WHERE id = $1', [req.params.id]);
+    logAdminAcao(req, 'lead_contato_alternado', `lead #${req.params.id}`);
+
+    // Âncora pro próprio card — mesma correção do checkbox de pedidos, pra
+    // não voltar pro topo da lista toda vez que marcar um contato.
+    res.redirect(`${urlBase}#lead-${req.params.id}`);
+  });
+}
+app.post('/admin/leads/:id/contato', requireAdmin, handlerLeadContato('/admin/leads'));
+app.post('/vendedor/contatos/:id/contato', requireVendedor, handlerLeadContato('/vendedor/contatos'));
 
 // Pareamento do número de WhatsApp dedicado à automação (ver whatsapp.js).
 // Escaneia o QR code com o WhatsApp do celular dedicado (Aparelhos conectados
