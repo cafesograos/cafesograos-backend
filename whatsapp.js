@@ -173,7 +173,14 @@ async function iniciarWhatsApp(pool, { manual = false } = {}) {
       ultimoMotivoQueda = motivoTexto;
       if (motivo === DisconnectReason.loggedOut) {
         tentativasSeguidas = 0;
-        console.log('WhatsApp desconectado (logout) — escaneie o QR de novo em /admin/whatsapp.');
+        // Logout de verdade invalida a sessão salva — sem limpar, a próxima
+        // reconexão (manual, em /admin/whatsapp) tenta de novo com as
+        // credenciais já mortas e cai num erro de conexão em vez de gerar QR
+        // novo. Limpando aqui, o próximo "Tentar conectar" já nasce do zero.
+        if (authAtual) {
+          authAtual.limparSessao().catch((err) => console.error('[whatsapp] falha ao limpar sessão após logout:', err.message));
+        }
+        console.log('WhatsApp desconectado (logout) — sessão limpa, escaneie o QR de novo em /admin/whatsapp.');
       } else {
         tentativasSeguidas++;
         if (tentativasSeguidas > MAX_TENTATIVAS_SEGUIDAS) {
