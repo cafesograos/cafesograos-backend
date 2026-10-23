@@ -118,15 +118,25 @@ async function iniciarWhatsApp(pool, { manual = false } = {}) {
 
   sock.ev.on('creds.update', authAtual.saveCreds);
 
-  // "notify" = mensagem nova chegando agora; "append"/outros tipos aparecem
-  // em sincronizações de histórico (ex.: logo depois de conectar) — sem esse
-  // filtro, a IA responderia mensagens antigas toda vez que reconectasse.
+  // Não dá pra confiar só no "type" do evento pra saber se é mensagem nova:
+  // "notify" normalmente é mensagem nova, mas mensagem nova chegando logo
+  // depois de reconectar também pode vir marcada "append" (o Baileys ainda
+  // tratando como sincronização) — já vimos isso derrubar mensagem de
+  // cliente de verdade. Em vez disso, usa o horário da própria mensagem:
+  // só processa quem chegou nos últimos 2 minutos, não importa o "type".
+  const DOIS_MINUTOS_EM_SEGUNDOS = 120;
   sock.ev.on('messages.upsert', ({ messages, type }) => {
     console.log(`[whatsapp] messages.upsert recebido — type: ${type}, qtd: ${messages?.length}, handler definido: ${!!handlerMensagem}`);
-    if (type !== 'notify' || !handlerMensagem) return;
+    if (!handlerMensagem) return;
+    const agora = Math.floor(Date.now() / 1000);
     for (const msg of messages) {
       if (msg.key.fromMe || msg.key.remoteJid?.endsWith('@g.us')) {
         console.log('[whatsapp] mensagem ignorada (fromMe ou grupo).');
+        continue;
+      }
+      const timestamp = Number(msg.messageTimestamp) || 0;
+      if (agora - timestamp > DOIS_MINUTOS_EM_SEGUNDOS) {
+        console.log(`[whatsapp] mensagem ignorada (antiga — ${agora - timestamp}s atrás).`);
         continue;
       }
       const texto = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
