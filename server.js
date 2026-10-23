@@ -2328,6 +2328,9 @@ initDb().finally(() => {
   if (pool) {
     agendarBackupDiario(pool);
     iniciarWhatsApp(pool).catch((err) => console.error('Erro ao iniciar WhatsApp:', err));
-    setInterval(processarFilaBoasVindasWhatsApp, 30_000);
+    // 1 a cada 3 min (era 1 a cada 30s) — ritmo mais parecido com uso humano,
+    // depois de a conexão cair bem na hora de reprocessar o represamento de
+    // contatos antigos (ver commit da janela de 30 dias).
+    setInterval(processarFilaBoasVindasWhatsApp, 3 * 60 * 1000);
   }
 });
