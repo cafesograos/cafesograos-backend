@@ -1623,7 +1623,7 @@ app.get('/admin/pedidos', requireAdmin, asyncHandler(async (req, res) => {
         <div>
           <span class="badge badge-${escapeHtml(o.status)}">${escapeHtml(STATUS_LABEL[o.status] || o.status)}</span>
           <div class="pedido-cliente">${escapeHtml(o.customer_name)}</div>
-          <div class="pedido-data">${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR'))}</div>
+          <div class="pedido-data">${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
         </div>
         <div class="pedido-total">${reais(o.total)}</div>
       </div>
@@ -1959,7 +1959,7 @@ app.get('/admin/avaliacoes', requireAdmin, asyncHandler(async (req, res) => {
         <div>
           <span class="badge badge-${escapeHtml(r.status)}">${escapeHtml(REVIEW_STATUS_LABEL[r.status] || r.status)}</span>
           <div class="pedido-cliente">${escapeHtml(r.customer_name)}</div>
-          <div class="pedido-data">${escapeHtml(new Date(r.created_at).toLocaleString('pt-BR'))}${r.product_line ? ` · Comprou: ${escapeHtml(r.product_line)}` : ''}</div>
+          <div class="pedido-data">${escapeHtml(new Date(r.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}${r.product_line ? ` · Comprou: ${escapeHtml(r.product_line)}` : ''}</div>
         </div>
         <div class="pedido-total" style="color:#D66B3E;">${estrelas(r.rating)}</div>
       </div>
@@ -2066,7 +2066,7 @@ app.get('/admin/leads', requireAdmin, asyncHandler(async (req, res) => {
       <div class="pedido-topo">
         <div>
           <div class="pedido-cliente">${escapeHtml(l.name || 'Sem nome')}</div>
-          <div class="pedido-data">${escapeHtml(new Date(l.created_at).toLocaleString('pt-BR'))}</div>
+          <div class="pedido-data">${escapeHtml(new Date(l.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
         </div>
       </div>
       ${l.cadastro_popup ? `<div class="pedido-selos"><span class="selo">🎁 Popup — ganha 2 Drip Coffee na 1ª compra</span></div>` : ''}
