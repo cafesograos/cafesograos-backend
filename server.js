@@ -2231,12 +2231,15 @@ app.use((err, req, res, next) => {
 async function processarFilaBoasVindasWhatsApp() {
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
   try {
-    // Descarta (sem enviar) cadastros represados há mais de 24h — evita
-    // rajada de mensagens antigas quando a conexão volta depois de um tempo.
+    // Descarta (sem enviar) cadastros represados há mais de 30 dias — evita
+    // rajada de mensagens muito antigas quando a conexão volta depois de um
+    // tempo. 30 dias (e não 24h, como era antes) porque o próprio envio já é
+    // devagar (1 a cada 30s) e enfileirado um por vez, então mesmo um
+    // represamento grande nunca vira rajada de verdade.
     await pool.query(
       `UPDATE leads SET whatsapp_enviado = true
        WHERE cadastro_popup = true AND COALESCE(whatsapp_enviado, false) = false
-         AND created_at < now() - interval '24 hours'`
+         AND created_at < now() - interval '30 days'`
     );
 
     const { rows } = await pool.query(
