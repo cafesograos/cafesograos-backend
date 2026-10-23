@@ -2351,8 +2351,22 @@ app.use((err, req, res, next) => {
 //    descartado, nunca "estoura" tudo de uma vez quando reconecta.
 // 2) No máximo 1 mensagem por rodada (a cada 30s) — espaça os envios em vez
 //    de mandar vários em sequência na mesma rodada.
+// Horário de silêncio pra mensagem que A GENTE inicia (boas-vindas) — pedido
+// do dono, pra não mandar nada de madrugada. Não afeta a IA respondendo
+// quem chama a gente primeiro (essa responde a qualquer hora).
+function dentroDoHorarioComercial() {
+  // Intl com hour12:false às vezes devolve "24" em vez de "0" pra meia-noite
+  // — normaliza pra não deixar passar essa hora por engano.
+  let horaBrasilia = Number(
+    new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', hour: 'numeric', hour12: false }).format(new Date())
+  );
+  if (horaBrasilia === 24) horaBrasilia = 0;
+  return horaBrasilia >= 7 && horaBrasilia < 20;
+}
+
 async function processarFilaBoasVindasWhatsApp() {
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (!dentroDoHorarioComercial()) return;
   try {
     // Descarta (sem enviar) cadastros represados há mais de 30 dias — evita
     // rajada de mensagens muito antigas quando a conexão volta depois de um
