@@ -110,6 +110,35 @@ async function salvarMensagem(pool, telefone, role, content) {
   );
 }
 
+const ESPERA_MIN_MS = 2000;
+const ESPERA_MAX_MS = 60000;
+
+// Espelha o ritmo do cliente: quanto mais rápido ele responde, mais rápido
+// a gente responde (até um mínimo que dá tempo de "digitar" a mensagem sem
+// parecer robô), e quanto mais ele demora, mais a gente demora — até um
+// teto de 1 min, pra conversa não ficar travada esperando tempo real.
+// Usa o horário em que a resposta ANTERIOR foi de fato enviada (não gerada)
+// como referência, porque é isso que o cliente realmente viu.
+async function calcularEsperaMs(pool, telefone, textoResposta) {
+  const minPeloTamanho = Math.max(ESPERA_MIN_MS, Math.ceil((textoResposta || '').length / 20) * 1000);
+  const { rows } = await pool.query(
+    `SELECT created_at FROM whatsapp_mensagens WHERE phone = $1 AND role = 'assistant' ORDER BY created_at DESC LIMIT 1`,
+    [telefone]
+  );
+  const ultimaRespostaEm = rows[0]?.created_at;
+  if (!ultimaRespostaEm) {
+    // Primeira troca da conversa — sem referência de ritmo ainda.
+    return Math.min(ESPERA_MAX_MS, Math.max(minPeloTamanho, 5000 + Math.floor(Math.random() * 10000)));
+  }
+  const tempoQueClienteLevou = Date.now() - new Date(ultimaRespostaEm).getTime();
+  const folga = 1000 + Math.floor(Math.random() * 2000); // um pouquinho mais devagar que a pessoa, de propósito
+  return Math.min(ESPERA_MAX_MS, Math.max(minPeloTamanho, tempoQueClienteLevou + folga));
+}
+
+async function salvarRespostaAssistente(pool, telefone, texto) {
+  if (texto) await salvarMensagem(pool, telefone, 'assistant', texto);
+}
+
 async function responderMensagem(telefone, textoCliente, deps) {
   const { pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento } = deps;
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
@@ -158,8 +187,8 @@ async function responderMensagem(telefone, textoCliente, deps) {
   }
 
   const textoResposta = resposta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-  if (textoResposta) await salvarMensagem(pool, telefone, 'assistant', textoResposta);
-  return textoResposta;
+  const esperaMs = await calcularEsperaMs(pool, telefone, textoResposta);
+  return { texto: textoResposta, esperaMs };
 }
 
-module.exports = { responderMensagem };
+module.exports = { responderMensagem, salvarRespostaAssistente };

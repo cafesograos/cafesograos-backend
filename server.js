@@ -17,7 +17,7 @@ const {
   getStatusConexao: getStatusWhatsApp, getQrAtual: getQrAtualWhatsApp,
   getUltimoMotivoQueda: getUltimoMotivoQuedaWhatsApp
 } = require('./whatsapp');
-const { responderMensagem } = require('./whatsapp-ia');
+const { responderMensagem, salvarRespostaAssistente } = require('./whatsapp-ia');
 
 const app = express();
 app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for reconhecer a stack
@@ -2300,18 +2300,18 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   }
   console.log(`[whatsapp-ia] gerando resposta pra ${telefone}...`);
   try {
-    const resposta = await responderMensagem(telefone, texto, {
+    const { texto: resposta, esperaMs } = await responderMensagem(telefone, texto, {
       pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento
     });
-    console.log(`[whatsapp-ia] resposta gerada pra ${telefone}: "${(resposta || '').slice(0, 80)}"`);
+    console.log(`[whatsapp-ia] resposta gerada pra ${telefone} (espera ${Math.round(esperaMs / 1000)}s): "${(resposta || '').slice(0, 80)}"`);
     if (resposta) {
-      // Espera de 30s a 1min antes de enviar, pra não parecer resposta
-      // instantânea de robô — dá a sensação de alguém de verdade digitando.
-      const esperaMs = 30000 + Math.floor(Math.random() * 30000);
+      // Espera no ritmo da conversa (ver calcularEsperaMs em whatsapp-ia.js)
+      // antes de enviar, pra não parecer resposta instantânea de robô.
       await new Promise((resolve) => setTimeout(resolve, esperaMs));
       // Responde pro JID exato que mandou a mensagem (pode ser "@lid", não
       // necessariamente "@s.whatsapp.net") — ver nota em enviarMensagemWhatsApp.
       await enviarMensagemWhatsApp(jidOriginal || telefone, resposta);
+      await salvarRespostaAssistente(pool, telefone, resposta);
       console.log(`[whatsapp-ia] resposta enviada pra ${jidOriginal || telefone}.`);
     }
   } catch (err) {
