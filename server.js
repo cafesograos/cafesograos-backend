@@ -298,6 +298,24 @@ function cpfValido(cpf) {
   return resto === parseInt(cpf[10], 10);
 }
 
+// Estrangeiro morando no Brasil não tem CPF — usa o número do passaporte
+// como documento (é o que os Correios/Melhor Envio aceitam pra declaração
+// de conteúdo e desalfandegamento, não só CPF/CNPJ). Documento de 11 dígitos
+// passa pela validação de CPF normal; qualquer outra coisa (letras, outro
+// tamanho) é tratado como passaporte, só com uma checagem solta de tamanho.
+function documentoValido(valor) {
+  const digits = String(valor || '').replace(/\D/g, '');
+  if (digits.length === 11) return cpfValido(digits);
+  const texto = String(valor || '').trim();
+  return texto.length >= 5 && texto.length <= 20;
+}
+// Devolve o documento como deve ser guardado: CPF vira só dígitos (como
+// sempre foi), passaporte fica como foi digitado (pode ter letra).
+function documentoNormalizado(valor) {
+  const digits = String(valor || '').replace(/\D/g, '');
+  return digits.length === 11 ? digits : String(valor || '').trim().toUpperCase();
+}
+
 // Telefone no formato que a InfinitePay aceita (+55 e só os dígitos do
 // DDD+número). Sem isso, quem digita o telefone já com o "55" na frente
 // (comum ao copiar de uma conversa do WhatsApp, ex.: "+55 16 99999-8888")
@@ -1077,7 +1095,7 @@ function novoPedidoForm({ erro } = {}) {
         <div class="campo"><label for="email">E-mail (opcional)</label><input type="email" id="email" name="email"></div>
         <div class="linha-dupla">
           <div class="campo"><label for="telefone">Telefone / WhatsApp</label><input type="tel" id="telefone" name="telefone"></div>
-          <div class="campo"><label for="cpf">CPF</label><input type="text" id="cpf" name="cpf" inputmode="numeric" required></div>
+          <div class="campo"><label for="cpf">CPF ou passaporte (se for estrangeiro)</label><input type="text" id="cpf" name="cpf" required></div>
         </div>
       </section>
 
@@ -1145,9 +1163,8 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
   if (cliente.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cliente.email)) {
     return res.status(400).send(novoPedidoForm({ erro: 'E-mail inválido.' }));
   }
-  const cpfDigits = String(cliente.cpf || '').replace(/\D/g, '');
-  if (!cpfValido(cpfDigits)) {
-    return res.status(400).send(novoPedidoForm({ erro: 'CPF inválido.' }));
+  if (!documentoValido(cliente.cpf)) {
+    return res.status(400).send(novoPedidoForm({ erro: 'Documento inválido — informe um CPF válido ou o número do passaporte (pra cliente estrangeiro).' }));
   }
 
   const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
@@ -1217,7 +1234,7 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
       (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
      VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,false,NULL,$19)`,
     [
-      orderNsu, cliente.nome, cliente.email, cliente.telefone || null, cpfDigits,
+      orderNsu, cliente.nome, cliente.email, cliente.telefone || null, documentoNormalizado(cliente.cpf),
       entrega.cep, entrega.endereco, entrega.numero, entrega.complemento || null,
       entrega.bairro, entrega.cidade, entrega.estado, JSON.stringify(itensParaPedido),
       shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
@@ -1226,7 +1243,7 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
   );
   logAdminAcao(req, 'pedido_manual_criado', `vendedor → pedido ${orderNsu} (${cliente.nome}, ${reais(total)})`);
 
-  res.send(vendedorLayout(`
+  res.send(vendedorLayout({ title: 'Link gerado', ativo: 'novo-pedido', body: `
     <h1>Link gerado!</h1>
     <div class="resultado-ok">Copie o link abaixo e mande pro cliente. Ele só precisa clicar e pagar.</div>
     <section>
@@ -1239,7 +1256,7 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
       <div class="resumo-linha total"><span>Total</span><span>${reais(total)}</span></div>
     </section>
     <a href="/vendedor/novo-pedido" class="btn" style="text-align:center;text-decoration:none;display:block;">Montar outro pedido</a>
-  `));
+  ` }));
 }));
 
 // Cria um pedido de verdade (com link de pagamento InfinitePay) a partir da
@@ -1259,8 +1276,7 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
     .filter(({ produto, quantity }) => produto && quantity > 0);
   if (itensValidados.length === 0) throw new Error('Nenhum item válido informado.');
 
-  const cpfDigits = String(cpf || '').replace(/\D/g, '');
-  if (!cpfValido(cpfDigits)) throw new Error('CPF inválido.');
+  if (!documentoValido(cpf)) throw new Error('Documento inválido — peça o CPF ou, se for estrangeiro, o número do passaporte.');
   if (!nome || !cep || !endereco || !numero || !bairro || !cidade || !estado) {
     throw new Error('Faltam dados obrigatórios do cliente ou do endereço.');
   }
@@ -1333,7 +1349,7 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
       (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
      VALUES ($1,'pending',$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULL,NULL)`,
     [
-      orderNsu, nome, telefone || null, cpfDigits, cep, endereco, numero, complemento || null,
+      orderNsu, nome, telefone || null, documentoNormalizado(cpf), cep, endereco, numero, complemento || null,
       bairro, cidade, estado, JSON.stringify(itensParaPedido),
       shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
       brindeQuantidade > 0
@@ -1644,11 +1660,11 @@ function logAdminAcao(req, acao, detalhe) {
   console.log(`[admin] ${acao} — ${detalhe} — IP ${req.ip}`);
 }
 
-// Lista de pedidos compartilhada entre o admin (vê tudo, inclusive valores) e
-// o painel do João (vê pra despachar/gerar etiqueta, mas sem nenhum valor em
-// dinheiro — isso fica só com o dono — e sem excluir pedido nem marcar
-// "entrada no sistema", que são controles internos do dono).
-async function renderizarPedidos(req, res, { urlBase, layout, ocultarValores, mostrarAcoesDono }) {
+// Lista de pedidos compartilhada entre o admin (vê tudo) e o painel do João
+// (vê pra despachar/gerar etiqueta e marcar "entrada no sistema" — ele tem
+// o próprio sistema de vendas, precisa do total do pedido pra isso — mas
+// sem o detalhe do frete nem o botão de excluir, que continuam só do dono).
+async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocultarFrete, mostrarEntrada, mostrarExcluir }) {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   // "a_enviar"/"enviados" não são status de pagamento de verdade (esses
@@ -1697,23 +1713,23 @@ async function renderizarPedidos(req, res, { urlBase, layout, ocultarValores, mo
           <div class="pedido-cliente">${escapeHtml(o.customer_name)}</div>
           <div class="pedido-data">${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
         </div>
-        ${ocultarValores ? '' : `<div class="pedido-total">${reais(o.total)}</div>`}
+        ${mostrarTotal ? `<div class="pedido-total">${reais(o.total)}</div>` : ''}
       </div>
       ${(o.free_gift || o.discount_percent || o.tracking_code) ? `
         <div class="pedido-selos">
           ${o.free_gift ? '<span class="selo">🎁 Brinde</span>' : ''}
-          ${(o.discount_percent && !ocultarValores) ? `<span class="selo">-${escapeHtml(o.discount_percent)}% cupom</span>` : ''}
+          ${(o.discount_percent && mostrarTotal) ? `<span class="selo">-${escapeHtml(o.discount_percent)}% cupom</span>` : ''}
           ${o.tracking_code ? `<span class="selo">📦 Enviado: ${escapeHtml(o.tracking_code)}</span>` : ''}
         </div>
       ` : ''}
       ${o.status === 'pending' && (Date.now() - new Date(o.created_at).getTime()) > 10 * 60 * 1000 ? `
-        <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Não pago há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a>${ocultarValores ? '' : ' pela data/valor acima'}${o.customer_phone ? ` ou chame a pessoa no <a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">WhatsApp</a>` : ''}.</div>
+        <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Não pago há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a>${mostrarTotal ? ' pela data/valor acima' : ''}${o.customer_phone ? ` ou chame a pessoa no <a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">WhatsApp</a>` : ''}.</div>
       ` : ''}
       <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${o.customer_email ? escapeHtml(o.customer_email) : 'sem e-mail'} · ${o.customer_phone ? `<a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.customer_phone)} ↗</a>` : 'sem telefone'}</div>
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
-      ${ocultarValores ? '' : `<div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>`}
-      ${mostrarAcoesDono ? `
+      ${ocultarFrete ? '' : `<div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>`}
+      ${mostrarEntrada ? `
         <form method="POST" action="${urlBase}/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
           <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
           <label>
@@ -1743,7 +1759,7 @@ async function renderizarPedidos(req, res, { urlBase, layout, ocultarValores, mo
           <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
           <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
         </form>
-        ${mostrarAcoesDono ? `
+        ${mostrarExcluir ? `
           <form method="POST" action="${urlBase}/${o.id}/excluir" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
             <button type="submit" class="btn-mini btn-mini-danger">Excluir</button>
           </form>
@@ -1779,11 +1795,14 @@ async function renderizarPedidos(req, res, { urlBase, layout, ocultarValores, mo
 }
 
 app.get('/admin/pedidos', requireAdmin, asyncHandler((req, res) => renderizarPedidos(req, res, {
-  urlBase: '/admin/pedidos', layout: adminLayout, ocultarValores: false, mostrarAcoesDono: true
+  urlBase: '/admin/pedidos', layout: adminLayout, mostrarTotal: true, ocultarFrete: false, mostrarEntrada: true, mostrarExcluir: true
 })));
 
+// João vê o total do pedido (precisa pra dar entrada no sistema de vendas
+// dele) e pode marcar "já dei entrada" — mas não vê o detalhe do frete nem
+// pode excluir pedido, isso continua só com o dono.
 app.get('/vendedor/pedidos', requireVendedor, asyncHandler((req, res) => renderizarPedidos(req, res, {
-  urlBase: '/vendedor/pedidos', layout: vendedorLayout, ocultarValores: true, mostrarAcoesDono: false
+  urlBase: '/vendedor/pedidos', layout: vendedorLayout, mostrarTotal: true, ocultarFrete: true, mostrarEntrada: true, mostrarExcluir: false
 })));
 
 // Monta o redirect de volta pra lista de pedidos preservando o filtro que
@@ -1972,17 +1991,22 @@ function handlerFreteEtiqueta(urlBase) {
 app.get('/admin/pedidos/:id/frete/etiqueta', requireAdmin, handlerFreteEtiqueta('/admin/pedidos'));
 app.get('/vendedor/pedidos/:id/frete/etiqueta', requireVendedor, handlerFreteEtiqueta('/vendedor/pedidos'));
 
-// Alterna a marcação "já dei entrada no sistema de vendas" — controle manual
-// do dono, sem relação com o status de pagamento/rastreio do pedido. Só no
-// painel admin de propósito (não é algo que o João precise mexer).
-app.post('/admin/pedidos/:id/entrada', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
-  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+// Alterna a marcação "já dei entrada no sistema de vendas" — sem relação com
+// o status de pagamento/rastreio do pedido. O João também usa isso (ele tem
+// o próprio sistema de vendas pra lançar os pedidos pagos), por isso aceita
+// tanto a sessão do admin quanto a do vendedor.
+function handlerEntrada(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
-  await pool.query('UPDATE orders SET entrada_sistema = NOT COALESCE(entrada_sistema, false) WHERE id = $1', [req.params.id]);
-  logAdminAcao(req, 'entrada_alternada', `pedido #${req.params.id}`);
+    await pool.query('UPDATE orders SET entrada_sistema = NOT COALESCE(entrada_sistema, false) WHERE id = $1', [req.params.id]);
+    logAdminAcao(req, 'entrada_alternada', `pedido #${req.params.id}`);
 
-  res.redirect(voltarParaPedido('/admin/pedidos', req.body?.status, req.params.id));
-}));
+    res.redirect(voltarParaPedido(urlBase, req.body?.status, req.params.id));
+  });
+}
+app.post('/admin/pedidos/:id/entrada', requireAdmin, express.urlencoded({ extended: false }), handlerEntrada('/admin/pedidos'));
+app.post('/vendedor/pedidos/:id/entrada', requireVendedor, express.urlencoded({ extended: false }), handlerEntrada('/vendedor/pedidos'));
 
 // Exclui um pedido (ex.: pedidos de teste feitos durante o desenvolvimento).
 // Só no painel admin de propósito — ação destrutiva, não faz parte do que o

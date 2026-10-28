@@ -20,12 +20,12 @@ const TOOLS = [
   },
   {
     name: 'criar_pedido',
-    description: 'Cria o pedido de verdade e gera o link de pagamento. SÓ chame depois de ter confirmado com o cliente: nome completo, CPF, endereço completo (CEP, rua, número, bairro, cidade, estado) e os itens escolhidos. Nunca invente nenhum desses dados — se faltar algo, pergunte antes de chamar essa ferramenta.',
+    description: 'Cria o pedido de verdade e gera o link de pagamento. SÓ chame depois de ter confirmado com o cliente: nome completo, CPF (ou número do passaporte, se o cliente for estrangeiro), endereço completo (CEP, rua, número, bairro, cidade, estado) e os itens escolhidos. Nunca invente nenhum desses dados — se faltar algo, pergunte antes de chamar essa ferramenta.',
     input_schema: {
       type: 'object',
       properties: {
         nome: { type: 'string' },
-        cpf: { type: 'string', description: 'Somente números ou formatado, 11 dígitos.' },
+        cpf: { type: 'string', description: 'CPF (11 dígitos) ou, se o cliente for estrangeiro sem CPF, o número do passaporte.' },
         cep: { type: 'string' },
         endereco: { type: 'string', description: 'Nome da rua/avenida.' },
         numero: { type: 'string' },
@@ -86,7 +86,7 @@ BRINDE: na primeira compra de cada cliente, o sistema já adiciona automaticamen
 
 DESCONTO: não ofereça nenhum desconto. Trabalhe só com o preço de tabela acima.
 
-FECHAMENTO: pra gerar o link de pagamento você precisa, antes de chamar a ferramenta criar_pedido: nome completo, CPF, endereço completo (CEP, rua, número, bairro, cidade, estado) e os itens/quantidades escolhidos. Peça esses dados de forma natural, não como formulário. Nunca invente nenhum desses dados.
+FECHAMENTO: pra gerar o link de pagamento você precisa, antes de chamar a ferramenta criar_pedido: nome completo, CPF (ou número do passaporte, se o cliente disser que é estrangeiro e não tem CPF), endereço completo (CEP, rua, número, bairro, cidade, estado) e os itens/quantidades escolhidos. Peça esses dados de forma natural, não como formulário. Nunca invente nenhum desses dados.
 
 TOM: respostas curtas (é WhatsApp, não e-mail), simpático, direto, em português do Brasil. Sempre use alguns emojis (sem exagerar). Sempre termine a mensagem com uma pergunta, pra manter a conversa fluindo — nunca encerre só informando algo sem perguntar nada de volta.
 
