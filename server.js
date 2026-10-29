@@ -853,6 +853,11 @@ app.get('/admin/logout', (req, res) => {
 const VENDEDOR_PASSWORD = process.env.VENDEDOR_PASSWORD;
 const VENDEDOR_SESSION_COOKIE = 'vendedor_sessao';
 
+// Mesmo ajuste que o admin já tinha (ver adminLimiter/adminAutenticadoLimiter
+// acima): trava de força bruta só no POST de login, e um teto bem mais
+// folgado pro painel já autenticado — antes os dois dividiam o mesmo balde
+// de 60/15min, e um dia de uso normal (gerar link, conferir pedido) podia
+// trancar o João do próprio painel sem nenhuma tentativa de senha rolando.
 const vendedorLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 60,
@@ -860,7 +865,13 @@ const vendedorLimiter = rateLimit({
   legacyHeaders: false,
   message: 'Muitas tentativas. Tente novamente em alguns minutos.'
 });
-app.use('/vendedor', vendedorLimiter);
+const vendedorAutenticadoLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 1000,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+app.use('/vendedor', vendedorAutenticadoLimiter);
 
 function senhaCorretaVendedor(recebida) {
   if (!VENDEDOR_PASSWORD) return false;
@@ -943,7 +954,7 @@ app.get('/vendedor/login', (req, res) => {
   res.send(vendedorLoginPage({ proximo: req.query.proximo }));
 });
 
-app.post('/vendedor/login', express.urlencoded({ extended: false }), (req, res) => {
+app.post('/vendedor/login', vendedorLimiter, express.urlencoded({ extended: false }), (req, res) => {
   const proximo = destinoSeguro(req.body?.proximo, '/vendedor/novo-pedido');
   if (!senhaCorretaVendedor(req.body?.senha)) {
     console.log(`[vendedor] login_falhou — IP ${req.ip}`);
