@@ -953,6 +953,10 @@ const VENDEDOR_NAV = [
   // Reembolso em si é feito direto no painel da InfinitePay (não é algo que
   // o nosso sistema processa) — o link só leva pra lá, não mostra valor.
   { id: 'ip', label: 'InfinitePay ↗', href: 'https://app.infinitepay.io/', external: true },
+  // João tem login próprio na Melhor Envio agora (dado pelo dono) — o link
+  // só leva pro painel de lá, pra casos que a emissão de etiqueta direto
+  // em /vendedor/pedidos não cobrir.
+  { id: 'me', label: 'Melhor Envio ↗', href: 'https://melhorenvio.com.br/painel', external: true },
   { id: 'sair', label: 'Sair', href: '/vendedor/logout' }
 ];
 
