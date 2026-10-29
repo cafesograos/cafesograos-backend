@@ -89,6 +89,7 @@ const BACKEND_URL = process.env.RAILWAY_PUBLIC_DOMAIN
   : 'https://cafesograos-backend-production.up.railway.app';
 const FRETE_GRATIS_ACIMA_DE = 300;
 const FRETE_GRATIS_ARARAQUARA_ACIMA_DE = 100;
+const FRETE_GRATIS_BRASIL_ACIMA_DE = 500;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 // Frete grátis acima do valor mínimo vale só pra São Paulo — a faixa de CEP
@@ -120,9 +121,14 @@ function cepEhAraraquara(cep) {
 // exibido no carrinho, no checkout público, no painel do vendedor e no
 // fechamento de pedido pela IA do WhatsApp, pra nunca os quatro lugares
 // decidirem coisas diferentes pro mesmo CEP/subtotal.
+// Três faixas, da mais específica pra mais ampla: Araraquara (R$100) <
+// resto de SP (R$300) < Brasil inteiro (R$500) — a nacional vale pra
+// qualquer CEP, inclusive dentro de SP/Araraquara, então é checada primeiro.
 function freteGratisParaCep(cep, subtotal) {
-  if (cepEhAraraquara(cep)) return Number(subtotal) >= FRETE_GRATIS_ARARAQUARA_ACIMA_DE;
-  return Number(subtotal) >= FRETE_GRATIS_ACIMA_DE && cepEhSP(cep);
+  const valor = Number(subtotal);
+  if (valor >= FRETE_GRATIS_BRASIL_ACIMA_DE) return true;
+  if (cepEhAraraquara(cep)) return valor >= FRETE_GRATIS_ARARAQUARA_ACIMA_DE;
+  return valor >= FRETE_GRATIS_ACIMA_DE && cepEhSP(cep);
 }
 
 // Limita a rota que cria pagamento de verdade (InfinitePay) — mais apertado
@@ -2220,14 +2226,15 @@ app.post('/api/cadastro-popup', formularioLimiter, async (req, res) => {
     const nome = String(req.body?.nome || '').trim().slice(0, 100);
     const telefone = String(req.body?.telefone || '').trim().slice(0, 30);
     const telefoneDigits = telefone.replace(/\D/g, '');
+    const cepDigits = String(req.body?.cep || '').replace(/\D/g, '').slice(0, 8);
 
     if (!nome || telefoneDigits.length < 10) {
       return res.status(400).json({ error: 'Informe seu nome e um telefone válido com DDD.' });
     }
 
     await pool.query(
-      'INSERT INTO leads (name, phone, cadastro_popup) VALUES ($1, $2, true)',
-      [nome, telefone]
+      'INSERT INTO leads (name, phone, cadastro_popup, cep) VALUES ($1, $2, true, $3)',
+      [nome, telefone, cepDigits || null]
     );
     res.json({ ok: true, message: 'Cadastro feito! Na sua primeira compra, você ganha 2 Drip Coffee de brinde.' });
   } catch (err) {

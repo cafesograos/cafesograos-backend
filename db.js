@@ -127,6 +127,10 @@ async function initDb() {
   // (3 min depois do cadastro no popup) — evita reenviar pro mesmo lead a
   // cada vez que a fila roda.
   await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_enviado BOOLEAN DEFAULT false;`);
+  // CEP opcional, coletado no popup de cadastro pra já avisar a pessoa da
+  // condição de frete grátis dela (Araraquara/SP/Brasil) antes de comprar —
+  // não usado pra calcular frete de verdade (isso só acontece no carrinho).
+  await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS cep TEXT;`);
 
   // Sessão do WhatsApp (Baileys) guardada no banco em vez de em arquivo —
   // o disco do Railway não persiste entre deploys, então sem isso cada
