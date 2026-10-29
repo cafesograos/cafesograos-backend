@@ -88,6 +88,7 @@ const BACKEND_URL = process.env.RAILWAY_PUBLIC_DOMAIN
   ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
   : 'https://cafesograos-backend-production.up.railway.app';
 const FRETE_GRATIS_ACIMA_DE = 300;
+const FRETE_GRATIS_ARARAQUARA_ACIMA_DE = 100;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 // Frete grátis acima do valor mínimo vale só pra São Paulo — a faixa de CEP
@@ -99,6 +100,29 @@ function cepEhSP(cep) {
   if (digitos.length < 5) return false;
   const prefixo = Number(digitos.slice(0, 5));
   return prefixo >= 1000 && prefixo <= 19999;
+}
+
+// Araraquara/SP tem limite de frete grátis mais baixo (R$100) que o resto do
+// estado (R$300) — regra do dono, já usada antes só na conversa da IA do
+// WhatsApp (que perguntava no chat em vez de olhar o CEP). Faixa 14800-14814
+// confirmada ao vivo via ViaCEP (buscas por rua em Araraquara só retornaram
+// CEPs nesse intervalo; 14815 já é Ibaté e 14820 já é Américo Brasiliense,
+// cidades vizinhas) — mesmo princípio do cepEhSP: calculado só a partir do
+// CEP, nunca de cidade/estado que o cliente informa.
+function cepEhAraraquara(cep) {
+  const digitos = String(cep || '').replace(/\D/g, '');
+  if (digitos.length < 5) return false;
+  const prefixo = Number(digitos.slice(0, 5));
+  return prefixo >= 14800 && prefixo <= 14814;
+}
+
+// Único lugar que decide se um pedido ganha frete grátis — usado no cálculo
+// exibido no carrinho, no checkout público, no painel do vendedor e no
+// fechamento de pedido pela IA do WhatsApp, pra nunca os quatro lugares
+// decidirem coisas diferentes pro mesmo CEP/subtotal.
+function freteGratisParaCep(cep, subtotal) {
+  if (cepEhAraraquara(cep)) return Number(subtotal) >= FRETE_GRATIS_ARARAQUARA_ACIMA_DE;
+  return Number(subtotal) >= FRETE_GRATIS_ACIMA_DE && cepEhSP(cep);
 }
 
 // Limita a rota que cria pagamento de verdade (InfinitePay) — mais apertado
@@ -268,7 +292,7 @@ app.post('/api/calcular-frete', bloquearScript, freteLimiter, async (req, res) =
   try {
     const { cep, pesoKg, subtotal } = req.body;
     const frete = await calcularFrete(cep, Number(pesoKg));
-    if (Number(subtotal) >= FRETE_GRATIS_ACIMA_DE && cepEhSP(cep)) {
+    if (freteGratisParaCep(cep, subtotal)) {
       frete.valor = 0;
       frete.gratis = true;
     }
@@ -463,7 +487,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     // cliente — o pacote ainda precisa ser enviado por alguma transportadora
     // de verdade, e sem cotar aqui não sobrava id de serviço nenhum pra
     // comprar a etiqueta desses pedidos depois.
-    const freteGratis = subtotalCatalogo >= FRETE_GRATIS_ACIMA_DE && cepEhSP(entrega.cep);
+    const freteGratis = freteGratisParaCep(entrega.cep, subtotalCatalogo);
     const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
     const shippingCost = freteGratis ? 0 : freteCalculado.valor;
     // Guarda qual transportadora/modalidade foi a mais barata pra esse pedido
@@ -1194,7 +1218,7 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
     console.error('Erro ao calcular frete (vendedor):', err.message);
     return res.status(400).send(novoPedidoForm({ erro: 'Não foi possível calcular o frete. Confira o CEP.' }));
   }
-  const freteGratis = subtotalCatalogo >= FRETE_GRATIS_ACIMA_DE && cepEhSP(entrega.cep);
+  const freteGratis = freteGratisParaCep(entrega.cep, subtotalCatalogo);
   const shippingCost = freteGratis ? 0 : freteCalculado.valor;
   const shippingCarrier = freteCalculado.transportadora || null;
   const shippingServiceId = freteCalculado.servicoId || null;
@@ -1321,10 +1345,11 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
   if (brindeProduto) pesoTotalKg += ((brindeProduto.pesoGramas || 400) * brindeQuantidade) / 1000;
 
   const freteCalculado = await calcularFrete(cep, pesoTotalKg);
-  // Araraquara (confirmado na conversa, não só pelo DDD) tem frete grátis a
-  // partir de R$100 — mais generoso que a regra geral de SP (R$300).
-  const freteGratis = (araraquaraConfirmado && subtotalCatalogo >= 100)
-    || (subtotalCatalogo >= FRETE_GRATIS_ACIMA_DE && cepEhSP(cep));
+  // Mesma regra do checkout do site agora: decidida pelo CEP real do pedido
+  // (não mais só pela confirmação da conversa) — araraquaraConfirmado
+  // continua existindo pra IA citar a condição certa antes de fechar, mas
+  // quem decide o valor cobrado de verdade é o CEP, igual ao resto do site.
+  const freteGratis = freteGratisParaCep(cep, subtotalCatalogo);
   const shippingCost = freteGratis ? 0 : freteCalculado.valor;
   const shippingCarrier = freteCalculado.transportadora || null;
   const shippingServiceId = freteCalculado.servicoId || null;
