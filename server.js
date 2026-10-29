@@ -2264,6 +2264,7 @@ async function renderizarLeads(req, res, { urlBase, layout, mostrarLinkWhatsapp 
       ${l.cadastro_popup ? `<div class="pedido-selos"><span class="selo">🎁 Popup — ganha 2 Drip Coffee na 1ª compra</span></div>` : ''}
       ${l.email ? `<div class="pedido-detalhe" style="margin-top:10px;"><strong>E-mail:</strong> ${escapeHtml(l.email)}</div>` : ''}
       ${l.phone ? `<div class="pedido-detalhe"><strong>WhatsApp:</strong> ${escapeHtml(l.phone)}</div>` : ''}
+      ${l.cep ? `<div class="pedido-detalhe"><strong>CEP:</strong> ${escapeHtml(l.cep.replace(/(\d{5})(\d{3})/, '$1-$2'))}</div>` : ''}
       <form method="POST" action="${urlBase}/${l.id}/contato" class="pedido-entrada${l.contatado ? ' marcada' : ''}">
         <label>
           <input type="checkbox" ${l.contatado ? 'checked' : ''}>
