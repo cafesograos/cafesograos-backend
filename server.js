@@ -117,18 +117,23 @@ function cepEhAraraquara(cep) {
   return prefixo >= 14800 && prefixo <= 14814;
 }
 
+// Valor mínimo de compra pra frete grátis num CEP — o mais baixo que a
+// pessoa consegue alcançar ali (Araraquara < resto de SP < Brasil inteiro,
+// que vale pra qualquer lugar). Usado tanto pra decidir frete grátis quanto
+// pra mostrar "faltam R$X" na barra de progresso do carrinho, sem duplicar
+// a regra em dois lugares.
+function limiteFreteGratisParaCep(cep) {
+  if (cepEhAraraquara(cep)) return FRETE_GRATIS_ARARAQUARA_ACIMA_DE;
+  if (cepEhSP(cep)) return FRETE_GRATIS_ACIMA_DE;
+  return FRETE_GRATIS_BRASIL_ACIMA_DE;
+}
+
 // Único lugar que decide se um pedido ganha frete grátis — usado no cálculo
 // exibido no carrinho, no checkout público, no painel do vendedor e no
 // fechamento de pedido pela IA do WhatsApp, pra nunca os quatro lugares
 // decidirem coisas diferentes pro mesmo CEP/subtotal.
-// Três faixas, da mais específica pra mais ampla: Araraquara (R$100) <
-// resto de SP (R$300) < Brasil inteiro (R$500) — a nacional vale pra
-// qualquer CEP, inclusive dentro de SP/Araraquara, então é checada primeiro.
 function freteGratisParaCep(cep, subtotal) {
-  const valor = Number(subtotal);
-  if (valor >= FRETE_GRATIS_BRASIL_ACIMA_DE) return true;
-  if (cepEhAraraquara(cep)) return valor >= FRETE_GRATIS_ARARAQUARA_ACIMA_DE;
-  return valor >= FRETE_GRATIS_ACIMA_DE && cepEhSP(cep);
+  return Number(subtotal) >= limiteFreteGratisParaCep(cep);
 }
 
 // Limita a rota que cria pagamento de verdade (InfinitePay) — mais apertado
@@ -298,6 +303,7 @@ app.post('/api/calcular-frete', bloquearScript, freteLimiter, async (req, res) =
   try {
     const { cep, pesoKg, subtotal } = req.body;
     const frete = await calcularFrete(cep, Number(pesoKg));
+    frete.limiteFreteGratis = limiteFreteGratisParaCep(cep);
     if (freteGratisParaCep(cep, subtotal)) {
       frete.valor = 0;
       frete.gratis = true;
