@@ -569,6 +569,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     res.json({ init_point: initPoint });
   } catch (err) {
     console.error('Erro ao criar link de pagamento:', err);
+    Sentry.captureException(err, { extra: { origem: 'create-preference' } });
     res.status(500).json({ error: 'Erro ao criar pagamento.' });
   }
 });
@@ -665,7 +666,9 @@ app.post('/webhook-infinitepay', webhookLimiter, async (req, res) => {
         if (pedido && Math.abs(Number(status.amount) / 100 - Number(pedido.total)) < 0.01) {
           await atualizarStatusPedido(order_nsu, 'approved', transaction_nsu);
         } else if (pedido) {
-          console.error(`[webhook-infinitepay] Valor cobrado (R$ ${Number(status.amount) / 100}) não bate com o total do pedido ${order_nsu} (R$ ${pedido.total}) — não aprovado automaticamente.`);
+          const msg = `[webhook-infinitepay] Valor cobrado (R$ ${Number(status.amount) / 100}) não bate com o total do pedido ${order_nsu} (R$ ${pedido.total}) — não aprovado automaticamente.`;
+          console.error(msg);
+          Sentry.captureMessage(msg, { level: 'warning', extra: { orderNsu: order_nsu, transactionNsu: transaction_nsu, cobrado: status.amount, total: pedido.total } });
         }
       }
     } else {
@@ -673,6 +676,7 @@ app.post('/webhook-infinitepay', webhookLimiter, async (req, res) => {
     }
   } catch (err) {
     console.error('Erro ao processar notificação da InfinitePay:', err);
+    Sentry.captureException(err, { extra: { origem: 'webhook-infinitepay', orderNsu: order_nsu, transactionNsu: transaction_nsu } });
     return res.sendStatus(400); // resposta != 2xx faz a InfinitePay reenviar o webhook depois
   }
   res.sendStatus(200);
@@ -1265,6 +1269,7 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
     });
   } catch (err) {
     console.error('Erro ao criar link de pagamento (vendedor):', err);
+    Sentry.captureException(err, { extra: { origem: 'vendedor-novo-pedido' } });
     return res.status(500).send(novoPedidoForm({ erro: 'Erro ao gerar o link de pagamento. Tente de novo.' }));
   }
 
