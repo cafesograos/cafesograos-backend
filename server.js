@@ -715,6 +715,60 @@ app.post('/webhook-infinitepay', webhookLimiter, async (req, res) => {
   res.sendStatus(200);
 });
 
+// Rede de segurança pro caso do webhook acima nunca chegar até nós (soluço de
+// rede, InfinitePay fora do ar no momento do aviso, etc.) — sem isso, um
+// pedido pago de verdade ficava "pending" pra sempre e ninguém via, só quem
+// checasse o painel da InfinitePay na mão. Reconsulta pedidos pending com
+// mais de 30 min, usando só o order_nsu: a documentação oficial da
+// InfinitePay confirma que o payment_check aceita e responde normalmente sem
+// transaction_nsu/slug nesse caso. Limitado aos últimos 7 dias pra não ficar
+// pra sempre re-checando carrinho abandonado antigo.
+async function reconciliarPedidosPendentes() {
+  if (!pool) return;
+  let rows;
+  try {
+    ({ rows } = await pool.query(
+      `SELECT preference_id, total FROM orders
+       WHERE status = 'pending'
+         AND created_at < now() - interval '30 minutes'
+         AND created_at > now() - interval '7 days'`
+    ));
+  } catch (err) {
+    console.error('[reconciliação] Erro ao buscar pedidos pending:', err.message);
+    Sentry.captureException(err, { extra: { origem: 'reconciliacao-pendentes-query' } });
+    return;
+  }
+  if (rows.length === 0) return;
+
+  let aprovados = 0;
+  for (const pedido of rows) {
+    try {
+      const status = await consultarStatusPagamento({ orderNsu: pedido.preference_id });
+      if (!status.success || !status.paid) continue;
+
+      // Mesma régua do webhook: compara com "amount" (o que pedimos pra
+      // cobrar), não "paid_amount" (o que o cliente pagou de fato, que vem
+      // maior em parcelamento com taxa repassada).
+      const amountReais = Number(status.amount) / 100;
+      if (Math.abs(amountReais - Number(pedido.total)) < 0.01) {
+        await atualizarStatusPedido(pedido.preference_id, 'approved', 'reconciliacao-automatica');
+        aprovados++;
+        const msg = `[reconciliação] Pedido ${pedido.preference_id} estava "pending" mas já tinha sido pago de verdade (webhook provavelmente falhou) — aprovado automaticamente.`;
+        console.log(msg);
+        Sentry.captureMessage(msg, { level: 'warning' });
+      } else {
+        const msg = `[reconciliação] Pedido ${pedido.preference_id} está pago (R$ ${amountReais.toFixed(2)}) mas o valor não bate com o total salvo (R$ ${pedido.total}) — não aprovado automaticamente, precisa checar na mão.`;
+        console.error(msg);
+        Sentry.captureMessage(msg, { level: 'error' });
+      }
+    } catch (err) {
+      console.error(`[reconciliação] Erro ao checar pedido ${pedido.preference_id}:`, err.message);
+      Sentry.captureException(err, { extra: { origem: 'reconciliacao-pendentes-item', preferenceId: pedido.preference_id } });
+    }
+  }
+  console.log(`[reconciliação] Rodou: ${rows.length} pedido(s) pending checado(s), ${aprovados} aprovado(s) automaticamente.`);
+}
+
 // Dados mínimos e públicos de um pedido (sem nome/e-mail/endereço do cliente),
 // usados pela página de sucesso (registrar compra no Google Analytics) e pela
 // página de rastreio (cliente consulta status/código com o número do pedido,
@@ -2575,5 +2629,9 @@ initDb().finally(() => {
     // a pedido do dono, depois de passar por instabilidade de conexão na
     // hora de reprocessar o represamento de contatos antigos.
     setInterval(processarFilaBoasVindasWhatsApp, 5 * 60 * 1000);
+    // 1 a cada 15 min — frequente o bastante pra pegar rápido um pedido pago
+    // que o webhook da InfinitePay perdeu, sem bater demais na API deles
+    // (hoje é só 1 pedido/dia em média).
+    setInterval(reconciliarPedidosPendentes, 15 * 60 * 1000);
   }
 });
