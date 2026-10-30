@@ -468,6 +468,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
 
     const descontoPercent = desconto ? Number(desconto.percent) : 0;
     const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
+      id: produto.id,
       title: produto.nome,
       quantity,
       unit_price: descontoPercent > 0
@@ -721,7 +722,7 @@ app.post('/webhook-infinitepay', webhookLimiter, async (req, res) => {
 app.get('/api/pedido/:preferenceId', asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
   const { rows } = await pool.query(
-    'SELECT status, total, shipping_cost, items, tracking_code, created_at FROM orders WHERE preference_id = $1',
+    'SELECT id, status, total, shipping_cost, items, tracking_code, created_at FROM orders WHERE preference_id = $1',
     [req.params.preferenceId]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Pedido não encontrado.' });
@@ -1243,6 +1244,7 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
   }
 
   const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
+    id: produto.id,
     title: produto.nome,
     quantity,
     unit_price: descontoPercent > 0
@@ -1379,6 +1381,7 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
   }
 
   const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
+    id: produto.id,
     title: produto.nome, quantity, unit_price: produto.preco
   }));
   const brindeProduto = brindeQuantidade > 0 ? PRODUCTS.find((p) => p.id === 'drip-coffee-caixa-10') : null;
