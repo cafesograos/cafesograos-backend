@@ -87,9 +87,22 @@ const SITE_URL = process.env.SITE_URL || 'https://www.cafesograos.com.br';
 const BACKEND_URL = process.env.RAILWAY_PUBLIC_DOMAIN
   ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
   : 'https://cafesograos-backend-production.up.railway.app';
-const FRETE_GRATIS_ACIMA_DE = 300;
-const FRETE_GRATIS_ARARAQUARA_ACIMA_DE = 100;
-const FRETE_GRATIS_BRASIL_ACIMA_DE = 500;
+// Único ponto de configuração da regra de frete grátis — mudar um valor
+// aqui reflete sozinho em /api/config (consumido pelo carrinho e pelos
+// textos do site) e em limiteFreteGratisParaCep() (usado no checkout de
+// verdade). Os três valores abaixo são os que já estavam valendo antes
+// desta refatoração (não foram alterados): Araraquara R$100, resto de SP
+// R$300, Brasil inteiro R$500.
+const FRETE_GRATIS = {
+  faixas: [
+    { escopo: 'araraquara-regiao', minimo: 100.00 },
+    { escopo: 'SP', minimo: 300.00 },
+    { escopo: 'BR', minimo: 500.00 }
+  ]
+};
+function freteGratisMinimo(escopo) {
+  return FRETE_GRATIS.faixas.find((f) => f.escopo === escopo).minimo;
+}
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 // Frete grátis acima do valor mínimo vale só pra São Paulo — a faixa de CEP
@@ -123,9 +136,9 @@ function cepEhAraraquara(cep) {
 // pra mostrar "faltam R$X" na barra de progresso do carrinho, sem duplicar
 // a regra em dois lugares.
 function limiteFreteGratisParaCep(cep) {
-  if (cepEhAraraquara(cep)) return FRETE_GRATIS_ARARAQUARA_ACIMA_DE;
-  if (cepEhSP(cep)) return FRETE_GRATIS_ACIMA_DE;
-  return FRETE_GRATIS_BRASIL_ACIMA_DE;
+  if (cepEhAraraquara(cep)) return freteGratisMinimo('araraquara-regiao');
+  if (cepEhSP(cep)) return freteGratisMinimo('SP');
+  return freteGratisMinimo('BR');
 }
 
 // Único lugar que decide se um pedido ganha frete grátis — usado no cálculo
@@ -269,6 +282,13 @@ app.get('/oauth/melhorenvio/callback', async (req, res) => {
 // para montar a vitrine e pelo próprio backend para validar o preço de cada pedido.
 app.get('/api/produtos', (req, res) => {
   res.json({ categories: CATEGORIES, products: PRODUCTS });
+});
+
+// Configuração pública consumida pelo frontend (barra do topo, popups,
+// carrinho) pra nunca ter os valores de frete grátis digitados direto numa
+// página — só esse endpoint sabe os números de verdade (FRETE_GRATIS acima).
+app.get('/api/config', (req, res) => {
+  res.json({ freteGratis: FRETE_GRATIS });
 });
 
 // Calcula o frete (Melhor Envio) a partir do CEP de destino e peso total do carrinho (kg).
