@@ -3,10 +3,15 @@
 // real de cada item em /api/create-preference (nunca confiamos no preço
 // que o cliente manda). Campos "_en"/"_es" são só pra exibição (o site
 // troca de idioma no navegador) — preço, peso e id continuam únicos.
+// Filtros da vitrine são por uso (o que a pessoa vai fazer com o café), não
+// por tipo de produto -- "categorias" em cada item abaixo pode ter mais de
+// um valor (ex.: um café serve tanto pra receber visita quanto pra cafeteira
+// italiana).
 const CATEGORIES = [
-  { id: 'grao', nome: 'Café em Grão', nome_en: 'Whole Bean Coffee', nome_es: 'Café en Grano', nome_fr: 'Café en Grains', nome_zh: '咖啡豆' },
-  { id: 'moido', nome: 'Café Moído', nome_en: 'Ground Coffee', nome_es: 'Café Molido', nome_fr: 'Café Moulu', nome_zh: '咖啡粉' },
-  { id: 'drip', nome: 'Drip Coffee', nome_en: 'Drip Coffee', nome_es: 'Drip Coffee', nome_fr: 'Drip Coffee', nome_zh: 'Drip Coffee' }
+  { id: 'dia-a-dia', nome: 'Café do dia a dia', nome_en: 'Everyday Coffee', nome_es: 'Café del día a día', nome_fr: 'Café du quotidien', nome_zh: '日常咖啡' },
+  { id: 'visita', nome: 'Para receber visita', nome_en: 'For Having Guests Over', nome_es: 'Para recibir visitas', nome_fr: 'Pour recevoir des invités', nome_zh: '待客咖啡' },
+  { id: 'italiana', nome: 'Cafeteira italiana', nome_en: 'Italian Moka Pot', nome_es: 'Cafetera italiana', nome_fr: 'Cafetière italienne', nome_zh: '摩卡壶咖啡' },
+  { id: 'sache', nome: 'Sachê individual', nome_en: 'Individual Sachet', nome_es: 'Sobre individual', nome_fr: 'Sachet individuel', nome_zh: '独立包装' }
 ];
 
 const PRODUCTS = [
@@ -24,7 +29,7 @@ const PRODUCTS = [
     descricao_zh: '您日常生活的伙伴：浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡，研磨咖啡。500g。',
     preco: 32.01,
     precoOriginal: 33.00,
-    categoria: 'moido',
+    categorias: ['dia-a-dia'],
     pesoGramas: 550,
     img: 'assets/produto-tradicional-500.jpg',
     imgs: ['assets/produto-tradicional-500.jpg']
@@ -43,7 +48,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味——酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，咖啡豆。500g。',
     preco: 55.00,
     precoOriginal: 60.00,
-    categoria: 'grao',
+    categorias: ['visita', 'italiana'],
     badge: '84 SCA',
     pesoGramas: 550,
     img: 'assets/produto-especial-500.jpg',
@@ -63,7 +68,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味——酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，研磨咖啡。500g。',
     preco: 55.00,
     precoOriginal: 60.00,
-    categoria: 'moido',
+    categorias: ['visita'],
     badge: '84 SCA',
     pesoGramas: 550,
     img: 'assets/produto-especial-500.jpg',
@@ -83,7 +88,7 @@ const PRODUCTS = [
     descricao_zh: '无需繁琐步骤的挂耳咖啡：独立小包装带来便利，风味丝毫不打折扣。100%阿拉比卡。一盒10包。',
     preco: 65.99,
     precoOriginal: 90.00,
-    categoria: 'drip',
+    categorias: ['sache'],
     pesoGramas: 400,
     img: 'assets/produto-drip-coffee.jpg',
     imgs: ['assets/produto-drip-coffee.jpg', 'assets/produto-drip-coffee-rotulo.jpg']
@@ -101,7 +106,7 @@ const PRODUCTS = [
     descricao_fr: 'Juste la boîte organisatrice de notre Drip Coffee, vendue vide — sans les sachets de café à l\'intérieur. Pour qui en a déjà une et veut la remplacer, ou en a simplement besoin pour du rangement.',
     descricao_zh: '仅为我们Drip Coffee的收纳盒，空盒出售——不含咖啡包。适合已有产品想补充盒子，或只是需要用它来收纳物品的您。',
     preco: 20.00,
-    categoria: 'drip',
+    categorias: [],
     pesoGramas: 50,
     img: 'assets/produto-drip-coffee.jpg',
     imgs: ['assets/produto-drip-coffee.jpg']
@@ -120,7 +125,7 @@ const PRODUCTS = [
     descricao_zh: '在购买整盒前先试试看：1包独立装挂耳咖啡，方便又美味。100%阿拉比卡。',
     preco: 6.00,
     precoOriginal: 8.00,
-    categoria: 'drip',
+    categorias: ['sache'],
     pesoGramas: 30,
     img: 'assets/produto-drip-coffee.jpg',
     imgs: ['assets/produto-drip-coffee.jpg']
