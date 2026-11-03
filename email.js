@@ -100,6 +100,7 @@ async function enviarEmailNovoPedido(order) {
     <h2>Novo pedido pago — Café Só Grãos</h2>
     ${order.free_gift ? `<p>🎁 <strong>Primeira compra desse cliente — não esquecer de incluir ${qtdBrindeAdmin > 1 ? `${qtdBrindeAdmin} Drip Coffee de brinde` : 'o Drip Coffee de brinde'} na caixa${qtdBrindeAdmin > 1 ? ' (se cadastrou no popup de entrada)' : ''}.</strong></p>` : ''}
     ${order.discount_percent ? `<p>Pedido com ${Number(order.discount_percent)}% de desconto de cliente recorrente aplicado.</p>` : ''}
+    ${order.customer_cnpj ? caixaDestaque(`<strong>⚠️ Cliente quer nota fiscal — CNPJ: ${escapeHtml(order.customer_cnpj)}</strong>`) : ''}
     <p><strong>Cliente:</strong> ${escapeHtml(order.customer_name)} (${escapeHtml(order.customer_email)}, ${escapeHtml(order.customer_phone || 'sem telefone')})</p>
     <p><strong>Endereço de entrega:</strong><br>
       ${escapeHtml(order.address)}, ${escapeHtml(order.address_number)} ${escapeHtml(order.address_complement || '')}<br>

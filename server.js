@@ -354,6 +354,26 @@ function cpfValido(cpf) {
   return resto === parseInt(cpf[10], 10);
 }
 
+// CNPJ é opcional (só quem quer nota fiscal de empresa preenche), mas
+// validamos o dígito verificador do mesmo jeito que o CPF -- é um campo que
+// vai direto pra um documento fiscal depois, então um erro de digitação
+// aqui vira dor de cabeça real lá na frente, não só um detalhe cosmético.
+function cnpjValido(cnpj) {
+  cnpj = String(cnpj || '').replace(/\D/g, '');
+  if (cnpj.length !== 14 || /^(\d)\1{13}$/.test(cnpj)) return false;
+  const calcDigito = (base, pesos) => {
+    const soma = pesos.reduce((acc, peso, i) => acc + parseInt(base[i], 10) * peso, 0);
+    const resto = soma % 11;
+    return resto < 2 ? 0 : 11 - resto;
+  };
+  const pesos1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  const digito1 = calcDigito(cnpj, pesos1);
+  if (digito1 !== parseInt(cnpj[12], 10)) return false;
+  const pesos2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  const digito2 = calcDigito(cnpj, pesos2);
+  return digito2 === parseInt(cnpj[13], 10);
+}
+
 // Estrangeiro morando no Brasil não tem CPF — usa o número do passaporte
 // como documento (é o que os Correios/Melhor Envio aceitam pra declaração
 // de conteúdo e desalfandegamento, não só CPF/CNPJ). Documento de 11 dígitos
@@ -405,7 +425,8 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       nome: String(req.body?.cliente?.nome || '').trim().slice(0, 100),
       email: String(req.body?.cliente?.email || '').trim().slice(0, 200),
       telefone: String(req.body?.cliente?.telefone || '').trim().slice(0, 30),
-      cpf: req.body?.cliente?.cpf
+      cpf: req.body?.cliente?.cpf,
+      cnpj: req.body?.cliente?.cnpj
     };
     const entrega = {
       cep: req.body?.entrega?.cep,
@@ -429,6 +450,12 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     const cpfDigits = String(cliente.cpf || '').replace(/\D/g, '');
     if (!cpfValido(cpfDigits)) {
       return res.status(400).json({ error: 'CPF inválido.' });
+    }
+    // CNPJ é opcional — só quem quer nota fiscal de empresa preenche. Só
+    // validamos se a pessoa preencheu algo; campo vazio passa direto.
+    const cnpjDigits = String(cliente.cnpj || '').replace(/\D/g, '');
+    if (cnpjDigits && !cnpjValido(cnpjDigits)) {
+      return res.status(400).json({ error: 'CNPJ inválido.' });
     }
 
     // Preço, nome e peso sempre vêm do catálogo do servidor — nunca do que o
@@ -571,14 +598,15 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     if (pool) {
       await pool.query(
         `INSERT INTO orders
-          (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
-         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+          (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
+         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
         [
           orderNsu,
           cliente.nome,
           cliente.email,
           cliente.telefone || null,
           cpfDigits,
+          cnpjDigits || null,
           entrega.cep,
           entrega.endereco,
           entrega.numero,
@@ -1227,6 +1255,7 @@ function novoPedidoForm({ erro } = {}) {
           <div class="campo"><label for="telefone">Telefone / WhatsApp</label><input type="tel" id="telefone" name="telefone"></div>
           <div class="campo"><label for="cpf">CPF ou passaporte (se for estrangeiro)</label><input type="text" id="cpf" name="cpf" required></div>
         </div>
+        <div class="campo"><label for="cnpj">CNPJ (opcional, só se o cliente for emitir nota fiscal de empresa)</label><input type="text" id="cnpj" name="cnpj"></div>
       </section>
 
       <section>
@@ -1272,7 +1301,8 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
     nome: String(req.body?.nome || '').trim().slice(0, 100),
     email: String(req.body?.email || '').trim().slice(0, 200),
     telefone: String(req.body?.telefone || '').trim().slice(0, 30),
-    cpf: req.body?.cpf
+    cpf: req.body?.cpf,
+    cnpj: req.body?.cnpj
   };
   const entrega = {
     cep: req.body?.cep,
@@ -1295,6 +1325,10 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
   }
   if (!documentoValido(cliente.cpf)) {
     return res.status(400).send(novoPedidoForm({ erro: 'Documento inválido — informe um CPF válido ou o número do passaporte (pra cliente estrangeiro).' }));
+  }
+  const cnpjDigitsVendedor = String(cliente.cnpj || '').replace(/\D/g, '');
+  if (cnpjDigitsVendedor && !cnpjValido(cnpjDigitsVendedor)) {
+    return res.status(400).send(novoPedidoForm({ erro: 'CNPJ inválido.' }));
   }
 
   const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
@@ -1363,10 +1397,11 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
 
   await pool.query(
     `INSERT INTO orders
-      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
-     VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,false,NULL,$19)`,
+      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
+     VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,false,NULL,$20)`,
     [
       orderNsu, cliente.nome, cliente.email, cliente.telefone || null, documentoNormalizado(cliente.cpf),
+      cnpjDigitsVendedor || null,
       entrega.cep, entrega.endereco, entrega.numero, entrega.complemento || null,
       entrega.bairro, entrega.cidade, entrega.estado, JSON.stringify(itensParaPedido),
       shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
@@ -1860,6 +1895,7 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
         <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Não pago há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a>${mostrarTotal ? ' pela data/valor acima' : ''}${o.customer_phone ? ` ou chame a pessoa no <a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">WhatsApp</a>` : ''}.</div>
       ` : ''}
       <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${o.customer_email ? escapeHtml(o.customer_email) : 'sem e-mail'} · ${o.customer_phone ? `<a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.customer_phone)} ↗</a>` : 'sem telefone'}</div>
+      ${o.customer_cnpj ? `<div class="pedido-detalhe" style="color:#B7791F;"><strong>CNPJ (nota fiscal):</strong> ${escapeHtml(o.customer_cnpj)}</div>` : ''}
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
       ${ocultarFrete ? '' : `<div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>`}

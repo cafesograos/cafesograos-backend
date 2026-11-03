@@ -67,6 +67,11 @@ async function initDb() {
   // etiqueta. Não é mais descartado após a validação do checkout como antes;
   // a política de privacidade do site foi atualizada pra refletir isso.
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_cpf TEXT;`);
+  // CNPJ do cliente, opcional -- só preenchido por quem quer nota fiscal de
+  // empresa. Nunca usado pra etiqueta (isso continua com o CPF); existe só
+  // pra aparecer no e-mail de novo pedido e no painel, já que antes não tinha
+  // nenhum jeito de saber quem precisava de nota sem vasculhar a Melhor Envio.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_cnpj TEXT;`);
   // Id do item no carrinho/pedido da Melhor Envio depois de inserido — usado
   // nas chamadas seguintes (pagar, gerar etiqueta, imprimir, rastrear).
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS melhorenvio_order_id TEXT;`);
