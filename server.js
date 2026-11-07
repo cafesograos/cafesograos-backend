@@ -743,6 +743,32 @@ app.post('/webhook-infinitepay', webhookLimiter, async (req, res) => {
   res.sendStatus(200);
 });
 
+// Handshake de verificação do webhook da API oficial do WhatsApp (Meta) — ela
+// chama esse GET uma vez só, na hora de salvar a configuração no painel de
+// desenvolvedor, só pra confirmar que o dono desse endpoint é quem configurou
+// o token. Sem bater o token, devolve 403 (nunca confirma pra quem não sabe o
+// segredo); batendo, ecoa de volta o "challenge" que a Meta mandou.
+app.get('/webhook-whatsapp', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
+});
+
+// Recebe mensagem/atualização de status da API oficial do WhatsApp. Por
+// enquanto só loga pra confirmar que a Meta está entregando os eventos —
+// o encaminhamento de verdade pra IA de atendimento (whatsapp-ia.js) entra
+// depois que o número estiver migrado e o token/phone_number_id configurados.
+// Sempre responde 200 rápido: a Meta reenvia (e pode suspender o webhook) se
+// não receber confirmação em poucos segundos.
+app.post('/webhook-whatsapp', (req, res) => {
+  console.log('[whatsapp-oficial] evento recebido:', JSON.stringify(req.body));
+  res.sendStatus(200);
+});
+
 // Rede de segurança pro caso do webhook acima nunca chegar até nós (soluço de
 // rede, InfinitePay fora do ar no momento do aviso, etc.) — sem isso, um
 // pedido pago de verdade ficava "pending" pra sempre e ninguém via, só quem
