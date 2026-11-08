@@ -2471,6 +2471,10 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
       ${status !== 'conectado' ? `<div class="pedido-detalhe" style="margin-top:4px;color:#8a5a3b;">Faltam variáveis de ambiente no Railway (WHATSAPP_TOKEN e/ou WHATSAPP_WABA_ID).</div>` : ''}
     </div>
 
+    <h2 style="margin-top:28px;">Conversas da IA</h2>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">Veja o que a IA está respondendo pros clientes, pra fiscalizar o atendimento.</p>
+    <a href="/admin/whatsapp/conversas" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;">Ver conversas →</a>
+
     <h2 style="margin-top:28px;">Mensagens automáticas</h2>
     <p class="pedido-detalhe" style="margin-bottom:14px;">Edite o texto livremente. Placeholders disponíveis: <code>{nome}</code> (já vem com ", " na frente, ex: ", Maria") e, só na confirmação de compra, <code>{pedido}</code> (número do pedido).</p>
     <form method="POST" action="/admin/whatsapp/mensagens" class="pedido-card" style="max-width:480px;display:block;">
@@ -2501,6 +2505,78 @@ app.post('/admin/whatsapp/mensagens', requireAdmin, express.urlencoded({ extende
   );
   logAdminAcao(req, 'mensagens_whatsapp_atualizadas', '');
   res.redirect('/admin/whatsapp');
+}));
+
+// Lista de conversas da IA no WhatsApp, mais recente primeiro — pra o dono
+// fiscalizar o que está sendo respondido sem precisar abrir o próprio
+// WhatsApp (que nem recebe essas mensagens, já que quem responde é a API
+// oficial direto, sem esse número aparecer num app instalado).
+app.get('/admin/whatsapp/conversas', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+  const { rows } = await pool.query(`
+    SELECT g.phone, g.ultima_em, g.total_mensagens, lm.content AS ultima_msg, lm.role AS ultima_role, l.name AS lead_nome
+    FROM (
+      SELECT phone, MAX(created_at) AS ultima_em, COUNT(*) AS total_mensagens
+      FROM whatsapp_mensagens
+      GROUP BY phone
+    ) g
+    LEFT JOIN LATERAL (
+      SELECT content, role FROM whatsapp_mensagens w2 WHERE w2.phone = g.phone ORDER BY created_at DESC LIMIT 1
+    ) lm ON true
+    LEFT JOIN LATERAL (
+      SELECT name FROM leads l2 WHERE l2.phone <> '' AND l2.phone = RIGHT(g.phone, LENGTH(l2.phone)) ORDER BY l2.created_at DESC LIMIT 1
+    ) l ON true
+    ORDER BY g.ultima_em DESC
+    LIMIT 100
+  `);
+
+  const body = `
+    <h1>Conversas da IA — WhatsApp</h1>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">${rows.length} conversa${rows.length === 1 ? '' : 's'}, mais recente primeiro. Mostra só as últimas 100.</p>
+    ${rows.length === 0 ? '<p class="pedido-detalhe">Nenhuma conversa ainda.</p>' : rows.map((r) => `
+      <a href="/admin/whatsapp/conversas/${encodeURIComponent(r.phone)}" class="pedido-card" style="max-width:480px;display:block;margin-bottom:12px;text-decoration:none;color:inherit;">
+        <div class="pedido-topo">
+          <div class="pedido-cliente">${escapeHtml(r.lead_nome || r.phone)}</div>
+          <div class="pedido-data">${escapeHtml(new Date(r.ultima_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
+        </div>
+        <div class="pedido-detalhe">${r.ultima_role === 'assistant' ? '🤖' : '🗣️'} ${escapeHtml((r.ultima_msg || '').slice(0, 140))}${(r.ultima_msg || '').length > 140 ? '…' : ''}</div>
+        <div class="pedido-detalhe" style="margin-top:6px;color:#8a6f5c;">${r.total_mensagens} mensage${r.total_mensagens === 1 ? 'm' : 'ns'}</div>
+      </a>
+    `).join('')}
+  `;
+  res.send(adminLayout({ title: 'Conversas WhatsApp', ativo: 'whatsapp', body }));
+}));
+
+// Histórico completo de uma conversa — texto corrido, cliente de um lado e
+// IA do outro, igual a tela de um app de chat normal.
+app.get('/admin/whatsapp/conversas/:phone', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const phone = String(req.params.phone || '').replace(/\D/g, '');
+  if (!phone) return res.status(400).send('Telefone inválido.');
+
+  const [{ rows: mensagens }, { rows: leadRows }] = await Promise.all([
+    pool.query(`SELECT role, content, created_at FROM whatsapp_mensagens WHERE phone = $1 ORDER BY created_at ASC`, [phone]),
+    pool.query(`SELECT name FROM leads WHERE phone <> '' AND phone = RIGHT($1, LENGTH(phone)) ORDER BY created_at DESC LIMIT 1`, [phone])
+  ]);
+  const nomeLead = leadRows[0]?.name;
+
+  const body = `
+    <a href="/admin/whatsapp/conversas" style="display:inline-block;margin-bottom:14px;">← Todas as conversas</a>
+    <h1>${escapeHtml(nomeLead || phone)}</h1>
+    <p class="pedido-detalhe" style="margin-bottom:14px;"><a href="https://wa.me/${escapeHtml(phone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(phone)} ↗</a> · ${mensagens.length} mensage${mensagens.length === 1 ? 'm' : 'ns'}</p>
+    <div style="display:flex;flex-direction:column;gap:10px;max-width:560px;">
+      ${mensagens.map((m) => `
+        <div style="align-self:${m.role === 'assistant' ? 'flex-end' : 'flex-start'};max-width:80%;">
+          <div class="pedido-card" style="background:${m.role === 'assistant' ? '#211714' : '#fff'};color:${m.role === 'assistant' ? '#fff' : '#211714'};padding:10px 14px;">
+            ${escapeHtml(m.content).replace(/\n/g, '<br>')}
+          </div>
+          <div class="pedido-detalhe" style="font-size:11px;margin-top:2px;text-align:${m.role === 'assistant' ? 'right' : 'left'};">${escapeHtml(new Date(m.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  res.send(adminLayout({ title: 'Conversa WhatsApp', ativo: 'whatsapp', body }));
 }));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
