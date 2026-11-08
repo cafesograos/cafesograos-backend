@@ -4,7 +4,6 @@ const Sentry = require('@sentry/node');
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
-const QRCode = require('qrcode');
 const { pool, initDb } = require('./db');
 const { calcularFrete, inserirNoCarrinho, comprarEtiquetas, gerarEtiquetas, imprimirEtiquetas, rastrearEtiquetas } = require('./shipping');
 const { criarLinkPagamento, consultarStatusPagamento } = require('./infinitepay');
@@ -12,11 +11,10 @@ const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastrei
 const { CATEGORIES, PRODUCTS } = require('./products');
 const { agendarBackupDiario } = require('./backup');
 const {
-  iniciarWhatsApp, desconectarWhatsApp, enviarMensagemWhatsApp,
-  definirHandlerMensagem,
-  getStatusConexao: getStatusWhatsApp, getQrAtual: getQrAtualWhatsApp,
-  getUltimoMotivoQueda: getUltimoMotivoQuedaWhatsApp
-} = require('./whatsapp');
+  iniciarWhatsApp, enviarMensagemWhatsApp,
+  definirHandlerMensagem, processarWebhookRecebido,
+  getStatusConexao: getStatusWhatsApp
+} = require('./whatsapp-oficial');
 const { responderMensagem, salvarRespostaAssistente } = require('./whatsapp-ia');
 
 const app = express();
@@ -758,15 +756,20 @@ app.get('/webhook-whatsapp', (req, res) => {
   res.sendStatus(403);
 });
 
-// Recebe mensagem/atualização de status da API oficial do WhatsApp. Por
-// enquanto só loga pra confirmar que a Meta está entregando os eventos —
-// o encaminhamento de verdade pra IA de atendimento (whatsapp-ia.js) entra
-// depois que o número estiver migrado e o token/phone_number_id configurados.
-// Sempre responde 200 rápido: a Meta reenvia (e pode suspender o webhook) se
-// não receber confirmação em poucos segundos.
+// Recebe mensagem/atualização de status da API oficial do WhatsApp e
+// encaminha pro handler registrado (ver definirHandlerMensagem, ligado à IA
+// de atendimento mais abaixo). Sempre responde 200 rápido, antes de esperar
+// o processamento terminar: a Meta reenvia (e pode suspender o webhook) se
+// não receber confirmação em poucos segundos — o processamento de verdade
+// roda em segundo plano dentro de processarWebhookRecebido.
 app.post('/webhook-whatsapp', (req, res) => {
-  console.log('[whatsapp-oficial] evento recebido:', JSON.stringify(req.body));
   res.sendStatus(200);
+  try {
+    processarWebhookRecebido(req.body);
+  } catch (err) {
+    console.error('[whatsapp-oficial] erro ao processar webhook:', err.message);
+    Sentry.captureException(err, { extra: { origem: 'webhook-whatsapp' } });
+  }
 });
 
 // Rede de segurança pro caso do webhook acima nunca chegar até nós (soluço de
@@ -2455,41 +2458,17 @@ app.post('/vendedor/contatos/:id/contato', requireVendedor, handlerLeadContato('
 // precisa escanear de novo, só se desconectar.
 app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
   const status = getStatusWhatsApp();
-  const qr = getQrAtualWhatsApp();
-  const qrImg = qr ? await QRCode.toDataURL(qr, { width: 280 }) : null;
-  const ultimoMotivo = getUltimoMotivoQuedaWhatsApp();
   const msgBoasVindas = await buscarMensagemConfig('boas_vindas');
   const msgConfirmacao = await buscarMensagemConfig('confirmacao_compra');
 
-  const statusLabel = {
-    conectado: '🟢 Conectado',
-    aguardando_qr: '🟡 Aguardando leitura do QR code',
-    desconectado: '🔴 Desconectado'
-  }[status] || status;
+  const statusLabel = status === 'conectado' ? '🟢 Conectado' : '🔴 Não configurado';
 
   const body = `
     <h1>WhatsApp — Café Só Grãos</h1>
-    <p class="pedido-detalhe" style="margin-bottom:14px;">Conexão gratuita (não-oficial, tipo WhatsApp Web) usada pra mandar automaticamente a mensagem de boas-vindas (3 min depois do cadastro no popup) e a confirmação de compra aprovada. Use um número dedicado só pra isso, separado do número de atendimento — existe risco de bloqueio pelo WhatsApp por ser uma conexão não-oficial.</p>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">Integração oficial (WhatsApp Business Platform / Cloud API da Meta) — sem QR code, sem risco de bloqueio por conexão não-oficial. Configurada direto no Railway (variáveis WHATSAPP_TOKEN e WHATSAPP_WABA_ID), não tem nada pra conectar aqui.</p>
     <div class="pedido-card" style="max-width:360px;">
       <div class="pedido-topo"><div class="pedido-cliente">Status: ${statusLabel}</div></div>
-      ${status === 'desconectado' && ultimoMotivo ? `<div class="pedido-detalhe" style="margin-top:4px;color:#8a5a3b;">Último motivo da queda: ${escapeHtml(String(ultimoMotivo))}</div>` : ''}
-      ${qrImg ? `
-        <div style="text-align:center;margin:16px 0;">
-          <img src="${qrImg}" alt="QR code do WhatsApp" style="width:100%;max-width:280px;border-radius:8px;">
-        </div>
-        <p class="pedido-detalhe">No celular dedicado: WhatsApp → Aparelhos conectados → Conectar um aparelho, e escaneie o código acima. Ele expira em cerca de 1 minuto — atualize a página se sumir antes de escanear.</p>
-      ` : ''}
-      ${status === 'conectado' ? `
-        <form method="POST" action="/admin/whatsapp/desconectar" onsubmit="return confirm('Desconectar o WhatsApp? Será preciso escanear o QR code de novo pra reconectar.');">
-          <button type="submit" class="btn-mini btn-mini-danger" style="margin-top:12px;">Desconectar</button>
-        </form>
-      ` : ''}
-      ${status === 'desconectado' && !qrImg ? `
-        <p class="pedido-detalhe">Gerando QR code, atualize a página em alguns segundos. Se continuar assim, tente conectar de novo:</p>
-        <form method="POST" action="/admin/whatsapp/conectar">
-          <button type="submit" class="btn-mini btn-mini-primary" style="margin-top:8px;">Tentar conectar</button>
-        </form>
-      ` : ''}
+      ${status !== 'conectado' ? `<div class="pedido-detalhe" style="margin-top:4px;color:#8a5a3b;">Faltam variáveis de ambiente no Railway (WHATSAPP_TOKEN e/ou WHATSAPP_WABA_ID).</div>` : ''}
     </div>
 
     <h2 style="margin-top:28px;">Mensagens automáticas</h2>
@@ -2521,23 +2500,6 @@ app.post('/admin/whatsapp/mensagens', requireAdmin, express.urlencoded({ extende
     [boasVindas, confirmacao]
   );
   logAdminAcao(req, 'mensagens_whatsapp_atualizadas', '');
-  res.redirect('/admin/whatsapp');
-}));
-
-// Reconecta sem apagar a sessão salva — pra quando a tentativa automática no
-// boot do servidor falhar (ex.: soluço de rede), sem precisar escanear o QR
-// de novo se já tinha uma sessão válida.
-app.post('/admin/whatsapp/conectar', requireAdmin, asyncHandler(async (req, res) => {
-  if (pool) iniciarWhatsApp(pool, { manual: true }).catch((err) => console.error('Erro ao conectar WhatsApp:', err));
-  res.redirect('/admin/whatsapp');
-}));
-
-// Desconecta o número e apaga a sessão salva — usado quando quiser trocar de
-// número dedicado ou se o número atual foi bloqueado pelo WhatsApp.
-app.post('/admin/whatsapp/desconectar', requireAdmin, asyncHandler(async (req, res) => {
-  await desconectarWhatsApp();
-  logAdminAcao(req, 'whatsapp_desconectado', '');
-  if (pool) iniciarWhatsApp(pool, { manual: true }).catch((err) => console.error('Erro ao reiniciar WhatsApp:', err));
   res.redirect('/admin/whatsapp');
 }));
 
