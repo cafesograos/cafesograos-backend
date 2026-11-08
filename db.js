@@ -141,6 +141,11 @@ async function initDb() {
   // condição de frete grátis dela (Araraquara/SP/Brasil) antes de comprar —
   // não usado pra calcular frete de verdade (isso só acontece no carrinho).
   await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS cep TEXT;`);
+  // Reengajamento semanal (até 4x) pra quem deu telefone mas nunca comprou —
+  // contagem pra não passar de 4 mensagens, e a data da última pra saber
+  // quando a próxima pode sair (ver processarFilaReengajamentoWhatsApp).
+  await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_reengajamento_contagem INTEGER DEFAULT 0;`);
+  await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_reengajamento_enviado_em TIMESTAMPTZ;`);
 
   // Sessão do WhatsApp (Baileys) guardada no banco em vez de em arquivo —
   // o disco do Railway não persiste entre deploys, então sem isso cada
@@ -181,7 +186,9 @@ async function initDb() {
       ('boas_vindas', 'Oi{nome}! 👋 Aqui é o Alberto, do Café Só Grãos.\n\nVimos que você se cadastrou no nosso site — seu brinde em dobro (2 Drip Coffee grátis) já está garantido na sua primeira compra! 🎁☕\n\nQuer que eu te ajude a escolher o café ideal pro seu gosto?'),
       ('confirmacao_compra', 'Oi{nome}! Seu pedido #{pedido} na Café Só Grãos foi confirmado. ☕✅\n\nJá está sendo preparado e vamos despachar no próximo dia útil. Assim que sair pra entrega, te mandamos o código de rastreio por e-mail. Ficou alguma dúvida sobre o pedido?'),
       ('feedback_pedido', 'Oi{nome}, tudo bem? Aqui é o Alberto, do Café Só Grãos ☕\n\nGostou do café que você comprou? O que achou? Pode me dar um feedback?'),
-      ('lembrete_recompra', 'Oi{nome}, tudo bem? Você comprou com a gente faz 30 dias — pelas nossas contas, seu café deve estar acabando! ☕\n\nQuer aproveitar e fazer um novo pedido?')
+      ('lembrete_recompra', 'Oi{nome}, tudo bem? Você comprou com a gente faz 30 dias — pelas nossas contas, seu café deve estar acabando! ☕\n\nQuer aproveitar e fazer um novo pedido?'),
+      ('reengajamento', 'Oi{nome}, lembrei de você! 👋 Tô com uma torra fresquinha aqui: {destaque}. Topa dar uma olhada?'),
+      ('destaque_reengajamento', 'acabamos de chegar de Minas, uma torra bem gostosa')
     ON CONFLICT (chave) DO NOTHING`
   );
 

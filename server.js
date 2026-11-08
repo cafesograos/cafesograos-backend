@@ -1606,7 +1606,8 @@ const WHATSAPP_TEMPLATES = {
   // Aviso pro dono quando a IA escala um atendimento — o número pessoal dele
   // normalmente nunca mandou mensagem pro número da loja, então isso também
   // cai fora da janela de 24h e precisa ser template, igual os outros.
-  escalacao: 'aviso_atendimento_humano'
+  escalacao: 'aviso_atendimento_humano',
+  reengajamento: 'reengajamento_interesse'
 };
 
 // Layout compartilhado pelos painéis: mesma barra de navegação em todos,
@@ -2471,6 +2472,8 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
   const msgConfirmacao = await buscarMensagemConfig('confirmacao_compra');
   const msgFeedback = await buscarMensagemConfig('feedback_pedido');
   const msgRecompra = await buscarMensagemConfig('lembrete_recompra');
+  const msgReengajamento = await buscarMensagemConfig('reengajamento');
+  const destaqueReengajamento = await buscarMensagemConfig('destaque_reengajamento');
 
   const statusLabel = status === 'conectado' ? '🟢 Conectado' : '🔴 Não configurado';
 
@@ -2486,8 +2489,16 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
     <p class="pedido-detalhe" style="margin-bottom:14px;">Veja o que a IA está respondendo pros clientes, pra fiscalizar o atendimento.</p>
     <a href="/admin/whatsapp/conversas" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;">Ver conversas →</a>
 
+    <h2 style="margin-top:28px;">Torra em destaque</h2>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">Esse texto <strong>entra direto</strong> na mensagem de reengajamento (sem precisar reaprovar nada no Meta) — atualize sempre que mudar a torra que você quer destacar.</p>
+    <form method="POST" action="/admin/whatsapp/destaque" class="pedido-card" style="max-width:480px;display:block;">
+      <label style="display:block;font-weight:700;margin-bottom:6px;">"Tô com uma torra fresquinha aqui: ___"</label>
+      <input type="text" name="destaque_reengajamento" maxlength="200" value="${escapeHtml(destaqueReengajamento)}" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;">
+      <button type="submit" class="btn-mini btn-mini-primary">Salvar destaque</button>
+    </form>
+
     <h2 style="margin-top:28px;">Mensagens automáticas</h2>
-    <p class="pedido-detalhe" style="margin-bottom:14px;">⚠️ Essas 4 mensagens são iniciadas pela loja (o cliente não mandou nada antes), então só podem sair como <strong>template aprovado pelo Meta</strong> — o texto abaixo é só referência do que está aprovado. Editar aqui <strong>não muda</strong> o que é enviado de verdade; pra mudar a redação é preciso reenviar o template pro Meta e esperar aprovação de novo. Placeholders: <code>{nome}</code> (já vem com ", " na frente) e, só na confirmação de compra, <code>{pedido}</code>.</p>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">⚠️ Essas mensagens são iniciadas pela loja (o cliente não mandou nada antes), então só podem sair como <strong>template aprovado pelo Meta</strong> — o texto abaixo é só referência do que está aprovado. Editar aqui <strong>não muda</strong> o que é enviado de verdade; pra mudar a redação é preciso reenviar o template pro Meta e esperar aprovação de novo. Placeholders: <code>{nome}</code> (já vem com ", " na frente), só na confirmação de compra <code>{pedido}</code>, e só no reengajamento <code>{destaque}</code> (esse sim editável acima, sem reaprovação).</p>
     <form method="POST" action="/admin/whatsapp/mensagens" class="pedido-card" style="max-width:480px;display:block;">
       <label style="display:block;font-weight:700;margin-bottom:6px;">Boas-vindas (3 min após cadastro no popup)</label>
       <textarea name="boas_vindas" rows="6" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;">${escapeHtml(msgBoasVindas)}</textarea>
@@ -2500,6 +2511,9 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
 
       <label style="display:block;font-weight:700;margin-bottom:6px;">Lembrete de recompra (30 dias após compra)</label>
       <textarea name="lembrete_recompra" rows="4" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;">${escapeHtml(msgRecompra)}</textarea>
+
+      <label style="display:block;font-weight:700;margin-bottom:6px;">Reengajamento (1x/semana, até 4x, quem nunca comprou)</label>
+      <textarea name="reengajamento" rows="4" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;">${escapeHtml(msgReengajamento)}</textarea>
 
       <button type="submit" class="btn-mini btn-mini-primary">Salvar referência</button>
     </form>
@@ -2515,15 +2529,33 @@ app.post('/admin/whatsapp/mensagens', requireAdmin, express.urlencoded({ extende
   const confirmacao = String(req.body?.confirmacao_compra || '').trim().slice(0, 1000);
   const feedback = String(req.body?.feedback_pedido || '').trim().slice(0, 1000);
   const recompra = String(req.body?.lembrete_recompra || '').trim().slice(0, 1000);
-  if (!boasVindas || !confirmacao || !feedback || !recompra) return res.status(400).send('Preencha as quatro mensagens.');
+  const reengajamento = String(req.body?.reengajamento || '').trim().slice(0, 1000);
+  if (!boasVindas || !confirmacao || !feedback || !recompra || !reengajamento) return res.status(400).send('Preencha as cinco mensagens.');
 
   await pool.query(
     `INSERT INTO mensagens_config (chave, texto) VALUES
-       ('boas_vindas', $1), ('confirmacao_compra', $2), ('feedback_pedido', $3), ('lembrete_recompra', $4)
+       ('boas_vindas', $1), ('confirmacao_compra', $2), ('feedback_pedido', $3), ('lembrete_recompra', $4), ('reengajamento', $5)
      ON CONFLICT (chave) DO UPDATE SET texto = EXCLUDED.texto`,
-    [boasVindas, confirmacao, feedback, recompra]
+    [boasVindas, confirmacao, feedback, recompra, reengajamento]
   );
   logAdminAcao(req, 'mensagens_whatsapp_atualizadas', '');
+  res.redirect('/admin/whatsapp');
+}));
+
+// Diferente da rota acima, esse texto entra de verdade na próxima mensagem
+// de reengajamento enviada (é só o valor da variável {{2}} do template já
+// aprovado) — não precisa reaprovação no Meta pra mudar.
+app.post('/admin/whatsapp/destaque', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const destaque = String(req.body?.destaque_reengajamento || '').trim().slice(0, 200);
+  if (!destaque) return res.status(400).send('Preencha o destaque.');
+
+  await pool.query(
+    `INSERT INTO mensagens_config (chave, texto) VALUES ('destaque_reengajamento', $1)
+     ON CONFLICT (chave) DO UPDATE SET texto = EXCLUDED.texto`,
+    [destaque]
+  );
+  logAdminAcao(req, 'destaque_reengajamento_atualizado', '');
   res.redirect('/admin/whatsapp');
 }));
 
@@ -2767,6 +2799,66 @@ async function processarFilaRecompraWhatsApp() {
   }
 }
 
+// Reengajamento de quem deu telefone mas nunca comprou — até 4 mensagens,
+// 1 por semana, parando na hora se a pessoa comprar (checado toda rodada) ou
+// ao bater o limite. Pedido do dono (2026-11-08): nem "só 1 vez" nem
+// "semanal sem limite" — um meio-termo pra não cansar quem nunca responde,
+// mas sem desistir cedo demais de quem só precisava de mais um empurrão.
+async function processarFilaReengajamentoWhatsApp() {
+  if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (!dentroDoHorarioComercial()) return;
+  const LIMITE_MENSAGENS = 4;
+  try {
+    // Descarta (sem enviar) cadastro muito antigo que nunca começou esse
+    // fluxo — mesmo cuidado contra rajada dos outros fluxos.
+    await pool.query(
+      `UPDATE leads SET whatsapp_reengajamento_contagem = $1, whatsapp_reengajamento_enviado_em = now()
+       WHERE COALESCE(whatsapp_reengajamento_contagem, 0) = 0
+         AND created_at < now() - interval '90 days'`,
+      [LIMITE_MENSAGENS]
+    );
+
+    const { rows } = await pool.query(
+      `SELECT l.id, l.name, l.phone FROM leads l
+       WHERE l.phone IS NOT NULL AND l.phone <> ''
+         AND COALESCE(l.whatsapp_reengajamento_contagem, 0) < $1
+         AND (
+           (COALESCE(l.whatsapp_reengajamento_contagem, 0) = 0 AND l.created_at <= now() - interval '7 days')
+           OR (l.whatsapp_reengajamento_enviado_em IS NOT NULL AND l.whatsapp_reengajamento_enviado_em <= now() - interval '7 days')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM orders o
+           WHERE o.status = 'approved'
+             AND regexp_replace(o.customer_phone, '\\D', '', 'g') = regexp_replace(l.phone, '\\D', '', 'g')
+         )
+       ORDER BY l.created_at ASC LIMIT 1`,
+      [LIMITE_MENSAGENS]
+    );
+    for (const lead of rows) {
+      const telefone = telefoneParaE164(lead.phone);
+      if (telefone) {
+        const primeiroNome = String(lead.name || '').trim().split(' ')[0];
+        const nomeFormatado = primeiroNome ? `, ${primeiroNome}` : '';
+        const destaque = await buscarMensagemConfig('destaque_reengajamento');
+        try {
+          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.reengajamento, [nomeFormatado, destaque]);
+          console.log(`WhatsApp de reengajamento enviado pro lead #${lead.id}.`);
+        } catch (err) {
+          console.error(`Falha ao enviar WhatsApp de reengajamento pro lead #${lead.id}:`, err.message);
+        }
+      }
+      // Avança a contagem mesmo em falha, igual aos outros fluxos — evita
+      // ficar tentando pro mesmo número a cada rodada pra sempre.
+      await pool.query(
+        `UPDATE leads SET whatsapp_reengajamento_contagem = COALESCE(whatsapp_reengajamento_contagem, 0) + 1, whatsapp_reengajamento_enviado_em = now() WHERE id = $1`,
+        [lead.id]
+      );
+    }
+  } catch (err) {
+    console.error('Erro ao processar fila de reengajamento do WhatsApp:', err);
+  }
+}
+
 // Número pessoal do Alberto, separado do número da loja (que agora só
 // responde via API, sem WhatsApp de verdade instalado em celular nenhum) —
 // é pra onde vai o aviso quando a IA precisa de um humano.
@@ -2826,6 +2918,7 @@ initDb().finally(() => {
     // como o boas-vindas — de hora em hora é mais que suficiente.
     setInterval(processarFilaFeedbackWhatsApp, 60 * 60 * 1000);
     setInterval(processarFilaRecompraWhatsApp, 60 * 60 * 1000);
+    setInterval(processarFilaReengajamentoWhatsApp, 60 * 60 * 1000);
     // 1 a cada 15 min — frequente o bastante pra pegar rápido um pedido pago
     // que o webhook da InfinitePay perdeu, sem bater demais na API deles
     // (hoje é só 1 pedido/dia em média).
