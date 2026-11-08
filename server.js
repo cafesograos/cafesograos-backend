@@ -11,7 +11,7 @@ const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastrei
 const { CATEGORIES, PRODUCTS } = require('./products');
 const { agendarBackupDiario } = require('./backup');
 const {
-  iniciarWhatsApp, enviarMensagemWhatsApp,
+  iniciarWhatsApp, enviarMensagemWhatsApp, enviarTemplateWhatsApp,
   definirHandlerMensagem, processarWebhookRecebido,
   getStatusConexao: getStatusWhatsApp
 } = require('./whatsapp-oficial');
@@ -694,8 +694,7 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
       const telefoneOrder = telefoneParaE164(order.customer_phone);
       if (telefoneOrder) {
         const primeiroNomeOrder = order.customer_name ? `, ${String(order.customer_name).trim().split(' ')[0]}` : '';
-        const template = await buscarMensagemConfig('confirmacao_compra');
-        await enviarMensagemWhatsApp(telefoneOrder, substituirPlaceholders(template, { nome: primeiroNomeOrder, pedido: order.id }));
+        await enviarTemplateWhatsApp(telefoneOrder, WHATSAPP_TEMPLATES.confirmacao_compra, [primeiroNomeOrder, order.id]);
       }
     } catch (err) {
       console.error(`Falha ao enviar WhatsApp de confirmação (pedido #${order.id}):`, err.message);
@@ -1592,13 +1591,23 @@ async function buscarMensagemConfig(chave) {
   return rows[0]?.texto || '';
 }
 
-function substituirPlaceholders(texto, vars) {
-  let resultado = texto;
-  for (const [chave, valor] of Object.entries(vars)) {
-    resultado = resultado.split(`{${chave}}`).join(valor);
-  }
-  return resultado;
-}
+// Nome exato de cada template aprovado no WhatsApp Manager da Meta — as 4
+// mensagens que A LOJA inicia (cliente não mandou nada antes) só podem sair
+// como template, nunca como texto livre. O texto salvo em mensagens_config
+// (editável em /admin/whatsapp) só serve de referência/documentação do que
+// está aprovado — mudar o texto ali não muda o que é enviado de verdade,
+// porque quem decide a redação final é o template aprovado no Meta; mudar a
+// redação de verdade exige reenviar o template pra aprovação de novo.
+const WHATSAPP_TEMPLATES = {
+  boas_vindas: 'boas_vindas_cadastro',
+  confirmacao_compra: 'confirmacao_pedido',
+  feedback_pedido: 'feedback_pedido_cafe',
+  lembrete_recompra: 'lembrete_recompra_cafe',
+  // Aviso pro dono quando a IA escala um atendimento — o número pessoal dele
+  // normalmente nunca mandou mensagem pro número da loja, então isso também
+  // cai fora da janela de 24h e precisa ser template, igual os outros.
+  escalacao: 'aviso_atendimento_humano'
+};
 
 // Layout compartilhado pelos painéis: mesma barra de navegação em todos,
 // pra dar pra pular entre pedidos, avaliações, métricas, GA e InfinitePay
@@ -2460,6 +2469,8 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
   const status = getStatusWhatsApp();
   const msgBoasVindas = await buscarMensagemConfig('boas_vindas');
   const msgConfirmacao = await buscarMensagemConfig('confirmacao_compra');
+  const msgFeedback = await buscarMensagemConfig('feedback_pedido');
+  const msgRecompra = await buscarMensagemConfig('lembrete_recompra');
 
   const statusLabel = status === 'conectado' ? '🟢 Conectado' : '🔴 Não configurado';
 
@@ -2476,7 +2487,7 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
     <a href="/admin/whatsapp/conversas" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;">Ver conversas →</a>
 
     <h2 style="margin-top:28px;">Mensagens automáticas</h2>
-    <p class="pedido-detalhe" style="margin-bottom:14px;">Edite o texto livremente. Placeholders disponíveis: <code>{nome}</code> (já vem com ", " na frente, ex: ", Maria") e, só na confirmação de compra, <code>{pedido}</code> (número do pedido).</p>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">⚠️ Essas 4 mensagens são iniciadas pela loja (o cliente não mandou nada antes), então só podem sair como <strong>template aprovado pelo Meta</strong> — o texto abaixo é só referência do que está aprovado. Editar aqui <strong>não muda</strong> o que é enviado de verdade; pra mudar a redação é preciso reenviar o template pro Meta e esperar aprovação de novo. Placeholders: <code>{nome}</code> (já vem com ", " na frente) e, só na confirmação de compra, <code>{pedido}</code>.</p>
     <form method="POST" action="/admin/whatsapp/mensagens" class="pedido-card" style="max-width:480px;display:block;">
       <label style="display:block;font-weight:700;margin-bottom:6px;">Boas-vindas (3 min após cadastro no popup)</label>
       <textarea name="boas_vindas" rows="6" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;">${escapeHtml(msgBoasVindas)}</textarea>
@@ -2484,7 +2495,13 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
       <label style="display:block;font-weight:700;margin-bottom:6px;">Confirmação de compra (pagamento aprovado)</label>
       <textarea name="confirmacao_compra" rows="6" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;">${escapeHtml(msgConfirmacao)}</textarea>
 
-      <button type="submit" class="btn-mini btn-mini-primary">Salvar mensagens</button>
+      <label style="display:block;font-weight:700;margin-bottom:6px;">Feedback do pedido (10 dias após compra)</label>
+      <textarea name="feedback_pedido" rows="4" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;">${escapeHtml(msgFeedback)}</textarea>
+
+      <label style="display:block;font-weight:700;margin-bottom:6px;">Lembrete de recompra (30 dias após compra)</label>
+      <textarea name="lembrete_recompra" rows="4" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;">${escapeHtml(msgRecompra)}</textarea>
+
+      <button type="submit" class="btn-mini btn-mini-primary">Salvar referência</button>
     </form>
   `;
   res.send(adminLayout({ title: 'WhatsApp', ativo: 'whatsapp', body }));
@@ -2496,12 +2513,15 @@ app.post('/admin/whatsapp/mensagens', requireAdmin, express.urlencoded({ extende
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
   const boasVindas = String(req.body?.boas_vindas || '').trim().slice(0, 1000);
   const confirmacao = String(req.body?.confirmacao_compra || '').trim().slice(0, 1000);
-  if (!boasVindas || !confirmacao) return res.status(400).send('Preencha as duas mensagens.');
+  const feedback = String(req.body?.feedback_pedido || '').trim().slice(0, 1000);
+  const recompra = String(req.body?.lembrete_recompra || '').trim().slice(0, 1000);
+  if (!boasVindas || !confirmacao || !feedback || !recompra) return res.status(400).send('Preencha as quatro mensagens.');
 
   await pool.query(
-    `INSERT INTO mensagens_config (chave, texto) VALUES ('boas_vindas', $1), ('confirmacao_compra', $2)
+    `INSERT INTO mensagens_config (chave, texto) VALUES
+       ('boas_vindas', $1), ('confirmacao_compra', $2), ('feedback_pedido', $3), ('lembrete_recompra', $4)
      ON CONFLICT (chave) DO UPDATE SET texto = EXCLUDED.texto`,
-    [boasVindas, confirmacao]
+    [boasVindas, confirmacao, feedback, recompra]
   );
   logAdminAcao(req, 'mensagens_whatsapp_atualizadas', '');
   res.redirect('/admin/whatsapp');
@@ -2652,8 +2672,7 @@ async function processarFilaBoasVindasWhatsApp() {
         const primeiroNomeLead = String(lead.name || '').trim().split(' ')[0];
         const nomeFormatado = primeiroNomeLead ? `, ${primeiroNomeLead}` : '';
         try {
-          const template = await buscarMensagemConfig('boas_vindas');
-          await enviarMensagemWhatsApp(telefone, substituirPlaceholders(template, { nome: nomeFormatado }));
+          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.boas_vindas, [nomeFormatado]);
           console.log(`WhatsApp de boas-vindas enviado pro lead #${lead.id}.`);
           enviouComSucesso = true;
         } catch (err) {
@@ -2674,17 +2693,91 @@ async function processarFilaBoasVindasWhatsApp() {
   }
 }
 
-// Número pessoal do Alberto — já é o mesmo número público usado em todo o
-// site (e-mails, link "Falar no WhatsApp"), não é segredo nenhum.
-const OWNER_WHATSAPP_NUMBER = '5516997916459';
+// Roda de hora em hora: 10 dias depois de um pedido aprovado, manda um
+// WhatsApp perguntando o que o cliente achou do café — 1 por rodada, mesmo
+// cuidado contra rajada que o boas-vindas já tem (descarta pedido muito
+// antigo represado em vez de mandar tudo de uma vez quando volta do ar).
+async function processarFilaFeedbackWhatsApp() {
+  if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (!dentroDoHorarioComercial()) return;
+  try {
+    await pool.query(
+      `UPDATE orders SET whatsapp_feedback_enviado_em = now()
+       WHERE status = 'approved' AND whatsapp_feedback_enviado_em IS NULL
+         AND created_at < now() - interval '40 days'`
+    );
+    const { rows } = await pool.query(
+      `SELECT id, customer_name, customer_phone FROM orders
+       WHERE status = 'approved' AND whatsapp_feedback_enviado_em IS NULL
+         AND customer_phone IS NOT NULL AND customer_phone <> ''
+         AND created_at <= now() - interval '10 days'
+       ORDER BY created_at ASC LIMIT 1`
+    );
+    for (const pedido of rows) {
+      const telefone = telefoneParaE164(pedido.customer_phone);
+      if (telefone) {
+        const primeiroNome = pedido.customer_name ? `, ${String(pedido.customer_name).trim().split(' ')[0]}` : '';
+        try {
+          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.feedback_pedido, [primeiroNome]);
+          console.log(`WhatsApp de feedback enviado pro pedido #${pedido.id}.`);
+        } catch (err) {
+          console.error(`Falha ao enviar WhatsApp de feedback pro pedido #${pedido.id}:`, err.message);
+        }
+      }
+      await pool.query(`UPDATE orders SET whatsapp_feedback_enviado_em = now() WHERE id = $1`, [pedido.id]);
+    }
+  } catch (err) {
+    console.error('Erro ao processar fila de feedback do WhatsApp:', err);
+  }
+}
+
+// Mesma lógica do feedback, mas aos 30 dias e convidando pra uma nova compra
+// (o café de uma compra normal costuma acabar por essa época).
+async function processarFilaRecompraWhatsApp() {
+  if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (!dentroDoHorarioComercial()) return;
+  try {
+    await pool.query(
+      `UPDATE orders SET whatsapp_recompra_enviado_em = now()
+       WHERE status = 'approved' AND whatsapp_recompra_enviado_em IS NULL
+         AND created_at < now() - interval '60 days'`
+    );
+    const { rows } = await pool.query(
+      `SELECT id, customer_name, customer_phone FROM orders
+       WHERE status = 'approved' AND whatsapp_recompra_enviado_em IS NULL
+         AND customer_phone IS NOT NULL AND customer_phone <> ''
+         AND created_at <= now() - interval '30 days'
+       ORDER BY created_at ASC LIMIT 1`
+    );
+    for (const pedido of rows) {
+      const telefone = telefoneParaE164(pedido.customer_phone);
+      if (telefone) {
+        const primeiroNome = pedido.customer_name ? `, ${String(pedido.customer_name).trim().split(' ')[0]}` : '';
+        try {
+          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.lembrete_recompra, [primeiroNome]);
+          console.log(`WhatsApp de lembrete de recompra enviado pro pedido #${pedido.id}.`);
+        } catch (err) {
+          console.error(`Falha ao enviar WhatsApp de lembrete de recompra pro pedido #${pedido.id}:`, err.message);
+        }
+      }
+      await pool.query(`UPDATE orders SET whatsapp_recompra_enviado_em = now() WHERE id = $1`, [pedido.id]);
+    }
+  } catch (err) {
+    console.error('Erro ao processar fila de recompra do WhatsApp:', err);
+  }
+}
+
+// Número pessoal do Alberto, separado do número da loja (que agora só
+// responde via API, sem WhatsApp de verdade instalado em celular nenhum) —
+// é pra onde vai o aviso quando a IA precisa de um humano.
+const OWNER_WHATSAPP_NUMBER = '5516997567559';
 
 // Avisa o dono pelo WhatsApp quando a IA de atendimento não consegue
 // resolver algo sozinha, pra ele saber que precisa entrar na conversa sem
 // precisar ficar checando o celular dedicado de tempos em tempos.
 async function escalarAtendimento(telefoneCliente, motivo) {
-  const texto = `⚠️ Um cliente no WhatsApp da loja precisa de você.\n\nTelefone: +${telefoneCliente}\nMotivo: ${motivo || 'não especificado'}`;
   try {
-    await enviarMensagemWhatsApp(OWNER_WHATSAPP_NUMBER, texto);
+    await enviarTemplateWhatsApp(OWNER_WHATSAPP_NUMBER, WHATSAPP_TEMPLATES.escalacao, [telefoneCliente, motivo || 'não especificado']);
   } catch (err) {
     console.error('[whatsapp-ia] falha ao avisar o dono sobre escalação:', err.message);
   }
@@ -2729,6 +2822,10 @@ initDb().finally(() => {
     // a pedido do dono, depois de passar por instabilidade de conexão na
     // hora de reprocessar o represamento de contatos antigos.
     setInterval(processarFilaBoasVindasWhatsApp, 5 * 60 * 1000);
+    // Feedback (10 dias) e lembrete de recompra (30 dias) não são urgentes
+    // como o boas-vindas — de hora em hora é mais que suficiente.
+    setInterval(processarFilaFeedbackWhatsApp, 60 * 60 * 1000);
+    setInterval(processarFilaRecompraWhatsApp, 60 * 60 * 1000);
     // 1 a cada 15 min — frequente o bastante pra pegar rápido um pedido pago
     // que o webhook da InfinitePay perdeu, sem bater demais na API deles
     // (hoje é só 1 pedido/dia em média).

@@ -49,6 +49,11 @@ async function initDb() {
   // Marcação manual do admin: "já lancei esse pedido no meu sistema de
   // vendas/contabilidade" — independente do status de pagamento/rastreio.
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS entrada_sistema BOOLEAN DEFAULT false;`);
+  // Marca quando já mandamos o WhatsApp de pedir feedback (10 dias) e o de
+  // lembrete de recompra (30 dias) desse pedido — pra fila nunca mandar duas
+  // vezes pro mesmo pedido (ver server.js).
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS whatsapp_feedback_enviado_em TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS whatsapp_recompra_enviado_em TIMESTAMPTZ;`);
   // Qual transportadora/modalidade a Melhor Envio escolheu como mais barata
   // pra esse pedido — sem isso, na hora de gerar a etiqueta de verdade era
   // preciso recalcular o frete manualmente só pra descobrir qual usar.
@@ -174,7 +179,9 @@ async function initDb() {
   await pool.query(
     `INSERT INTO mensagens_config (chave, texto) VALUES
       ('boas_vindas', 'Oi{nome}! 👋 Aqui é o Alberto, do Café Só Grãos.\n\nVimos que você se cadastrou no nosso site — seu brinde em dobro (2 Drip Coffee grátis) já está garantido na sua primeira compra! 🎁☕\n\nQuer que eu te ajude a escolher o café ideal pro seu gosto?'),
-      ('confirmacao_compra', 'Oi{nome}! Seu pedido #{pedido} na Café Só Grãos foi confirmado. ☕✅\n\nJá está sendo preparado e vamos despachar no próximo dia útil. Assim que sair pra entrega, te mandamos o código de rastreio por aqui também. Ficou alguma dúvida sobre o pedido?')
+      ('confirmacao_compra', 'Oi{nome}! Seu pedido #{pedido} na Café Só Grãos foi confirmado. ☕✅\n\nJá está sendo preparado e vamos despachar no próximo dia útil. Assim que sair pra entrega, te mandamos o código de rastreio por e-mail. Ficou alguma dúvida sobre o pedido?'),
+      ('feedback_pedido', 'Oi{nome}, tudo bem? Aqui é o Alberto, do Café Só Grãos ☕\n\nGostou do café que você comprou? O que achou? Pode me dar um feedback?'),
+      ('lembrete_recompra', 'Oi{nome}, tudo bem? Você comprou com a gente faz 30 dias — pelas nossas contas, seu café deve estar acabando! ☕\n\nQuer aproveitar e fazer um novo pedido?')
     ON CONFLICT (chave) DO NOTHING`
   );
 

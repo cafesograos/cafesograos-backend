@@ -61,6 +61,39 @@ async function enviarMensagemWhatsApp(telefoneOuJid, texto) {
   return data;
 }
 
+// Mensagem de template aprovado — obrigatório pra qualquer mensagem que A
+// LOJA inicia (cliente não mandou nada antes, tipo boas-vindas ou lembrete
+// de recompra), porque a Meta só libera texto livre dentro da janela de 24h
+// depois de o cliente ter mandado mensagem primeiro. `nomeTemplate` precisa
+// bater exatamente com o nome aprovado no WhatsApp Manager; `parametros` é a
+// lista de valores pra preencher {{1}}, {{2}}... do corpo do template, na
+// ordem em que aparecem (o texto em si do template não muda aqui, só os
+// valores — mudar a redação exige reaprovação no Meta).
+async function enviarTemplateWhatsApp(telefoneOuJid, nomeTemplate, parametros = []) {
+  const token = process.env.WHATSAPP_TOKEN;
+  if (!token) throw new Error('WhatsApp não configurado (WHATSAPP_TOKEN ausente).');
+  const numero = String(telefoneOuJid || '').replace(/\D/g, '');
+  if (!numero) throw new Error('Telefone inválido.');
+  const phoneNumberId = await obterPhoneNumberId();
+  const res = await fetch(`${GRAPH_API_BASE}/${phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: numero,
+      type: 'template',
+      template: {
+        name: nomeTemplate,
+        language: { code: 'pt_BR' },
+        ...(parametros.length ? { components: [{ type: 'body', parameters: parametros.map((valor) => ({ type: 'text', text: String(valor) })) }] } : {})
+      }
+    })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || 'Falha ao enviar template pelo WhatsApp.');
+  return data;
+}
+
 // Chamado pelo POST /webhook-whatsapp (ver server.js) a cada evento que a
 // Meta entrega pro número configurado. Só processa mensagem de texto
 // recebida de cliente — ignora atualização de status de entrega, reação,
@@ -90,6 +123,7 @@ function getStatusConexao() {
 
 module.exports = {
   enviarMensagemWhatsApp,
+  enviarTemplateWhatsApp,
   definirHandlerMensagem,
   processarWebhookRecebido,
   getStatusConexao,
