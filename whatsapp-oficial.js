@@ -65,16 +65,19 @@ async function enviarMensagemWhatsApp(telefoneOuJid, texto) {
 // LOJA inicia (cliente não mandou nada antes, tipo boas-vindas ou lembrete
 // de recompra), porque a Meta só libera texto livre dentro da janela de 24h
 // depois de o cliente ter mandado mensagem primeiro. `nomeTemplate` precisa
-// bater exatamente com o nome aprovado no WhatsApp Manager; `parametros` é a
-// lista de valores pra preencher {{1}}, {{2}}... do corpo do template, na
-// ordem em que aparecem (o texto em si do template não muda aqui, só os
-// valores — mudar a redação exige reaprovação no Meta).
-async function enviarTemplateWhatsApp(telefoneOuJid, nomeTemplate, parametros = []) {
+// bater exatamente com o nome aprovado no WhatsApp Manager; `parametros` é
+// um objeto { nome_da_variavel: valor } com os valores pra preencher as
+// variáveis nomeadas do corpo do template (ex: {{nome_cliente}}) — a Meta
+// passou a exigir variável nomeada em vez de numerada ({{1}}, {{2}}). O
+// texto em si do template não muda aqui, só os valores — mudar a redação
+// exige reaprovação no Meta.
+async function enviarTemplateWhatsApp(telefoneOuJid, nomeTemplate, parametros = {}) {
   const token = process.env.WHATSAPP_TOKEN;
   if (!token) throw new Error('WhatsApp não configurado (WHATSAPP_TOKEN ausente).');
   const numero = String(telefoneOuJid || '').replace(/\D/g, '');
   if (!numero) throw new Error('Telefone inválido.');
   const phoneNumberId = await obterPhoneNumberId();
+  const nomesVariaveis = Object.keys(parametros);
   const res = await fetch(`${GRAPH_API_BASE}/${phoneNumberId}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -85,7 +88,12 @@ async function enviarTemplateWhatsApp(telefoneOuJid, nomeTemplate, parametros = 
       template: {
         name: nomeTemplate,
         language: { code: 'pt_BR' },
-        ...(parametros.length ? { components: [{ type: 'body', parameters: parametros.map((valor) => ({ type: 'text', text: String(valor) })) }] } : {})
+        ...(nomesVariaveis.length ? {
+          components: [{
+            type: 'body',
+            parameters: nomesVariaveis.map((nome) => ({ type: 'text', parameter_name: nome, text: String(parametros[nome]) }))
+          }]
+        } : {})
       }
     })
   });

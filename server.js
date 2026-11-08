@@ -694,7 +694,7 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
       const telefoneOrder = telefoneParaE164(order.customer_phone);
       if (telefoneOrder) {
         const primeiroNomeOrder = order.customer_name ? `, ${String(order.customer_name).trim().split(' ')[0]}` : '';
-        await enviarTemplateWhatsApp(telefoneOrder, WHATSAPP_TEMPLATES.confirmacao_compra, [primeiroNomeOrder, order.id]);
+        await enviarTemplateWhatsApp(telefoneOrder, WHATSAPP_TEMPLATES.confirmacao_compra, { nome_cliente: primeiroNomeOrder, numero_pedido: order.id });
       }
     } catch (err) {
       console.error(`Falha ao enviar WhatsApp de confirmação (pedido #${order.id}):`, err.message);
@@ -2704,7 +2704,7 @@ async function processarFilaBoasVindasWhatsApp() {
         const primeiroNomeLead = String(lead.name || '').trim().split(' ')[0];
         const nomeFormatado = primeiroNomeLead ? `, ${primeiroNomeLead}` : '';
         try {
-          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.boas_vindas, [nomeFormatado]);
+          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.boas_vindas, { nome_cliente: nomeFormatado });
           console.log(`WhatsApp de boas-vindas enviado pro lead #${lead.id}.`);
           enviouComSucesso = true;
         } catch (err) {
@@ -2750,7 +2750,7 @@ async function processarFilaFeedbackWhatsApp() {
       if (telefone) {
         const primeiroNome = pedido.customer_name ? `, ${String(pedido.customer_name).trim().split(' ')[0]}` : '';
         try {
-          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.feedback_pedido, [primeiroNome]);
+          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.feedback_pedido, { nome_cliente: primeiroNome });
           console.log(`WhatsApp de feedback enviado pro pedido #${pedido.id}.`);
         } catch (err) {
           console.error(`Falha ao enviar WhatsApp de feedback pro pedido #${pedido.id}:`, err.message);
@@ -2786,7 +2786,7 @@ async function processarFilaRecompraWhatsApp() {
       if (telefone) {
         const primeiroNome = pedido.customer_name ? `, ${String(pedido.customer_name).trim().split(' ')[0]}` : '';
         try {
-          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.lembrete_recompra, [primeiroNome]);
+          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.lembrete_recompra, { nome_cliente: primeiroNome });
           console.log(`WhatsApp de lembrete de recompra enviado pro pedido #${pedido.id}.`);
         } catch (err) {
           console.error(`Falha ao enviar WhatsApp de lembrete de recompra pro pedido #${pedido.id}:`, err.message);
@@ -2841,7 +2841,7 @@ async function processarFilaReengajamentoWhatsApp() {
         const nomeFormatado = primeiroNome ? `, ${primeiroNome}` : '';
         const destaque = await buscarMensagemConfig('destaque_reengajamento');
         try {
-          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.reengajamento, [nomeFormatado, destaque]);
+          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.reengajamento, { nome_cliente: nomeFormatado, destaque });
           console.log(`WhatsApp de reengajamento enviado pro lead #${lead.id}.`);
         } catch (err) {
           console.error(`Falha ao enviar WhatsApp de reengajamento pro lead #${lead.id}:`, err.message);
@@ -2878,7 +2878,7 @@ async function escalarAtendimento(telefoneCliente, motivo) {
         [telefoneCliente, motivo || 'não especificado']
       );
     }
-    await enviarTemplateWhatsApp(OWNER_WHATSAPP_NUMBER, WHATSAPP_TEMPLATES.escalacao, [telefoneCliente, motivo || 'não especificado']);
+    await enviarTemplateWhatsApp(OWNER_WHATSAPP_NUMBER, WHATSAPP_TEMPLATES.escalacao, { telefone_cliente: telefoneCliente, motivo: motivo || 'não especificado' });
   } catch (err) {
     console.error('[whatsapp-ia] falha ao avisar o dono sobre escalação:', err.message);
   }
