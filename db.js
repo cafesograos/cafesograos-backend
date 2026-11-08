@@ -171,6 +171,20 @@ async function initDb() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_mensagens_phone ON whatsapp_mensagens (phone, created_at);`);
 
+  // Fila de escalações pra humano — o dono nunca fala direto com o cliente,
+  // ele responde pro número da loja e a gente repassa (ver escalarAtendimento
+  // e o handler de mensagem recebida em server.js). Uma linha por escalação;
+  // respondido_em marca quando já foi repassada.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_escalacoes (
+      id SERIAL PRIMARY KEY,
+      telefone_cliente TEXT NOT NULL,
+      motivo TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      respondido_em TIMESTAMPTZ
+    );
+  `);
+
   // Textos das mensagens automáticas do WhatsApp (boas-vindas, confirmação
   // de compra), editáveis pelo dono direto no painel admin — sem precisar
   // mexer em código pra ajustar uma palavra. Placeholders tipo {nome} são

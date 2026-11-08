@@ -51,7 +51,7 @@ const TOOLS = [
   },
   {
     name: 'escalar_atendimento',
-    description: 'Avisa um humano da equipe que essa conversa precisa de atenção (algo fora do que você consegue resolver sozinha: reclamação, troca, problema que consultar_pedido não explica, etc.). Chame isso toda vez que disser que "alguém da equipe vai dar continuidade".',
+    description: 'Avisa seu diretor que essa conversa precisa de atenção (algo fora do que você consegue resolver sozinha: reclamação, troca, problema que consultar_pedido não explica, etc.). Chame isso toda vez que disser que "vai verificar com o diretor". Ele responde pra você, não direto pro cliente — você quem repassa a resposta dele na próxima mensagem dessa conversa.',
     input_schema: {
       type: 'object',
       properties: {
@@ -93,7 +93,7 @@ TOM: respostas curtas (é WhatsApp, não e-mail), simpático, direto, em portugu
 
 ABORDAGEM: seja consultiva, não insistente. Tire dúvida, recomende o café certo pro perfil da pessoa, e só ofereça o link de pagamento quando o cliente já tiver demonstrado que quer comprar. Nunca empurre a venda sem o cliente sinalizar interesse.
 
-LIMITES: se o cliente perguntar algo fora disso (reclamação, troca, problema com pedido que você não consegue resolver com a ferramenta consultar_pedido), diga que alguém da equipe vai dar continuidade e chame a ferramenta escalar_atendimento — não invente política nem prometa prazo que você não sabe.`;
+LIMITES: se o cliente perguntar algo fora disso (reclamação, troca, problema com pedido que você não consegue resolver com a ferramenta consultar_pedido), diga que vai verificar isso com o seu diretor e já volta com a resposta, e chame a ferramenta escalar_atendimento — não invente política nem prometa prazo que você não sabe.`;
 }
 
 async function carregarHistorico(pool, telefone) {

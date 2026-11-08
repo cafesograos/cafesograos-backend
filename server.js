@@ -2865,10 +2865,19 @@ async function processarFilaReengajamentoWhatsApp() {
 const OWNER_WHATSAPP_NUMBER = '5516997567559';
 
 // Avisa o dono pelo WhatsApp quando a IA de atendimento não consegue
-// resolver algo sozinha, pra ele saber que precisa entrar na conversa sem
-// precisar ficar checando o celular dedicado de tempos em tempos.
+// resolver algo sozinha. O dono NUNCA fala direto com o cliente — ele
+// responde pro número da loja (ver o desvio em definirHandlerMensagem logo
+// abaixo), e a IA repassa a resposta dele pro cliente certo, sempre em nome
+// da loja. Por isso guarda a escalação numa fila em vez de só mandar o
+// aviso: precisa saber depois qual cliente estava esperando.
 async function escalarAtendimento(telefoneCliente, motivo) {
   try {
+    if (pool) {
+      await pool.query(
+        `INSERT INTO whatsapp_escalacoes (telefone_cliente, motivo) VALUES ($1, $2)`,
+        [telefoneCliente, motivo || 'não especificado']
+      );
+    }
     await enviarTemplateWhatsApp(OWNER_WHATSAPP_NUMBER, WHATSAPP_TEMPLATES.escalacao, [telefoneCliente, motivo || 'não especificado']);
   } catch (err) {
     console.error('[whatsapp-ia] falha ao avisar o dono sobre escalação:', err.message);
@@ -2879,6 +2888,32 @@ async function escalarAtendimento(telefoneCliente, motivo) {
 // conversa sozinha. Sem ANTHROPIC_API_KEY, só ignora e fica em silêncio (as
 // mensagens automáticas de boas-vindas/confirmação continuam funcionando).
 definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
+  // Mensagem do próprio dono pro número da loja: não é um cliente, é a
+  // resposta dele pra uma escalação pendente — repassa pro cliente mais
+  // antigo ainda esperando e não deixa a IA tratar isso como atendimento
+  // normal. Sem escalação pendente, cai no fluxo normal (ele vira "cliente"
+  // conversando com a própria IA, inofensivo).
+  if (pool && telefone.replace(/\D/g, '') === OWNER_WHATSAPP_NUMBER.replace(/\D/g, '')) {
+    try {
+      const { rows } = await pool.query(
+        `SELECT id, telefone_cliente FROM whatsapp_escalacoes WHERE respondido_em IS NULL ORDER BY created_at ASC LIMIT 1`
+      );
+      if (rows[0]) {
+        const { id, telefone_cliente: telefoneCliente } = rows[0];
+        await enviarMensagemWhatsApp(telefoneCliente, texto);
+        await salvarRespostaAssistente(pool, telefoneCliente, texto);
+        await pool.query(`UPDATE whatsapp_escalacoes SET respondido_em = now() WHERE id = $1`, [id]);
+        await enviarMensagemWhatsApp(OWNER_WHATSAPP_NUMBER, '✅ Repassado pro cliente.');
+        console.log(`[whatsapp-ia] resposta do dono repassada pra ${telefoneCliente} (escalação #${id}).`);
+      } else {
+        console.log('[whatsapp-ia] mensagem do dono sem escalação pendente — ignorada.');
+      }
+    } catch (err) {
+      console.error('[whatsapp-ia] falha ao repassar resposta do dono:', err.message);
+    }
+    return;
+  }
+
   if (!process.env.ANTHROPIC_API_KEY) {
     console.log(`[whatsapp-ia] ANTHROPIC_API_KEY não definida — ignorando mensagem de ${telefone}.`);
     return;
