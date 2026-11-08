@@ -2676,7 +2676,7 @@ async function processarFilaBoasVindasWhatsApp() {
 
 // Número pessoal do Alberto — já é o mesmo número público usado em todo o
 // site (e-mails, link "Falar no WhatsApp"), não é segredo nenhum.
-const OWNER_WHATSAPP_NUMBER = '5516997616459';
+const OWNER_WHATSAPP_NUMBER = '5516997916459';
 
 // Avisa o dono pelo WhatsApp quando a IA de atendimento não consegue
 // resolver algo sozinha, pra ele saber que precisa entrar na conversa sem
