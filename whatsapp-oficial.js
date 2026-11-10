@@ -103,15 +103,28 @@ async function enviarTemplateWhatsApp(telefoneOuJid, nomeTemplate, parametros = 
 }
 
 // Chamado pelo POST /webhook-whatsapp (ver server.js) a cada evento que a
-// Meta entrega pro número configurado. Só processa mensagem de texto
-// recebida de cliente — ignora atualização de status de entrega, reação,
-// mensagem de mídia etc., mesmo filtro que o Baileys já aplicava.
+// Meta entrega pro número configurado. Processa mensagem de texto recebida
+// de cliente (ignora reação, mensagem de mídia etc., mesmo filtro que o
+// Baileys já aplicava) e também loga status de entrega (sent/delivered/
+// read/failed) — sem isso a gente nunca saberia se um envio que a API
+// aceitou ("accepted") de fato chegou no celular do cliente ou falhou
+// silenciosamente depois.
 function processarWebhookRecebido(body) {
-  if (!handlerMensagem) return;
   const entradas = body?.entry || [];
   for (const entrada of entradas) {
     for (const mudanca of entrada.changes || []) {
       const valor = mudanca.value;
+
+      for (const status of valor?.statuses || []) {
+        if (status.status === 'failed') {
+          const erro = status.errors?.[0];
+          console.error(`[whatsapp-oficial] ENTREGA FALHOU pra ${status.recipient_id}: (#${erro?.code}) ${erro?.title || erro?.message || 'sem detalhe'}`);
+        } else {
+          console.log(`[whatsapp-oficial] status "${status.status}" pra ${status.recipient_id} (msg ${status.id}).`);
+        }
+      }
+
+      if (!handlerMensagem) continue;
       for (const msg of valor?.messages || []) {
         if (msg.type !== 'text') continue;
         const telefone = msg.from;
