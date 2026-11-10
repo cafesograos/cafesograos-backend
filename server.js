@@ -16,6 +16,7 @@ const {
   getStatusConexao: getStatusWhatsApp
 } = require('./whatsapp-oficial');
 const { responderMensagem, salvarRespostaAssistente } = require('./whatsapp-ia');
+const crypto = require('crypto');
 
 const app = express();
 app.disable('x-powered-by'); // não entrega "Express" de graça pra quem for reconhecer a stack
@@ -42,7 +43,11 @@ app.use(cors({
     callback(null, permitido);
   }
 }));
-app.use(express.json());
+// Guarda o corpo bruto da requisição (antes do parse) só pra poder validar a
+// assinatura HMAC do webhook do WhatsApp (ver abaixo) — o hash da Meta é
+// calculado em cima dos bytes originais, reserializar o JSON já parseado
+// pode não bater byte a byte.
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.static('public')); // ícone do painel admin (favicon / apple-touch-icon)
 
 // CSP mapeada só pro que o painel admin realmente usa: estilo inline (todo
@@ -691,10 +696,14 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
     // verdade) — se não estiver conectado ou o envio falhar, só loga e segue,
     // nunca impede o pedido de ser aprovado.
     try {
-      const telefoneOrder = telefoneParaE164(order.customer_phone);
-      if (telefoneOrder) {
-        const primeiroNomeOrder = order.customer_name ? `, ${String(order.customer_name).trim().split(' ')[0]}` : '';
-        await enviarTemplateWhatsApp(telefoneOrder, WHATSAPP_TEMPLATES.confirmacao_compra, { nome_cliente: primeiroNomeOrder, numero_pedido: order.id });
+      if (automacoesWhatsAppPausadas()) {
+        console.log(`[WhatsApp] Automações pausadas, pulando confirmação de compra do pedido #${order.id}.`);
+      } else {
+        const telefoneOrder = telefoneParaE164(order.customer_phone);
+        if (telefoneOrder) {
+          const primeiroNomeOrder = order.customer_name ? `, ${String(order.customer_name).trim().split(' ')[0]}` : '';
+          await enviarTemplateWhatsApp(telefoneOrder, WHATSAPP_TEMPLATES.confirmacao_compra, { nome_cliente: primeiroNomeOrder, numero_pedido: order.id });
+        }
       }
     } catch (err) {
       console.error(`Falha ao enviar WhatsApp de confirmação (pedido #${order.id}):`, err.message);
@@ -755,6 +764,24 @@ app.get('/webhook-whatsapp', (req, res) => {
   res.sendStatus(403);
 });
 
+// Confere a assinatura que a Meta manda em todo POST pro webhook (HMAC-SHA256
+// do corpo bruto, usando o App Secret como chave) — sem isso, qualquer um na
+// internet que descobrisse essa URL conseguiria forjar "mensagem de cliente"
+// pra nossa IA, gastando tokens da Anthropic e crédito de mensagem à vontade,
+// ou mandar resposta de verdade pro número de telefone que quisesse (o campo
+// "from" do payload forjado), usando nossa conta verificada como disparador.
+function assinaturaWebhookValida(req) {
+  const appSecret = process.env.WHATSAPP_APP_SECRET;
+  if (!appSecret) return false;
+  const assinaturaRecebida = req.get('X-Hub-Signature-256') || '';
+  const [, hashRecebido] = assinaturaRecebida.split('sha256=');
+  if (!hashRecebido || !req.rawBody) return false;
+  const hashEsperado = crypto.createHmac('sha256', appSecret).update(req.rawBody).digest('hex');
+  const bufRecebido = Buffer.from(hashRecebido, 'hex');
+  const bufEsperado = Buffer.from(hashEsperado, 'hex');
+  return bufRecebido.length === bufEsperado.length && crypto.timingSafeEqual(bufRecebido, bufEsperado);
+}
+
 // Recebe mensagem/atualização de status da API oficial do WhatsApp e
 // encaminha pro handler registrado (ver definirHandlerMensagem, ligado à IA
 // de atendimento mais abaixo). Sempre responde 200 rápido, antes de esperar
@@ -762,6 +789,10 @@ app.get('/webhook-whatsapp', (req, res) => {
 // não receber confirmação em poucos segundos — o processamento de verdade
 // roda em segundo plano dentro de processarWebhookRecebido.
 app.post('/webhook-whatsapp', (req, res) => {
+  if (!assinaturaWebhookValida(req)) {
+    console.error('[whatsapp-oficial] webhook recebido com assinatura inválida ou ausente — ignorado.');
+    return res.sendStatus(403);
+  }
   res.sendStatus(200);
   try {
     processarWebhookRecebido(req.body);
@@ -876,7 +907,6 @@ function senhaCorreta(recebida) {
 // é lido/escrito à mão, e a chave de assinatura deriva da própria senha do
 // admin — não precisa de mais nenhuma variável de ambiente, e trocar a senha
 // já invalida sozinho qualquer sessão antiga.
-const crypto = require('crypto');
 const SESSION_COOKIE = 'admin_sessao';
 const SESSION_DURATION_MS = 12 * 60 * 60 * 1000; // 12h
 
@@ -1589,6 +1619,16 @@ async function buscarMensagemConfig(chave) {
   if (!pool) return '';
   const { rows } = await pool.query('SELECT texto FROM mensagens_config WHERE chave = $1', [chave]);
   return rows[0]?.texto || '';
+}
+
+// Trava manual pro dono pausar os 4 fluxos automáticos (boas-vindas,
+// feedback, recompra, reengajamento) sem precisar mexer no código — ex:
+// enquanto ele ainda está testando/treinando a IA e não quer que clientes
+// de verdade recebam nada. Não afeta a IA respondendo quem chama a gente
+// primeiro (isso é sempre reativo, nunca essa fila). Pra pausar, só setar
+// WHATSAPP_AUTOMACOES_PAUSADAS=true no Railway (sem precisar de deploy).
+function automacoesWhatsAppPausadas() {
+  return process.env.WHATSAPP_AUTOMACOES_PAUSADAS === 'true';
 }
 
 // Nome exato de cada template aprovado no WhatsApp Manager da Meta — as 4
@@ -2678,6 +2718,7 @@ function dentroDoHorarioComercial() {
 
 async function processarFilaBoasVindasWhatsApp() {
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (automacoesWhatsAppPausadas()) return;
   if (!dentroDoHorarioComercial()) return;
   try {
     // Descarta (sem enviar) cadastros represados há mais de 30 dias — evita
@@ -2731,6 +2772,7 @@ async function processarFilaBoasVindasWhatsApp() {
 // antigo represado em vez de mandar tudo de uma vez quando volta do ar).
 async function processarFilaFeedbackWhatsApp() {
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (automacoesWhatsAppPausadas()) return;
   if (!dentroDoHorarioComercial()) return;
   try {
     await pool.query(
@@ -2767,6 +2809,7 @@ async function processarFilaFeedbackWhatsApp() {
 // (o café de uma compra normal costuma acabar por essa época).
 async function processarFilaRecompraWhatsApp() {
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (automacoesWhatsAppPausadas()) return;
   if (!dentroDoHorarioComercial()) return;
   try {
     await pool.query(
@@ -2806,6 +2849,7 @@ async function processarFilaRecompraWhatsApp() {
 // mas sem desistir cedo demais de quem só precisava de mais um empurrão.
 async function processarFilaReengajamentoWhatsApp() {
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (automacoesWhatsAppPausadas()) return;
   if (!dentroDoHorarioComercial()) return;
   const LIMITE_MENSAGENS = 4;
   try {
