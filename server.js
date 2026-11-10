@@ -2524,6 +2524,11 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
       <div class="pedido-topo"><div class="pedido-cliente">Status: ${statusLabel}</div></div>
       ${status !== 'conectado' ? `<div class="pedido-detalhe" style="margin-top:4px;color:#8a5a3b;">Faltam variáveis de ambiente no Railway (WHATSAPP_TOKEN e/ou WHATSAPP_WABA_ID).</div>` : ''}
     </div>
+    ${automacoesWhatsAppPausadas() ? `<div class="pedido-card" style="max-width:480px;margin-top:12px;background:#FBE2E2;"><div class="pedido-cliente" style="color:#C53030;">⏸️ Automações pausadas</div><div class="pedido-detalhe" style="margin-top:4px;">Boas-vindas, confirmação de compra, feedback, recompra e reengajamento não estão saindo pra clientes de verdade (variável WHATSAPP_AUTOMACOES_PAUSADAS=true no Railway). A IA ainda responde quem chamar a loja primeiro.</div></div>` : ''}
+
+    <h2 style="margin-top:28px;">Testar a IA</h2>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">Converse direto com a IA aqui, sem passar pelo WhatsApp de verdade e sem nenhum risco pra cliente real — nenhum pedido é criado e nenhuma escalação é enviada de verdade nessa conversa de teste.</p>
+    <a href="/admin/whatsapp/testar-ia" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;">Testar a IA →</a>
 
     <h2 style="margin-top:28px;">Conversas da IA</h2>
     <p class="pedido-detalhe" style="margin-bottom:14px;">Veja o que a IA está respondendo pros clientes, pra fiscalizar o atendimento.</p>
@@ -2599,6 +2604,95 @@ app.post('/admin/whatsapp/destaque', requireAdmin, express.urlencoded({ extended
   res.redirect('/admin/whatsapp');
 }));
 
+// Telefone reservado (nunca bate com um número real) só pra guardar o
+// histórico da conversa de teste — assim ela usa o mesmo responderMensagem()
+// de produção (catálogo real, mesmas regras) sem se misturar com conversa de
+// cliente nenhum.
+const TELEFONE_TESTE_IA = '00000000000';
+
+// Renderiza a tela de teste da IA (GET e, depois de mandar mensagem, o
+// próprio POST já re-renderiza aqui em vez de redirecionar — assim dá pra
+// mostrar o aviso de escalação daquela rodada sem precisar guardar estado
+// em lugar nenhum).
+async function renderizarTestarIA(req, res, { avisoEscalacao } = {}) {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const { rows: mensagens } = await pool.query(
+    `SELECT role, content, created_at FROM whatsapp_mensagens WHERE phone = $1 ORDER BY created_at ASC`,
+    [TELEFONE_TESTE_IA]
+  );
+
+  const body = `
+    <a href="/admin/whatsapp" style="display:inline-block;margin-bottom:14px;">← WhatsApp</a>
+    <h1>Testar a IA</h1>
+    <div class="pedido-card" style="max-width:560px;background:#FFF4E5;margin-bottom:16px;">
+      <div class="pedido-detalhe">🧪 Conversa de teste — <strong>nada aqui sai pra cliente real</strong>: nenhuma mensagem é enviada por WhatsApp, nenhum pedido é criado de verdade e nenhuma escalação chega no seu celular. A IA responde com o catálogo e as regras reais, só pra você treinar/validar antes de voltar a falar com clientes de verdade.</div>
+    </div>
+    ${!process.env.ANTHROPIC_API_KEY ? `<div class="pedido-card" style="max-width:560px;background:#FBE2E2;margin-bottom:16px;"><div class="pedido-detalhe" style="color:#C53030;">ANTHROPIC_API_KEY não configurada — a IA não vai conseguir responder.</div></div>` : ''}
+    ${avisoEscalacao ? `<div class="pedido-card" style="max-width:560px;background:#FDEFC9;margin-bottom:16px;"><div class="pedido-detalhe">⚠️ Nessa resposta, a IA teria chamado o diretor (escalado pra um humano). Motivo: "${escapeHtml(avisoEscalacao)}"</div></div>` : ''}
+    <div style="display:flex;flex-direction:column;gap:10px;max-width:560px;margin-bottom:20px;">
+      ${mensagens.length === 0 ? '<p class="pedido-detalhe">Nenhuma mensagem ainda — escreva como se fosse um cliente, abaixo.</p>' : mensagens.map((m) => `
+        <div style="align-self:${m.role === 'assistant' ? 'flex-end' : 'flex-start'};max-width:80%;">
+          <div class="pedido-card" style="background:${m.role === 'assistant' ? '#211714' : '#fff'};color:${m.role === 'assistant' ? '#fff' : '#211714'};padding:10px 14px;">
+            ${escapeHtml(m.content).replace(/\n/g, '<br>')}
+          </div>
+          <div class="pedido-detalhe" style="font-size:11px;margin-top:2px;text-align:${m.role === 'assistant' ? 'right' : 'left'};">${escapeHtml(new Date(m.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
+        </div>
+      `).join('')}
+    </div>
+    <form method="POST" action="/admin/whatsapp/testar-ia" class="pedido-card" style="max-width:560px;display:block;">
+      <label style="display:block;font-weight:700;margin-bottom:6px;">Mensagem (como se fosse o cliente)</label>
+      <textarea name="mensagem" rows="3" required style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:12px;" placeholder="Ex: oi, qual café vocês recomendam pra quem gosta de um café mais suave?"></textarea>
+      <button type="submit" class="btn-mini btn-mini-primary">Enviar</button>
+    </form>
+    ${mensagens.length > 0 ? `
+    <form method="POST" action="/admin/whatsapp/testar-ia/limpar" style="margin-top:10px;">
+      <button type="submit" class="btn-mini" onclick="return confirm('Apagar essa conversa de teste e começar do zero?');">Limpar conversa de teste</button>
+    </form>` : ''}
+  `;
+  res.send(adminLayout({ title: 'Testar a IA', ativo: 'whatsapp', body }));
+}
+
+app.get('/admin/whatsapp/testar-ia', requireAdmin, asyncHandler(async (req, res) => {
+  await renderizarTestarIA(req, res);
+}));
+
+// Mesmas ferramentas da IA de verdade, só trocando as duas com efeito
+// colateral real (criar pedido / avisar o dono) por versões que não tocam
+// em nada — assim o dono pode testar o fechamento de pedido e a escalação
+// de ponta a ponta sem gerar pedido fantasma no banco nem se auto-spammar.
+app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const mensagem = String(req.body?.mensagem || '').trim();
+  if (!mensagem) return res.status(400).send('Escreva uma mensagem.');
+
+  let motivoEscalado = null;
+  try {
+    const { texto: resposta } = await responderMensagem(TELEFONE_TESTE_IA, mensagem, {
+      pool,
+      PRODUCTS,
+      consultarPedidoPorTelefone,
+      criarPedidoViaAtendimento: async () => ({
+        aviso: 'TESTE: nenhum pedido real foi criado nem link de pagamento gerado — isso é só uma simulação pro dono treinar a IA.'
+      }),
+      escalarAtendimento: async (_telefoneCliente, motivo) => {
+        motivoEscalado = motivo || 'não especificado';
+      }
+    });
+    if (resposta) await salvarRespostaAssistente(pool, TELEFONE_TESTE_IA, resposta);
+  } catch (err) {
+    console.error('[admin/testar-ia] falha ao gerar resposta de teste:', err.message);
+    return res.status(500).send(`Erro ao gerar resposta: ${escapeHtml(err.message)}`);
+  }
+
+  await renderizarTestarIA(req, res, { avisoEscalacao: motivoEscalado });
+}));
+
+app.post('/admin/whatsapp/testar-ia/limpar', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  await pool.query(`DELETE FROM whatsapp_mensagens WHERE phone = $1`, [TELEFONE_TESTE_IA]);
+  res.redirect('/admin/whatsapp/testar-ia');
+}));
+
 // Lista de conversas da IA no WhatsApp, mais recente primeiro — pra o dono
 // fiscalizar o que está sendo respondido sem precisar abrir o próprio
 // WhatsApp (que nem recebe essas mensagens, já que quem responde é a API
@@ -2611,6 +2705,7 @@ app.get('/admin/whatsapp/conversas', requireAdmin, asyncHandler(async (req, res)
     FROM (
       SELECT phone, MAX(created_at) AS ultima_em, COUNT(*) AS total_mensagens
       FROM whatsapp_mensagens
+      WHERE phone <> $1
       GROUP BY phone
     ) g
     LEFT JOIN LATERAL (
@@ -2621,7 +2716,7 @@ app.get('/admin/whatsapp/conversas', requireAdmin, asyncHandler(async (req, res)
     ) l ON true
     ORDER BY g.ultima_em DESC
     LIMIT 100
-  `);
+  `, [TELEFONE_TESTE_IA]);
 
   const body = `
     <h1>Conversas da IA — WhatsApp</h1>
