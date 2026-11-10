@@ -102,13 +102,68 @@ async function enviarTemplateWhatsApp(telefoneOuJid, nomeTemplate, parametros = 
   return data;
 }
 
+// Baixa um arquivo de mídia que a Meta só manda como ID — precisa de duas
+// chamadas: a primeira pra pegar a URL real de download (temporária, exige
+// o token de novo), a segunda pra baixar o arquivo em si (também exige o
+// token, senão a Meta recusa).
+async function baixarMidiaWhatsApp(mediaId) {
+  const token = process.env.WHATSAPP_TOKEN;
+  const resInfo = await fetch(`${GRAPH_API_BASE}/${mediaId}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const info = await resInfo.json();
+  if (!resInfo.ok || !info.url) throw new Error(info?.error?.message || 'Falha ao obter URL da mídia.');
+  const resArquivo = await fetch(info.url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!resArquivo.ok) throw new Error('Falha ao baixar arquivo de mídia da Meta.');
+  const buffer = Buffer.from(await resArquivo.arrayBuffer());
+  return { buffer, mimeType: info.mime_type };
+}
+
+// A IA de atendimento (Anthropic) só lê texto — pra entender áudio de voz
+// do cliente, transcreve antes via Whisper (OpenAI) e trata o resultado
+// como se o cliente tivesse digitado.
+async function transcreverAudio(buffer, mimeType) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY não configurada — não dá pra transcrever áudio.');
+  const extensao = mimeType?.includes('ogg') ? 'ogg' : mimeType?.includes('mp4') ? 'mp4' : 'mp3';
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type: mimeType || 'audio/ogg' }), `audio.${extensao}`);
+  form.append('model', 'whisper-1');
+  form.append('language', 'pt');
+  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || 'Falha ao transcrever áudio.');
+  return (data.text || '').trim();
+}
+
+// Baixa + transcreve + repassa pro mesmo handler do texto — assim pro resto
+// do sistema (IA, histórico salvo) um áudio é indistinguível de uma
+// mensagem digitada.
+async function processarAudioRecebido(telefone, mediaId) {
+  try {
+    const { buffer, mimeType } = await baixarMidiaWhatsApp(mediaId);
+    const texto = await transcreverAudio(buffer, mimeType);
+    if (!texto) {
+      console.log(`[whatsapp-oficial] áudio de ${telefone} transcrito vazio — ignorado.`);
+      return;
+    }
+    console.log(`[whatsapp-oficial] áudio de ${telefone} transcrito: "${texto}"`);
+    if (handlerMensagem) await handlerMensagem(telefone, texto, telefone);
+  } catch (err) {
+    console.error(`[whatsapp-oficial] falha ao processar áudio de ${telefone}:`, err.message);
+  }
+}
+
 // Chamado pelo POST /webhook-whatsapp (ver server.js) a cada evento que a
-// Meta entrega pro número configurado. Processa mensagem de texto recebida
-// de cliente (ignora reação, mensagem de mídia etc., mesmo filtro que o
-// Baileys já aplicava) e também loga status de entrega (sent/delivered/
-// read/failed) — sem isso a gente nunca saberia se um envio que a API
-// aceitou ("accepted") de fato chegou no celular do cliente ou falhou
-// silenciosamente depois.
+// Meta entrega pro número configurado. Processa mensagem de texto e de
+// áudio recebida de cliente (ignora reação, imagem, documento etc. por
+// enquanto) e também loga status de entrega (sent/delivered/read/failed) —
+// sem isso a gente nunca saberia se um envio que a API aceitou ("accepted")
+// de fato chegou no celular do cliente ou falhou silenciosamente depois.
 function processarWebhookRecebido(body) {
   const entradas = body?.entry || [];
   for (const entrada of entradas) {
@@ -124,15 +179,19 @@ function processarWebhookRecebido(body) {
         }
       }
 
-      if (!handlerMensagem) continue;
       for (const msg of valor?.messages || []) {
-        if (msg.type !== 'text') continue;
         const telefone = msg.from;
-        const texto = msg.text?.body;
-        if (!telefone || !texto) continue;
-        Promise.resolve(handlerMensagem(telefone, texto, telefone)).catch((err) => {
-          console.error('[whatsapp-oficial] erro ao processar mensagem recebida:', err.message);
-        });
+        if (!telefone) continue;
+        if (msg.type === 'text' && msg.text?.body) {
+          if (!handlerMensagem) continue;
+          Promise.resolve(handlerMensagem(telefone, msg.text.body, telefone)).catch((err) => {
+            console.error('[whatsapp-oficial] erro ao processar mensagem recebida:', err.message);
+          });
+        } else if (msg.type === 'audio' && msg.audio?.id) {
+          processarAudioRecebido(telefone, msg.audio.id).catch((err) => {
+            console.error('[whatsapp-oficial] erro ao processar áudio recebido:', err.message);
+          });
+        }
       }
     }
   }
