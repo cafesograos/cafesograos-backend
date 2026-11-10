@@ -2712,11 +2712,27 @@ app.post('/admin/whatsapp/testar-ia/limpar', requireAdmin, asyncHandler(async (r
 app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
-  const [boasVindas, feedback, recompra, reengajamento] = await Promise.all([
+  const [boasVindas, feedback, recompra, reengajamento, semContato] = await Promise.all([
     pool.query(`SELECT id, name, phone, created_at FROM leads WHERE contatado = true ORDER BY created_at DESC LIMIT 100`),
     pool.query(`SELECT id, customer_name AS name, customer_phone AS phone, whatsapp_feedback_enviado_em AS enviado_em FROM orders WHERE whatsapp_feedback_enviado_em IS NOT NULL ORDER BY whatsapp_feedback_enviado_em DESC LIMIT 100`),
     pool.query(`SELECT id, customer_name AS name, customer_phone AS phone, whatsapp_recompra_enviado_em AS enviado_em FROM orders WHERE whatsapp_recompra_enviado_em IS NOT NULL ORDER BY whatsapp_recompra_enviado_em DESC LIMIT 100`),
-    pool.query(`SELECT id, name, phone, whatsapp_reengajamento_contagem AS contagem, whatsapp_reengajamento_enviado_em AS enviado_em FROM leads WHERE COALESCE(whatsapp_reengajamento_contagem, 0) > 0 ORDER BY whatsapp_reengajamento_enviado_em DESC LIMIT 100`)
+    pool.query(`SELECT id, name, phone, whatsapp_reengajamento_contagem AS contagem, whatsapp_reengajamento_enviado_em AS enviado_em FROM leads WHERE COALESCE(whatsapp_reengajamento_contagem, 0) > 0 ORDER BY whatsapp_reengajamento_enviado_em DESC LIMIT 100`),
+    // "Sem nenhum contato": nunca recebeu boas-vindas de verdade (contatado)
+    // nem entrou no reengajamento ainda — exclui quem já comprou (esses já
+    // recebem confirmação/feedback/recompra pelo pedido, então não estão
+    // realmente esquecidos). A maioria aqui não é falha nenhuma: é gente
+    // ainda esperando a vez no reengajamento (1 por hora).
+    pool.query(`
+      SELECT l.id, l.name, l.phone, l.created_at FROM leads l
+      WHERE COALESCE(l.contatado, false) = false
+        AND COALESCE(l.whatsapp_reengajamento_contagem, 0) = 0
+        AND NOT EXISTS (
+          SELECT 1 FROM orders o
+          WHERE o.status = 'approved'
+            AND regexp_replace(o.customer_phone, '\\D', '', 'g') = regexp_replace(l.phone, '\\D', '', 'g')
+        )
+      ORDER BY l.created_at ASC
+    `)
   ]);
 
   const fmtData = (d) => d ? new Date(d).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
@@ -2746,6 +2762,15 @@ app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) 
     ${tabela('Lembrete de recompra', recompra.rows.length, ['Cliente', 'Telefone', 'Enviado em', 'Pedido'], recompra.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${linkPedido(r.id)}</td></tr>`))}
 
     ${tabela('Reengajamento', reengajamento.rows.length, ['Nome', 'Telefone', 'Última vez', 'Quantas vezes'], reengajamento.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${r.contagem}/4</td></tr>`))}
+
+    <section>
+      <h2 style="margin-top:28px;">Ainda sem nenhum contato (${semContato.rows.length})</h2>
+      <p class="pedido-detalhe" style="margin-bottom:10px;">Cadastrados que nunca compraram e ainda não receberam boas-vindas nem entraram no reengajamento — a maioria é só fila (1 por hora), não falha.</p>
+      <div style="overflow-x:auto;"><table class="mini">
+        <tr><th>Nome</th><th>Telefone</th><th>Cadastrado em</th></tr>
+        ${semContato.rows.length === 0 ? '<tr><td colspan="3">Nenhum — todo mundo já foi contatado.</td></tr>' : semContato.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.created_at))}</td></tr>`).join('')}
+      </table></div>
+    </section>
   `;
   res.send(adminLayout({ title: 'Mensagens enviadas', ativo: 'whatsapp', body }));
 }));
