@@ -2641,13 +2641,20 @@ async function renderizarTestarIA(req, res, { avisoEscalacao } = {}) {
     </div>
     <form method="POST" action="/admin/whatsapp/testar-ia" class="pedido-card" style="max-width:560px;display:block;">
       <label style="display:block;font-weight:700;margin-bottom:6px;">Mensagem (como se fosse o cliente)</label>
-      <textarea name="mensagem" rows="3" required style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:12px;" placeholder="Ex: oi, qual café vocês recomendam pra quem gosta de um café mais suave?"></textarea>
+      <textarea id="mensagem-nova" name="mensagem" rows="3" required style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:12px;" placeholder="Ex: oi, qual café vocês recomendam pra quem gosta de um café mais suave?"></textarea>
       <button type="submit" class="btn-mini btn-mini-primary">Enviar</button>
     </form>
     ${mensagens.length > 0 ? `
     <form method="POST" action="/admin/whatsapp/testar-ia/limpar" style="margin-top:10px;">
       <button type="submit" class="btn-mini" onclick="return confirm('Apagar essa conversa de teste e começar do zero?');">Limpar conversa de teste</button>
     </form>` : ''}
+    <script>
+      // Depois de enviar, a página recarrega do zero — sem isso o dono cai
+      // lá no topo (nav/aviso) e tem que rolar até a última mensagem + caixa
+      // de texto toda vez pra continuar a conversa.
+      document.getElementById('mensagem-nova').scrollIntoView({ block: 'center' });
+      document.getElementById('mensagem-nova').focus();
+    </script>
   `;
   res.send(adminLayout({ title: 'Testar a IA', ativo: 'whatsapp', body }));
 }
