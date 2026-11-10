@@ -2534,6 +2534,10 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
     <p class="pedido-detalhe" style="margin-bottom:14px;">Veja o que a IA está respondendo pros clientes, pra fiscalizar o atendimento.</p>
     <a href="/admin/whatsapp/conversas" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;">Ver conversas →</a>
 
+    <h2 style="margin-top:28px;">Mensagens automáticas enviadas</h2>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">Veja quem já recebeu boas-vindas, feedback, recompra e reengajamento.</p>
+    <a href="/admin/whatsapp/enviados" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;">Ver envios →</a>
+
     <h2 style="margin-top:28px;">Torra em destaque</h2>
     <p class="pedido-detalhe" style="margin-bottom:14px;">Esse texto <strong>entra direto</strong> na mensagem de reengajamento (sem precisar reaprovar nada no Meta) — atualize sempre que mudar a torra que você quer destacar.</p>
     <form method="POST" action="/admin/whatsapp/destaque" class="pedido-card" style="max-width:480px;display:block;">
@@ -2698,6 +2702,52 @@ app.post('/admin/whatsapp/testar-ia/limpar', requireAdmin, asyncHandler(async (r
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
   await pool.query(`DELETE FROM whatsapp_mensagens WHERE phone = $1`, [TELEFONE_TESTE_IA]);
   res.redirect('/admin/whatsapp/testar-ia');
+}));
+
+// Histórico de quem já recebeu cada mensagem automática (boas-vindas,
+// feedback, recompra, reengajamento) — diferente de "/conversas", que é só
+// diálogo de ida e volta com a IA. Esses 4 disparos são de mão única e não
+// ficam salvos em whatsapp_mensagens, só nas próprias colunas de controle
+// de cada fila — por isso essa tela lê direto delas.
+app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+  const [boasVindas, feedback, recompra, reengajamento] = await Promise.all([
+    pool.query(`SELECT id, name, phone, created_at FROM leads WHERE contatado = true ORDER BY created_at DESC LIMIT 100`),
+    pool.query(`SELECT id, customer_name AS name, customer_phone AS phone, whatsapp_feedback_enviado_em AS enviado_em FROM orders WHERE whatsapp_feedback_enviado_em IS NOT NULL ORDER BY whatsapp_feedback_enviado_em DESC LIMIT 100`),
+    pool.query(`SELECT id, customer_name AS name, customer_phone AS phone, whatsapp_recompra_enviado_em AS enviado_em FROM orders WHERE whatsapp_recompra_enviado_em IS NOT NULL ORDER BY whatsapp_recompra_enviado_em DESC LIMIT 100`),
+    pool.query(`SELECT id, name, phone, whatsapp_reengajamento_contagem AS contagem, whatsapp_reengajamento_enviado_em AS enviado_em FROM leads WHERE COALESCE(whatsapp_reengajamento_contagem, 0) > 0 ORDER BY whatsapp_reengajamento_enviado_em DESC LIMIT 100`)
+  ]);
+
+  const fmtData = (d) => d ? new Date(d).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
+  const linkTelefone = (telefone) => telefone
+    ? `<a href="https://wa.me/${escapeHtml(String(telefone).replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(telefone)}</a>`
+    : '—';
+  const linkPedido = (id) => `<a href="/admin/pedidos?status=todos#pedido-${id}">#${id}</a>`;
+
+  const tabela = (titulo, total, cabecalhos, linhas) => `
+    <section>
+      <h2 style="margin-top:28px;">${escapeHtml(titulo)} (${total})</h2>
+      <div style="overflow-x:auto;"><table class="mini">
+        <tr>${cabecalhos.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr>
+        ${linhas.length === 0 ? `<tr><td colspan="${cabecalhos.length}">Nenhum ainda.</td></tr>` : linhas.join('')}
+      </table></div>
+    </section>`;
+
+  const body = `
+    <a href="/admin/whatsapp" style="display:inline-block;margin-bottom:14px;">← WhatsApp</a>
+    <h1>Mensagens automáticas enviadas</h1>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">Quem já recebeu cada mensagem de disparo único (sem contar a IA conversando — isso fica em "Conversas da IA"). Mostra só os últimos 100 de cada.</p>
+
+    ${tabela('Boas-vindas', boasVindas.rows.length, ['Nome', 'Telefone', 'Cadastrado em'], boasVindas.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.created_at))}</td></tr>`))}
+
+    ${tabela('Feedback de pedido', feedback.rows.length, ['Cliente', 'Telefone', 'Enviado em', 'Pedido'], feedback.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${linkPedido(r.id)}</td></tr>`))}
+
+    ${tabela('Lembrete de recompra', recompra.rows.length, ['Cliente', 'Telefone', 'Enviado em', 'Pedido'], recompra.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${linkPedido(r.id)}</td></tr>`))}
+
+    ${tabela('Reengajamento', reengajamento.rows.length, ['Nome', 'Telefone', 'Última vez', 'Quantas vezes'], reengajamento.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${r.contagem}/4</td></tr>`))}
+  `;
+  res.send(adminLayout({ title: 'Mensagens enviadas', ativo: 'whatsapp', body }));
 }));
 
 // Lista de conversas da IA no WhatsApp, mais recente primeiro — pra o dono
