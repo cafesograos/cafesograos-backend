@@ -2655,9 +2655,16 @@ async function renderizarTestarIA(req, res, { avisoEscalacao } = {}) {
     <script>
       // Depois de enviar, a página recarrega do zero — sem isso o dono cai
       // lá no topo (nav/aviso) e tem que rolar até a última mensagem + caixa
-      // de texto toda vez pra continuar a conversa.
-      document.getElementById('mensagem-nova').scrollIntoView({ block: 'center' });
-      document.getElementById('mensagem-nova').focus();
+      // de texto toda vez pra continuar a conversa. Espera o "load" (fontes,
+      // imagens, layout final) porque rolar cedo demais (direto no parse do
+      // <script>) é desfeito depois por reflows da página ainda montando.
+      window.addEventListener('load', function () {
+        var caixa = document.getElementById('mensagem-nova');
+        if (caixa) {
+          caixa.scrollIntoView({ block: 'center' });
+          caixa.focus();
+        }
+      });
     </script>
   `;
   res.send(adminLayout({ title: 'Testar a IA', ativo: 'whatsapp', body }));
