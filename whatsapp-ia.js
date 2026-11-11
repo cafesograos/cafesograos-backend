@@ -163,6 +163,7 @@ async function responderMensagem(telefone, textoCliente, deps) {
 
   let resposta;
   let rodadas = 0;
+  let escalouNessaRodada = false;
   while (rodadas < 5) {
     rodadas++;
     resposta = await anthropic.messages.create({
@@ -188,6 +189,7 @@ async function responderMensagem(telefone, textoCliente, deps) {
           resultado = await criarPedidoViaAtendimento({ ...block.input, telefone });
         } else if (block.name === 'escalar_atendimento') {
           await escalarAtendimento(telefone, block.input?.motivo || '');
+          escalouNessaRodada = true;
           resultado = { ok: true };
         } else {
           resultado = { erro: 'Ferramenta desconhecida.' };
@@ -200,7 +202,11 @@ async function responderMensagem(telefone, textoCliente, deps) {
     messages.push({ role: 'user', content: toolResults });
   }
 
-  const textoResposta = resposta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+  // Às vezes o modelo chama a ferramenta e não escreve nenhum texto de volta
+  // — sem essa rede de segurança, o cliente ficaria sem resposta nenhuma
+  // mesmo depois de ter combinado uma retirada de verdade com o diretor.
+  const textoModelo = resposta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+  const textoResposta = textoModelo || (escalouNessaRodada ? 'Combinado! Já avisei aqui que você vem buscar. Qualquer coisa me chama.' : textoModelo);
   const esperaMs = await calcularEsperaMs(pool, telefone, textoResposta);
   return { texto: textoResposta, esperaMs };
 }
