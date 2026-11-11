@@ -3122,6 +3122,50 @@ async function processarFilaReengajamentoWhatsApp() {
   }
 }
 
+// Retoma, uma única vez, uma conversa de atendimento que esfriou à noite:
+// cliente mandou mensagem, a IA respondeu, e ele nunca mais respondeu depois
+// disso. Às 8h da manhã (ainda dentro das 24h da última mensagem dele, então
+// pode mandar texto livre, sem precisar de template aprovado) manda um "oi,
+// tudo bem?" casual pra puxar a conversa de novo — só uma vez por esfriada,
+// nunca insiste todo dia (assim que manda esse "oi", ele vira a mensagem mais
+// recente da conversa, então não bate mais no filtro "última mensagem foi
+// ontem à noite" pras próximas rodadas).
+async function processarFilaRetomarConversaWhatsApp() {
+  if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (automacoesWhatsAppPausadas()) return;
+  let horaBrasilia = Number(
+    new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', hour: 'numeric', hour12: false }).format(new Date())
+  );
+  if (horaBrasilia === 24) horaBrasilia = 0;
+  if (horaBrasilia !== 8) return;
+  try {
+    const { rows } = await pool.query(
+      `SELECT phone FROM (
+         SELECT DISTINCT ON (phone) phone, role, created_at
+         FROM whatsapp_mensagens
+         WHERE phone NOT IN ($1, $2)
+         ORDER BY phone, created_at DESC
+       ) ultima
+       WHERE role = 'assistant'
+         AND (created_at AT TIME ZONE 'America/Sao_Paulo')::date = (now() AT TIME ZONE 'America/Sao_Paulo')::date - interval '1 day'
+         AND EXTRACT(HOUR FROM created_at AT TIME ZONE 'America/Sao_Paulo') >= 18
+       LIMIT 1`,
+      [TELEFONE_TESTE_IA, OWNER_WHATSAPP_NUMBER]
+    );
+    for (const { phone } of rows) {
+      try {
+        await enviarMensagemWhatsApp(phone, 'Oi! Tudo bem? 😊 Fico à disposição se quiser continuar nosso papo de ontem.');
+        await salvarRespostaAssistente(pool, phone, 'Oi! Tudo bem? 😊 Fico à disposição se quiser continuar nosso papo de ontem.');
+        console.log(`WhatsApp de retomada de conversa enviado pra ${phone}.`);
+      } catch (err) {
+        console.error(`Falha ao retomar conversa com ${phone}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('Erro ao processar fila de retomada de conversa do WhatsApp:', err);
+  }
+}
+
 // Número pessoal do Alberto, separado do número da loja (que agora só
 // responde via API, sem WhatsApp de verdade instalado em celular nenhum) —
 // é pra onde vai o aviso quando a IA precisa de um humano.
@@ -3217,6 +3261,10 @@ initDb().finally(() => {
     setInterval(processarFilaFeedbackWhatsApp, 60 * 60 * 1000);
     setInterval(processarFilaRecompraWhatsApp, 60 * 60 * 1000);
     setInterval(processarFilaReengajamentoWhatsApp, 60 * 60 * 1000);
+    // A cada 10 min — só age mesmo dentro da hora das 8h, mas checa mais
+    // vezes nela pra não ficar quase 1h sem agir caso o processo suba já
+    // dentro dessa janela.
+    setInterval(processarFilaRetomarConversaWhatsApp, 10 * 60 * 1000);
     // 1 a cada 15 min — frequente o bastante pra pegar rápido um pedido pago
     // que o webhook da InfinitePay perdeu, sem bater demais na API deles
     // (hoje é só 1 pedido/dia em média).
