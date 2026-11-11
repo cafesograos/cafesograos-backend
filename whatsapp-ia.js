@@ -215,4 +215,69 @@ async function responderMensagem(telefone, textoCliente, deps) {
   return { texto: textoResposta, esperaMs };
 }
 
-module.exports = { responderMensagem, salvarRespostaAssistente };
+// Assistente administrativo: só pro número pessoal do dono, pra ele
+// consultar o negócio direto pelo WhatsApp ("teve vendas hoje?", "como
+// estão os atendimentos?") sem precisar abrir o painel. Sempre sem
+// histórico salvo (cada pergunta é isolada) e só com ferramentas de
+// LEITURA — nunca cria/edita nada, nunca fala com cliente.
+const MODEL_ADMIN = 'claude-haiku-4-5';
+
+const TOOLS_ADMIN = [
+  {
+    name: 'vendas_whatsapp_hoje',
+    description: 'Lista os pedidos aprovados hoje que vieram do WhatsApp (fechados direto na conversa com a IA, não pelo site nem pelo vendedor) — nome do cliente, valor e horário.',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'resumo_atendimentos_hoje',
+    description: 'Resumo de todas as conversas de atendimento (reativas, cliente chamou primeiro) de hoje: quantas pessoas diferentes mandaram mensagem e o que cada uma perguntou — use pra responder "como estão os atendimentos" ou "quais foram as dúvidas".',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  }
+];
+
+function montarSystemPromptAdmin() {
+  return `Você é o assistente administrativo do Alberto, dono da Café Só Grãos. Ele está te perguntando algo pelo WhatsApp, pelo número pessoal dele — você está falando DIRETO com o dono, nunca com um cliente.
+
+OBJETIVO: responder perguntas sobre o negócio (vendas, atendimentos, dúvidas de clientes) usando as ferramentas disponíveis — nunca invente número, sempre consulte antes de responder.
+
+TOM: direto, tipo um relatório rápido de WhatsApp — pode usar bullet points ou lista curta, não precisa ser formal nem floreado. Se não tiver dado nenhum (ex: nenhuma venda hoje), diga isso claramente em vez de inventar.
+
+LIMITES: você só responde sobre o negócio usando as ferramentas que tem — não fala com cliente nenhum, não cria pedido, não manda mensagem pra ninguém além dessa resposta pro próprio dono.`;
+}
+
+async function responderConsultaAdmin(pergunta, deps) {
+  const { vendasWhatsappHoje, resumoAtendimentosHoje } = deps;
+  if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
+
+  const messages = [{ role: 'user', content: pergunta }];
+  let resposta;
+  let rodadas = 0;
+  while (rodadas < 4) {
+    rodadas++;
+    resposta = await anthropic.messages.create({
+      model: MODEL_ADMIN,
+      max_tokens: 1024,
+      system: montarSystemPromptAdmin(),
+      tools: TOOLS_ADMIN,
+      messages
+    });
+    if (resposta.stop_reason !== 'tool_use') break;
+    messages.push({ role: 'assistant', content: resposta.content });
+    const toolResults = [];
+    for (const block of resposta.content.filter((b) => b.type === 'tool_use')) {
+      let resultado;
+      try {
+        if (block.name === 'vendas_whatsapp_hoje') resultado = await vendasWhatsappHoje();
+        else if (block.name === 'resumo_atendimentos_hoje') resultado = await resumoAtendimentosHoje();
+        else resultado = { erro: 'Ferramenta desconhecida.' };
+      } catch (err) {
+        resultado = { erro: err.message };
+      }
+      toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(resultado) });
+    }
+    messages.push({ role: 'user', content: toolResults });
+  }
+  return resposta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+}
+
+module.exports = { responderMensagem, salvarRespostaAssistente, responderConsultaAdmin };

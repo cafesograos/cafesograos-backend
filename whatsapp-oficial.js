@@ -19,6 +19,34 @@ function definirHandlerMensagem(callback) {
   handlerMensagem = callback;
 }
 
+// Agrupa mensagens que chegam próximas umas das outras do mesmo número antes
+// de chamar a IA — sem isso, quando o cliente manda em duas partes (ex: "quanto
+// custa?" e, 2s depois, "qual é o preço?" completando o mesmo pensamento, ou
+// só quebrando uma frase longa em várias bolhas), a IA respondia à primeira
+// sem nunca ver a segunda, gerando resposta fragmentada ou repetida. Espera
+// um intervalo sem mensagem nova antes de juntar tudo e responder de uma vez.
+const JANELA_AGRUPAMENTO_MS = 6000;
+const buffersMensagem = new Map(); // telefone -> { textos, jid, timer }
+
+function enfileirarMensagemRecebida(telefone, texto, jidOriginal) {
+  if (!handlerMensagem || !texto) return;
+  let buffer = buffersMensagem.get(telefone);
+  if (!buffer) {
+    buffer = { textos: [], jid: jidOriginal };
+    buffersMensagem.set(telefone, buffer);
+  }
+  buffer.textos.push(texto);
+  buffer.jid = jidOriginal || buffer.jid;
+  clearTimeout(buffer.timer);
+  buffer.timer = setTimeout(() => {
+    buffersMensagem.delete(telefone);
+    const textoCombinado = buffer.textos.join('\n');
+    Promise.resolve(handlerMensagem(telefone, textoCombinado, buffer.jid)).catch((err) => {
+      console.error('[whatsapp-oficial] erro ao processar mensagem recebida:', err.message);
+    });
+  }, JANELA_AGRUPAMENTO_MS);
+}
+
 // O phone_number_id não muda depois que o número é registrado na conta, então
 // busca uma vez só e guarda em memória — evita uma chamada extra à Graph API
 // a cada mensagem enviada. Descoberto em runtime (em vez de fixo numa env
@@ -152,7 +180,7 @@ async function processarAudioRecebido(telefone, mediaId) {
       return;
     }
     console.log(`[whatsapp-oficial] áudio de ${telefone} transcrito: "${texto}"`);
-    if (handlerMensagem) await handlerMensagem(telefone, texto, telefone);
+    enfileirarMensagemRecebida(telefone, texto, telefone);
   } catch (err) {
     console.error(`[whatsapp-oficial] falha ao processar áudio de ${telefone}:`, err.message);
   }
@@ -184,9 +212,7 @@ function processarWebhookRecebido(body) {
         if (!telefone) continue;
         if (msg.type === 'text' && msg.text?.body) {
           if (!handlerMensagem) continue;
-          Promise.resolve(handlerMensagem(telefone, msg.text.body, telefone)).catch((err) => {
-            console.error('[whatsapp-oficial] erro ao processar mensagem recebida:', err.message);
-          });
+          enfileirarMensagemRecebida(telefone, msg.text.body, telefone);
         } else if (msg.type === 'audio' && msg.audio?.id) {
           processarAudioRecebido(telefone, msg.audio.id).catch((err) => {
             console.error('[whatsapp-oficial] erro ao processar áudio recebido:', err.message);

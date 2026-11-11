@@ -86,6 +86,12 @@ async function initDb() {
   // rastreio) deixava o botão "Pagar e gerar etiqueta" livre pra clicar de
   // novo e cobrar a mesma etiqueta duas vezes.
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS melhorenvio_etiqueta_paga_em TIMESTAMPTZ;`);
+  // De onde veio o pedido — 'site' (checkout público, também o default dos
+  // pedidos antigos sem essa coluna), 'whatsapp_ia' (fechado direto na
+  // conversa com a IA) ou 'vendedor' (o João monta manualmente pro
+  // cliente). Sem isso não tinha como separar "quem comprou pelo WhatsApp
+  // hoje" do resto dos pedidos.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS canal_venda TEXT NOT NULL DEFAULT 'site';`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reviews (

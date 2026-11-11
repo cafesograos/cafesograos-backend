@@ -15,7 +15,7 @@ const {
   definirHandlerMensagem, processarWebhookRecebido,
   getStatusConexao: getStatusWhatsApp
 } = require('./whatsapp-oficial');
-const { responderMensagem, salvarRespostaAssistente } = require('./whatsapp-ia');
+const { responderMensagem, salvarRespostaAssistente, responderConsultaAdmin } = require('./whatsapp-ia');
 const crypto = require('crypto');
 
 const app = express();
@@ -1482,8 +1482,8 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
 
   await pool.query(
     `INSERT INTO orders
-      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
-     VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,false,NULL,$20)`,
+      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent, canal_venda)
+     VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,false,NULL,$20,'vendedor')`,
     [
       orderNsu, cliente.nome, cliente.email, cliente.telefone || null, documentoNormalizado(cliente.cpf),
       cnpjDigitsVendedor || null,
@@ -1600,8 +1600,8 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
 
   await pool.query(
     `INSERT INTO orders
-      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
-     VALUES ($1,'pending',$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULL,NULL)`,
+      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent, canal_venda)
+     VALUES ($1,'pending',$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULL,NULL,'whatsapp_ia')`,
     [
       orderNsu, nome, telefone || null, documentoNormalizado(cpf), cep, endereco, numero, complemento || null,
       bairro, cidade, estado, JSON.stringify(itensParaPedido),
@@ -1863,9 +1863,14 @@ app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const [hoje, semana, mes, statusRows, semRastreioRows, avaliacoesPendentesRows, topProdutosRows, interessadosRows] = await Promise.all([
-    pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('day', now())`),
-    pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('week', now())`),
-    pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('month', now())`),
+    // O Postgres do Railway roda em UTC — truncar "now()" direto (sem
+    // converter pra Brasília antes) cortava o dia às 21h (UTC-3), incluindo
+    // as 3 primeiras horas de hoje como se fossem de ontem à noite e
+    // escondendo vendas da noite de hoje até passar de UTC. Mesmo truque de
+    // "AT TIME ZONE" ida e volta usado no resto do sistema.
+    pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'`),
+    pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('week', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'`),
+    pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('month', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'`),
     pool.query(`SELECT status, COUNT(*) AS n FROM orders GROUP BY status ORDER BY n DESC`),
     pool.query(`SELECT COUNT(*) AS n FROM orders WHERE status='approved' AND (tracking_code IS NULL OR tracking_code = '')`),
     pool.query(`SELECT COUNT(*) AS n FROM reviews WHERE status='pending'`),
@@ -3206,15 +3211,58 @@ async function escalarAtendimento(telefoneCliente, motivo) {
   }
 }
 
+// Ferramentas do assistente administrativo (ver responderConsultaAdmin em
+// whatsapp-ia.js) — só leitura, só usadas quando o próprio dono pergunta
+// pelo WhatsApp dele.
+async function vendasWhatsappHoje() {
+  if (!pool) return { erro: 'Banco de dados não configurado.' };
+  const { rows } = await pool.query(`
+    SELECT customer_name, total, created_at FROM orders
+    WHERE canal_venda = 'whatsapp_ia' AND status = 'approved'
+      AND created_at >= date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'
+    ORDER BY created_at ASC
+  `);
+  return {
+    total_vendas: rows.length,
+    total_valor: rows.reduce((s, r) => s + Number(r.total), 0),
+    vendas: rows.map((r) => ({
+      nome: r.customer_name,
+      valor: Number(r.total),
+      hora: new Date(r.created_at).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' })
+    }))
+  };
+}
+
+async function resumoAtendimentosHoje() {
+  if (!pool) return { erro: 'Banco de dados não configurado.' };
+  const { rows } = await pool.query(`
+    SELECT phone, content, created_at FROM whatsapp_mensagens
+    WHERE role = 'user' AND phone NOT IN ($1, $2)
+      AND created_at >= date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'
+    ORDER BY phone, created_at ASC
+  `, [TELEFONE_TESTE_IA, OWNER_WHATSAPP_NUMBER]);
+
+  const porTelefone = new Map();
+  for (const r of rows) {
+    if (!porTelefone.has(r.phone)) porTelefone.set(r.phone, []);
+    porTelefone.get(r.phone).push(r.content);
+  }
+  return {
+    total_pessoas_atendidas: porTelefone.size,
+    conversas: Array.from(porTelefone.entries()).map(([telefone, mensagens]) => ({ telefone, mensagens }))
+  };
+}
+
 // Liga a IA só pra quem manda mensagem primeiro (reativo) — nunca inicia
 // conversa sozinha. Sem ANTHROPIC_API_KEY, só ignora e fica em silêncio (as
 // mensagens automáticas de boas-vindas/confirmação continuam funcionando).
 definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
-  // Mensagem do próprio dono pro número da loja: não é um cliente, é a
-  // resposta dele pra uma escalação pendente — repassa pro cliente mais
-  // antigo ainda esperando e não deixa a IA tratar isso como atendimento
-  // normal. Sem escalação pendente, cai no fluxo normal (ele vira "cliente"
-  // conversando com a própria IA, inofensivo).
+  // Mensagem do próprio dono pro número da loja: pode ser (a) a resposta
+  // dele pra uma escalação pendente — repassa pro cliente mais antigo ainda
+  // esperando — ou, sem nada pendente, (b) uma pergunta administrativa
+  // dele mesmo sobre o negócio ("teve venda hoje?", "como estão os
+  // atendimentos?"). (a) sempre tem prioridade, porque é um repasse
+  // sensível ao tempo pro cliente esperando.
   if (pool && telefone.replace(/\D/g, '') === OWNER_WHATSAPP_NUMBER.replace(/\D/g, '')) {
     try {
       const { rows } = await pool.query(
@@ -3227,11 +3275,13 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
         await pool.query(`UPDATE whatsapp_escalacoes SET respondido_em = now() WHERE id = $1`, [id]);
         await enviarMensagemWhatsApp(OWNER_WHATSAPP_NUMBER, '✅ Repassado pro cliente.');
         console.log(`[whatsapp-ia] resposta do dono repassada pra ${telefoneCliente} (escalação #${id}).`);
-      } else {
-        console.log('[whatsapp-ia] mensagem do dono sem escalação pendente — ignorada.');
+      } else if (process.env.ANTHROPIC_API_KEY) {
+        console.log(`[whatsapp-ia] consulta administrativa do dono: "${texto.slice(0, 80)}"`);
+        const resposta = await responderConsultaAdmin(texto, { vendasWhatsappHoje, resumoAtendimentosHoje });
+        if (resposta) await enviarMensagemWhatsApp(OWNER_WHATSAPP_NUMBER, resposta);
       }
     } catch (err) {
-      console.error('[whatsapp-ia] falha ao repassar resposta do dono:', err.message);
+      console.error('[whatsapp-ia] falha ao tratar mensagem do dono:', err.message);
     }
     return;
   }
