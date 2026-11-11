@@ -1862,7 +1862,7 @@ const FRETE_ERRO_MSG = {
 app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
-  const [hoje, semana, mes, statusRows, semRastreioRows, avaliacoesPendentesRows, topProdutosRows] = await Promise.all([
+  const [hoje, semana, mes, statusRows, semRastreioRows, avaliacoesPendentesRows, topProdutosRows, interessadosRows] = await Promise.all([
     pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('day', now())`),
     pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('week', now())`),
     pool.query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status='approved' AND created_at >= date_trunc('month', now())`),
@@ -1876,11 +1876,18 @@ app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
       GROUP BY titulo
       ORDER BY qtd DESC
       LIMIT 5
-    `)
+    `),
+    // "Interessados" = deu nome/CPF/endereço completo (a IA ou o vendedor já
+    // gerou o link), mas nunca pagou — fica escondido por padrão na lista de
+    // pedidos (a aba "Novos" só mostra aprovado sem rastreio), então sem
+    // esse card o dono não tinha como notar gente como a Daniele sem
+    // lembrar de clicar na aba "Não pago" por conta própria.
+    pool.query(`SELECT COUNT(*) AS n FROM orders WHERE status='pending'`)
   ]);
 
   const semRastreio = Number(semRastreioRows.rows[0].n);
   const avaliacoesPendentes = Number(avaliacoesPendentesRows.rows[0].n);
+  const interessados = Number(interessadosRows.rows[0].n);
 
   const body = `
     <h1>Painel — Café Só Grãos</h1>
@@ -1900,6 +1907,10 @@ app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
         <div class="card ${semRastreio > 0 ? 'alerta' : ''}">
           <span>Pedidos sem rastreio</span><strong>${semRastreio}</strong>
           <a class="card-link" href="/admin/pedidos">Ver pedidos →</a>
+        </div>
+        <div class="card ${interessados > 0 ? 'alerta' : ''}">
+          <span>Interessados que não pagaram (dados completos, link gerado)</span><strong>${interessados}</strong>
+          <a class="card-link" href="/admin/pedidos?status=pending">Ver interessados →</a>
         </div>
         <div class="card ${avaliacoesPendentes > 0 ? 'alerta' : ''}">
           <span>Avaliações aguardando aprovação</span><strong>${avaliacoesPendentes}</strong>
