@@ -2004,7 +2004,7 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
           <div class="pedido-cliente">${escapeHtml(o.customer_name)}</div>
           <div class="pedido-data">${escapeHtml(new Date(o.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
         </div>
-        ${mostrarTotal ? `<div class="pedido-total">${reais(o.total)}</div>` : ''}
+        ${mostrarTotal ? `<div class="pedido-total">${reais(o.total)}</div><div class="pedido-detalhe" style="text-align:right;margin-top:2px;">líquido (sem frete): ${reais(Number(o.total) - Number(o.shipping_cost || 0))}</div>` : ''}
       </div>
       ${(o.free_gift || o.discount_percent || o.tracking_code) ? `
         <div class="pedido-selos">
