@@ -2019,7 +2019,7 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
       <div class="pedido-detalhe" style="margin-top:10px;"><strong>Contato:</strong> ${o.customer_email ? escapeHtml(o.customer_email) : 'sem e-mail'} · ${o.customer_phone ? `<a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(o.customer_phone)} ↗</a>` : 'sem telefone'}</div>
       ${o.customer_cnpj ? `<div class="pedido-detalhe" style="color:#B7791F;"><strong>CNPJ (nota fiscal):</strong> ${escapeHtml(o.customer_cnpj)}</div>` : ''}
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
-      <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}`).join('<br>')}</div>
+      <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}${Number(i.unit_price) > 0 ? ` — ${reais(i.unit_price)} cada (${reais(i.unit_price * i.quantity)})` : ''}`).join('<br>')}</div>
       ${ocultarFrete ? '' : `<div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>`}
       ${mostrarEntrada ? `
         <form method="POST" action="${urlBase}/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
