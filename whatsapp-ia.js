@@ -218,11 +218,23 @@ async function responderMensagem(telefone, textoCliente, deps) {
 // Assistente administrativo: só pro número pessoal do dono, pra ele
 // consultar o negócio direto pelo WhatsApp ("teve vendas hoje?", "como
 // estão os atendimentos?") sem precisar abrir o painel. Sempre sem
-// histórico salvo (cada pergunta é isolada) e só com ferramentas de
-// LEITURA — nunca cria/edita nada, nunca fala com cliente.
+// histórico salvo (cada pergunta é isolada) e as ferramentas de relatório
+// são só LEITURA — nunca cria/edita pedido.
+//
+// Quando existe uma escalação pendente (cliente esperando o dono repassar
+// uma resposta — ver escalarAtendimento em server.js), essa mesma chamada
+// também decide se a mensagem do dono é (a) a resposta pra ESSE cliente
+// (chama responder_cliente_pendente) ou (b) uma pergunta administrativa
+// (usa as ferramentas de relatório). Isso existe por causa de um incidente
+// real: a regra antiga tratava QUALQUER mensagem do dono como resposta
+// pro cliente sempre que havia escalação pendente, sem checar o conteúdo —
+// e duas perguntas administrativas ("teve venda hoje?") foram repassadas
+// por engano pra um cliente de verdade. Por segurança, se não der pra
+// saber com certeza qual das duas o dono quer, a IA é instruída a
+// perguntar antes de agir, nunca a adivinhar.
 const MODEL_ADMIN = 'claude-haiku-4-5';
 
-const TOOLS_ADMIN = [
+const TOOLS_ADMIN_BASE = [
   {
     name: 'vendas_whatsapp_hoje',
     description: 'Lista os pedidos aprovados hoje que vieram do WhatsApp (fechados direto na conversa com a IA, não pelo site nem pelo vendedor) — nome do cliente, valor e horário.',
@@ -235,30 +247,52 @@ const TOOLS_ADMIN = [
   }
 ];
 
-function montarSystemPromptAdmin() {
-  return `Você é o assistente administrativo do Alberto, dono da Café Só Grãos. Ele está te perguntando algo pelo WhatsApp, pelo número pessoal dele — você está falando DIRETO com o dono, nunca com um cliente.
+function montarSystemPromptAdmin(escalacaoPendente) {
+  const contextoEscalacao = escalacaoPendente ? `
+
+ESCALAÇÃO PENDENTE: tem um cliente esperando resposta — telefone ${escalacaoPendente.telefone_cliente}, motivo: "${escalacaoPendente.motivo}". Decida com cuidado:
+- Se a mensagem do dono for claramente a resposta ou instrução pra ESSE cliente (ex: respondendo a dúvida dele, dizendo o que repassar), chame responder_cliente_pendente.
+- Se for uma pergunta sobre o negócio em geral (vendas, atendimentos, dúvidas do dia), use as ferramentas de relatório normalmente — NÃO mexe nessa escalação.
+- Se não der pra saber com certeza qual das duas coisas o dono quer, NÃO chame nenhuma ferramenta — só pergunte pra ele qual é a intenção. Nunca adivinhe: mandar a coisa errada pro cliente errado já aconteceu antes e não pode se repetir.` : '';
+
+  return `Você é o assistente administrativo do Alberto, dono da Café Só Grãos. Ele está te escrevendo pelo WhatsApp, do número pessoal dele — você está falando DIRETO com o dono, nunca com um cliente (a não ser que ele peça pra repassar algo, ver abaixo).
 
 OBJETIVO: responder perguntas sobre o negócio (vendas, atendimentos, dúvidas de clientes) usando as ferramentas disponíveis — nunca invente número, sempre consulte antes de responder.
 
 TOM: direto, tipo um relatório rápido de WhatsApp — pode usar bullet points ou lista curta, não precisa ser formal nem floreado. Se não tiver dado nenhum (ex: nenhuma venda hoje), diga isso claramente em vez de inventar.
+${contextoEscalacao}
 
-LIMITES: você só responde sobre o negócio usando as ferramentas que tem — não fala com cliente nenhum, não cria pedido, não manda mensagem pra ninguém além dessa resposta pro próprio dono.`;
+LIMITES: fora do caso de escalação pendente acima, você só responde sobre o negócio usando as ferramentas que tem — não fala com cliente nenhum, não cria pedido.`;
 }
 
-async function responderConsultaAdmin(pergunta, deps) {
-  const { vendasWhatsappHoje, resumoAtendimentosHoje } = deps;
+async function responderDono(texto, deps) {
+  const { vendasWhatsappHoje, resumoAtendimentosHoje, escalacaoPendente, responderClientePendente } = deps;
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
 
-  const messages = [{ role: 'user', content: pergunta }];
+  const tools = [...TOOLS_ADMIN_BASE];
+  if (escalacaoPendente) {
+    tools.push({
+      name: 'responder_cliente_pendente',
+      description: 'Envia a mensagem pro cliente que está esperando resposta na escalação pendente (ver contexto no system prompt). Só chame isso quando tiver certeza de que a mensagem do dono é a resposta/instrução pra esse cliente específico.',
+      input_schema: {
+        type: 'object',
+        properties: { texto: { type: 'string', description: 'A mensagem a enviar pro cliente, em nome da loja.' } },
+        required: ['texto']
+      }
+    });
+  }
+
+  const messages = [{ role: 'user', content: texto }];
   let resposta;
   let rodadas = 0;
+  let repassouNessaRodada = false;
   while (rodadas < 4) {
     rodadas++;
     resposta = await anthropic.messages.create({
       model: MODEL_ADMIN,
       max_tokens: 1024,
-      system: montarSystemPromptAdmin(),
-      tools: TOOLS_ADMIN,
+      system: montarSystemPromptAdmin(escalacaoPendente),
+      tools,
       messages
     });
     if (resposta.stop_reason !== 'tool_use') break;
@@ -269,7 +303,11 @@ async function responderConsultaAdmin(pergunta, deps) {
       try {
         if (block.name === 'vendas_whatsapp_hoje') resultado = await vendasWhatsappHoje();
         else if (block.name === 'resumo_atendimentos_hoje') resultado = await resumoAtendimentosHoje();
-        else resultado = { erro: 'Ferramenta desconhecida.' };
+        else if (block.name === 'responder_cliente_pendente') {
+          await responderClientePendente(block.input?.texto || '');
+          repassouNessaRodada = true;
+          resultado = { ok: true };
+        } else resultado = { erro: 'Ferramenta desconhecida.' };
       } catch (err) {
         resultado = { erro: err.message };
       }
@@ -277,7 +315,11 @@ async function responderConsultaAdmin(pergunta, deps) {
     }
     messages.push({ role: 'user', content: toolResults });
   }
-  return resposta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+  const textoResposta = resposta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+  // Mesma rede de segurança do atendimento normal: se repassou pro cliente
+  // mas não escreveu nada de volta pro dono, confirma mesmo assim — senão
+  // ele não saberia se a mensagem saiu de verdade.
+  return textoResposta || (repassouNessaRodada ? '✅ Repassado pro cliente.' : textoResposta);
 }
 
-module.exports = { responderMensagem, salvarRespostaAssistente, responderConsultaAdmin };
+module.exports = { responderMensagem, salvarRespostaAssistente, responderDono };

@@ -15,7 +15,7 @@ const {
   definirHandlerMensagem, processarWebhookRecebido,
   getStatusConexao: getStatusWhatsApp
 } = require('./whatsapp-oficial');
-const { responderMensagem, salvarRespostaAssistente, responderConsultaAdmin } = require('./whatsapp-ia');
+const { responderMensagem, salvarRespostaAssistente, responderDono } = require('./whatsapp-ia');
 const crypto = require('crypto');
 
 const app = express();
@@ -3258,28 +3258,35 @@ async function resumoAtendimentosHoje() {
 // mensagens automáticas de boas-vindas/confirmação continuam funcionando).
 definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   // Mensagem do próprio dono pro número da loja: pode ser (a) a resposta
-  // dele pra uma escalação pendente — repassa pro cliente mais antigo ainda
-  // esperando — ou, sem nada pendente, (b) uma pergunta administrativa
-  // dele mesmo sobre o negócio ("teve venda hoje?", "como estão os
-  // atendimentos?"). (a) sempre tem prioridade, porque é um repasse
-  // sensível ao tempo pro cliente esperando.
+  // dele pra uma escalação pendente — repassa pro cliente esperando — ou
+  // (b) uma pergunta administrativa sobre o negócio ("teve venda hoje?",
+  // "como estão os atendimentos?"). Quem decide qual das duas é a própria
+  // IA administrativa (responderDono, em whatsapp-ia.js) — ela recebe o
+  // contexto da escalação pendente (se houver) e só repassa pro cliente
+  // quando tiver certeza; se não tiver, pergunta pro dono em vez de
+  // adivinhar. Antes disso era uma regra fixa (qualquer mensagem = repasse
+  // sempre que houvesse escalação pendente) e isso já mandou pergunta
+  // administrativa pro cliente errado por engano — não pode repetir.
   if (pool && telefone.replace(/\D/g, '') === OWNER_WHATSAPP_NUMBER.replace(/\D/g, '')) {
+    if (!process.env.ANTHROPIC_API_KEY) return;
     try {
       const { rows } = await pool.query(
-        `SELECT id, telefone_cliente FROM whatsapp_escalacoes WHERE respondido_em IS NULL ORDER BY created_at ASC LIMIT 1`
+        `SELECT id, telefone_cliente, motivo FROM whatsapp_escalacoes WHERE respondido_em IS NULL ORDER BY created_at ASC LIMIT 1`
       );
-      if (rows[0]) {
-        const { id, telefone_cliente: telefoneCliente } = rows[0];
-        await enviarMensagemWhatsApp(telefoneCliente, texto);
-        await salvarRespostaAssistente(pool, telefoneCliente, texto);
-        await pool.query(`UPDATE whatsapp_escalacoes SET respondido_em = now() WHERE id = $1`, [id]);
-        await enviarMensagemWhatsApp(OWNER_WHATSAPP_NUMBER, '✅ Repassado pro cliente.');
-        console.log(`[whatsapp-ia] resposta do dono repassada pra ${telefoneCliente} (escalação #${id}).`);
-      } else if (process.env.ANTHROPIC_API_KEY) {
-        console.log(`[whatsapp-ia] consulta administrativa do dono: "${texto.slice(0, 80)}"`);
-        const resposta = await responderConsultaAdmin(texto, { vendasWhatsappHoje, resumoAtendimentosHoje });
-        if (resposta) await enviarMensagemWhatsApp(OWNER_WHATSAPP_NUMBER, resposta);
-      }
+      const escalacaoPendente = rows[0] || null;
+      console.log(`[whatsapp-ia] mensagem do dono${escalacaoPendente ? ` (com escalação #${escalacaoPendente.id} pendente)` : ''}: "${texto.slice(0, 80)}"`);
+      const resposta = await responderDono(texto, {
+        vendasWhatsappHoje,
+        resumoAtendimentosHoje,
+        escalacaoPendente,
+        responderClientePendente: async (textoParaCliente) => {
+          await enviarMensagemWhatsApp(escalacaoPendente.telefone_cliente, textoParaCliente);
+          await salvarRespostaAssistente(pool, escalacaoPendente.telefone_cliente, textoParaCliente);
+          await pool.query(`UPDATE whatsapp_escalacoes SET respondido_em = now() WHERE id = $1`, [escalacaoPendente.id]);
+          console.log(`[whatsapp-ia] resposta do dono repassada pra ${escalacaoPendente.telefone_cliente} (escalação #${escalacaoPendente.id}).`);
+        }
+      });
+      if (resposta) await enviarMensagemWhatsApp(OWNER_WHATSAPP_NUMBER, resposta);
     } catch (err) {
       console.error('[whatsapp-ia] falha ao tratar mensagem do dono:', err.message);
     }
