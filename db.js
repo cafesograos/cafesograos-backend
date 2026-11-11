@@ -80,6 +80,12 @@ async function initDb() {
   // Id do item no carrinho/pedido da Melhor Envio depois de inserido — usado
   // nas chamadas seguintes (pagar, gerar etiqueta, imprimir, rastrear).
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS melhorenvio_order_id TEXT;`);
+  // Marca o instante em que o pagamento da etiqueta (comprarEtiquetas, que
+  // debita a carteira de verdade) foi confirmado — sem isso, uma falha
+  // depois de pagar (ex.: gerarEtiquetas falhar, ou nunca achar o código de
+  // rastreio) deixava o botão "Pagar e gerar etiqueta" livre pra clicar de
+  // novo e cobrar a mesma etiqueta duas vezes.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS melhorenvio_etiqueta_paga_em TIMESTAMPTZ;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reviews (

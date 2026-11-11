@@ -2211,7 +2211,14 @@ function handlerFretePagar(urlBase) {
         throw new Error('ja_tem_rastreio');
       }
 
-      await comprarEtiquetas([order.melhorenvio_order_id]);
+      // Só chama comprarEtiquetas (que debita a carteira de verdade) se
+      // ainda não tiver pago essa etiqueta — se uma tentativa anterior já
+      // pagou mas falhou depois (gerar etiqueta ou buscar o rastreio), o
+      // retry cai direto pra gerarEtiquetas sem cobrar de novo.
+      if (!order.melhorenvio_etiqueta_paga_em) {
+        await comprarEtiquetas([order.melhorenvio_order_id]);
+        await pool.query('UPDATE orders SET melhorenvio_etiqueta_paga_em = now() WHERE id = $1', [order.id]);
+      }
       await gerarEtiquetas([order.melhorenvio_order_id]);
 
       // A transportadora não devolve o código de rastreio na hora — leva alguns
