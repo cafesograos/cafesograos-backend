@@ -644,20 +644,43 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
 async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
   if (!pool || !preferenceId) return null;
 
-  // Guarda o status de antes pra só disparar cupom/e-mails na primeira vez
-  // que o pedido vira "approved" — o provedor pode reenviar a mesma
-  // notificação várias vezes, e sem essa checagem cada reenvio gerava um
-  // cupom duplicado e mandava os e-mails de novo.
-  const { rows: antes } = await pool.query('SELECT status FROM orders WHERE preference_id = $1', [preferenceId]);
-  if (!antes[0]) return null;
-  const statusAnterior = antes[0].status;
+  let order;
+  let virouApprovedAgora = false;
 
-  const { rows } = await pool.query(
-    `UPDATE orders SET status = $1, payment_id = $2 WHERE preference_id = $3 RETURNING *`,
-    [novoStatus, String(paymentId), preferenceId]
-  );
-  const order = rows[0];
-  if (order && novoStatus === 'approved' && statusAnterior !== 'approved') {
+  if (novoStatus === 'approved') {
+    // UPDATE condicional atômico: só conta como "virou aprovado agora" se o
+    // status anterior não já era 'approved'. O provedor pode reenviar a
+    // mesma notificação, inclusive quase ao mesmo tempo (reconciliação
+    // automática rodando junto com o webhook, por exemplo) — fazer o SELECT
+    // do status antigo numa query separada do UPDATE deixava uma janela
+    // onde as duas chamadas liam 'pending' antes de qualquer uma escrever
+    // 'approved', e as duas geravam cupom/e-mail/WhatsApp duplicados. Com a
+    // condição dentro do próprio UPDATE, o lock de linha da primeira
+    // chamada serializa a segunda, que só reavalia a condição depois do
+    // commit da primeira — aí já encontra 'approved' e não bate 0 linhas.
+    const { rows } = await pool.query(
+      `UPDATE orders SET status = $1, payment_id = $2
+       WHERE preference_id = $3 AND status IS DISTINCT FROM 'approved'
+       RETURNING *`,
+      [novoStatus, String(paymentId), preferenceId]
+    );
+    if (rows[0]) {
+      order = rows[0];
+      virouApprovedAgora = true;
+    } else {
+      const { rows: atual } = await pool.query('SELECT * FROM orders WHERE preference_id = $1', [preferenceId]);
+      order = atual[0] || null;
+    }
+  } else {
+    const { rows } = await pool.query(
+      `UPDATE orders SET status = $1, payment_id = $2 WHERE preference_id = $3 RETURNING *`,
+      [novoStatus, String(paymentId), preferenceId]
+    );
+    order = rows[0] || null;
+  }
+
+  if (!order) return null;
+  if (virouApprovedAgora) {
     // Só cria o cupom/marca como usado quando o pagamento é realmente
     // aprovado — evita gerar cupom pra carrinho abandonado ou queimar
     // o cupom de alguém que desistiu no meio do checkout.
@@ -675,8 +698,8 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
     // O pedido já está aprovado e o cupom já foi gerado/queimado nesse ponto —
     // uma falha ao enviar e-mail (ex.: soluço de rede até o Resend) não pode
     // mais derrubar isso nem fazer o webhook responder erro pra InfinitePay
-    // reenviar depois: como o pedido já está "approved", o reenvio cairia na
-    // checagem de statusAnterior acima e nunca tentaria o e-mail de novo —
+    // reenviar depois: como o pedido já está "approved", o reenvio não bate
+    // mais a condição do UPDATE acima e nunca tentaria o e-mail de novo —
     // ou seja, sem isso, uma falha nessa hora ficava permanente e silenciosa.
     // Cada e-mail é isolado (um falhar não impede o outro) e vai pro Sentry
     // pra aparecer no monitoramento em vez de sumir num console.error perdido.
