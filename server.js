@@ -276,8 +276,12 @@ app.get('/oauth/melhorenvio/callback', async (req, res) => {
     }
     res.send('Melhor Envio conectado com sucesso! Pode fechar esta aba.');
   } catch (err) {
+    // O detalhe do erro (pode incluir corpo de resposta interno da API) vai só
+    // pro log do servidor — mandar isso cru pro navegador não ajuda o admin a
+    // resolver (ele não vai agir diferente vendo o texto bruto) e expõe
+    // informação desnecessária de um provedor externo.
     console.error('Erro na autorização do Melhor Envio:', err.message);
-    res.status(500).send('Falha ao conectar com o Melhor Envio: ' + err.message);
+    res.status(500).send('Falha ao conectar com o Melhor Envio. Veja os logs do servidor pra mais detalhes.');
   }
 });
 
