@@ -3057,6 +3057,7 @@ async function processarFilaReengajamentoWhatsApp() {
     );
     for (const lead of rows) {
       const telefone = telefoneParaE164(lead.phone);
+      let enviouComSucesso = false;
       if (telefone) {
         const primeiroNome = String(lead.name || '').trim().split(' ')[0];
         const nomeFormatado = primeiroNome ? `, ${primeiroNome}` : '';
@@ -3064,14 +3065,18 @@ async function processarFilaReengajamentoWhatsApp() {
         try {
           await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.reengajamento, { nome_cliente: nomeFormatado, destaque });
           console.log(`WhatsApp de reengajamento enviado pro lead #${lead.id}.`);
+          enviouComSucesso = true;
         } catch (err) {
           console.error(`Falha ao enviar WhatsApp de reengajamento pro lead #${lead.id}:`, err.message);
         }
       }
       // Avança a contagem mesmo em falha, igual aos outros fluxos — evita
-      // ficar tentando pro mesmo número a cada rodada pra sempre.
+      // ficar tentando pro mesmo número a cada rodada pra sempre. Marca
+      // "contatado" só em sucesso — é o mesmo campo do checkbox "já entrei
+      // em contato" na tela de leads, pro dono ver ali que esse lead já foi
+      // alcançado sem precisar marcar na mão.
       await pool.query(
-        `UPDATE leads SET whatsapp_reengajamento_contagem = COALESCE(whatsapp_reengajamento_contagem, 0) + 1, whatsapp_reengajamento_enviado_em = now() WHERE id = $1`,
+        `UPDATE leads SET whatsapp_reengajamento_contagem = COALESCE(whatsapp_reengajamento_contagem, 0) + 1, whatsapp_reengajamento_enviado_em = now()${enviouComSucesso ? ', contatado = true' : ''} WHERE id = $1`,
         [lead.id]
       );
     }
