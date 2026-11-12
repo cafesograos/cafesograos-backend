@@ -190,11 +190,7 @@ const PRODUCTS = [
     img: 'assets/produto-drip-coffee.jpg',
     imgs: ['assets/produto-drip-coffee.jpg']
   },
-  // Combos — pesoGramas somado dos componentes (sacos 500g ~550g cada,
-  // igual aos outros produtos de 500g; caixa de madeira com 10 Drip Coffee
-  // estimada em 600g, mais pesada que a caixa de papelão de 400g) — ainda
-  // não pesado de verdade, ajustar depois do primeiro envio real se o peso
-  // na balança vier diferente.
+  // Combos — pesoGramas conferido na balança pelo dono (não é mais estimativa).
   {
     id: 'combo-experiencia-so-graos',
     nome: 'Combo Experiência Só Grãos',
@@ -211,7 +207,7 @@ const PRODUCTS = [
     precoOriginal: 200.00,
     categorias: ['combo', 'visita'],
     badge: 'Combo',
-    pesoGramas: 1700,
+    pesoGramas: 1200,
     img: 'assets/produto-combo-experiencia.jpg',
     imgs: ['assets/produto-combo-experiencia.jpg']
   },
@@ -231,7 +227,7 @@ const PRODUCTS = [
     precoOriginal: 150.00,
     categorias: ['combo', 'dia-a-dia'],
     badge: 'Combo',
-    pesoGramas: 1700,
+    pesoGramas: 1200,
     img: 'assets/produto-combo-classicos.jpg',
     imgs: ['assets/produto-combo-classicos.jpg']
   },
@@ -251,7 +247,7 @@ const PRODUCTS = [
     precoOriginal: 220.00,
     categorias: ['combo', 'visita'],
     badge: 'Combo',
-    pesoGramas: 1700,
+    pesoGramas: 1200,
     img: 'assets/produto-combo-especiais.jpg',
     imgs: ['assets/produto-combo-especiais.jpg']
   },
@@ -271,7 +267,7 @@ const PRODUCTS = [
     precoOriginal: 140.00,
     categorias: ['combo', 'dia-a-dia'],
     badge: 'Combo',
-    pesoGramas: 1650,
+    pesoGramas: 1500,
     img: 'assets/produto-combo-trio.jpg',
     imgs: ['assets/produto-combo-trio.jpg']
   }
