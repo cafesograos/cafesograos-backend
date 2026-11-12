@@ -11,7 +11,8 @@ const CATEGORIES = [
   { id: 'dia-a-dia', nome: 'Café do dia a dia', nome_en: 'Everyday Coffee', nome_es: 'Café del día a día', nome_fr: 'Café du quotidien', nome_zh: '日常咖啡' },
   { id: 'visita', nome: 'Para receber visita', nome_en: 'For Having Guests Over', nome_es: 'Para recibir visitas', nome_fr: 'Pour recevoir des invités', nome_zh: '待客咖啡' },
   { id: 'italiana', nome: 'Cafeteira italiana', nome_en: 'Italian Moka Pot', nome_es: 'Cafetera italiana', nome_fr: 'Cafetière italienne', nome_zh: '摩卡壶咖啡' },
-  { id: 'sache', nome: 'Sachê individual', nome_en: 'Individual Sachet', nome_es: 'Sobre individual', nome_fr: 'Sachet individuel', nome_zh: '独立包装' }
+  { id: 'sache', nome: 'Sachê individual', nome_en: 'Individual Sachet', nome_es: 'Sobre individual', nome_fr: 'Sachet individuel', nome_zh: '独立包装' },
+  { id: 'combo', nome: 'Combos', nome_en: 'Combos', nome_es: 'Combos', nome_fr: 'Combos', nome_zh: '组合套装' }
 ];
 
 const PRODUCTS = [
@@ -188,6 +189,91 @@ const PRODUCTS = [
     pesoGramas: 30,
     img: 'assets/produto-drip-coffee.jpg',
     imgs: ['assets/produto-drip-coffee.jpg']
+  },
+  // Combos — pesoGramas somado dos componentes (sacos 500g ~550g cada,
+  // igual aos outros produtos de 500g; caixa de madeira com 10 Drip Coffee
+  // estimada em 600g, mais pesada que a caixa de papelão de 400g) — ainda
+  // não pesado de verdade, ajustar depois do primeiro envio real se o peso
+  // na balança vier diferente.
+  {
+    id: 'combo-experiencia-so-graos',
+    nome: 'Combo Experiência Só Grãos',
+    nome_en: 'Só Grãos Experience Combo',
+    nome_es: 'Combo Experiencia Só Grãos',
+    nome_fr: 'Combo Expérience Só Grãos',
+    nome_zh: '只有豆子体验套装',
+    descricao: 'O jeito ideal de conhecer as duas linhas da casa: 1 Café Especial 500g em grãos (84 pontos SCA) + 1 Café Tradicional 500g moído + caixa de madeira com 10 unidades de Drip Coffee.',
+    descricao_en: 'The ideal way to get to know both of our coffee lines: 1 Specialty Coffee 500g whole beans (84 SCA points) + 1 Traditional Coffee 500g ground + wooden box with 10 Drip Coffee sachets.',
+    descricao_es: 'La forma ideal de conocer las dos líneas de la casa: 1 Café Especial 500g en grano (84 puntos SCA) + 1 Café Tradicional 500g molido + caja de madera con 10 unidades de Drip Coffee.',
+    descricao_fr: 'La façon idéale de découvrir nos deux lignes de café : 1 Café Spécial 500g en grains (84 points SCA) + 1 Café Traditionnel 500g moulu + boîte en bois avec 10 sachets de Drip Coffee.',
+    descricao_zh: '认识我们两条产品线的理想方式：1袋特级咖啡500g咖啡豆（SCA 84分）+ 1袋传统咖啡500g研磨咖啡 + 装有10包Drip Coffee的木盒。',
+    preco: 145.00,
+    precoOriginal: 200.00,
+    categorias: ['combo', 'visita'],
+    badge: 'Combo',
+    pesoGramas: 1700,
+    img: 'assets/produto-combo-experiencia.jpg',
+    imgs: ['assets/produto-combo-experiencia.jpg']
+  },
+  {
+    id: 'combo-classicos-so-graos',
+    nome: 'Combo Clássicos Só Grãos',
+    nome_en: 'Só Grãos Classics Combo',
+    nome_es: 'Combo Clásicos Só Grãos',
+    nome_fr: 'Combo Classiques Só Grãos',
+    nome_zh: '只有豆子经典套装',
+    descricao: 'Pra quem já é fã do nosso café do dia a dia: 2 Café Tradicional 500g moído + caixa de madeira com 10 unidades de Drip Coffee.',
+    descricao_en: 'For those who already love our everyday coffee: 2 Traditional Coffee 500g ground + wooden box with 10 Drip Coffee sachets.',
+    descricao_es: 'Para quien ya es fan de nuestro café del día a día: 2 Café Tradicional 500g molido + caja de madera con 10 unidades de Drip Coffee.',
+    descricao_fr: 'Pour ceux qui aiment déjà notre café du quotidien : 2 Café Traditionnel 500g moulu + boîte en bois avec 10 sachets de Drip Coffee.',
+    descricao_zh: '献给已经喜爱我们日常咖啡的您：2袋传统咖啡500g研磨咖啡 + 装有10包Drip Coffee的木盒。',
+    preco: 124.99,
+    precoOriginal: 150.00,
+    categorias: ['combo', 'dia-a-dia'],
+    badge: 'Combo',
+    pesoGramas: 1700,
+    img: 'assets/produto-combo-classicos.jpg',
+    imgs: ['assets/produto-combo-classicos.jpg']
+  },
+  {
+    id: 'combo-especiais-so-graos',
+    nome: 'Combo Especiais Só Grãos',
+    nome_en: 'Só Grãos Specialty Combo',
+    nome_es: 'Combo Especiales Só Grãos',
+    nome_fr: 'Combo Spéciaux Só Grãos',
+    nome_zh: '只有豆子特级套装',
+    descricao: 'Pra quem quer dobrar a experiência sensorial: 2 Café Especial 500g em grãos (84 pontos SCA) + caixa de madeira com 10 unidades de Drip Coffee.',
+    descricao_en: 'For those who want to double the sensory experience: 2 Specialty Coffee 500g whole beans (84 SCA points) + wooden box with 10 Drip Coffee sachets.',
+    descricao_es: 'Para quien quiere duplicar la experiencia sensorial: 2 Café Especial 500g en grano (84 puntos SCA) + caja de madera con 10 unidades de Drip Coffee.',
+    descricao_fr: 'Pour ceux qui veulent doubler l\'expérience sensorielle : 2 Café Spécial 500g en grains (84 points SCA) + boîte en bois avec 10 sachets de Drip Coffee.',
+    descricao_zh: '献给想要加倍感官体验的您：2袋特级咖啡500g咖啡豆（SCA 84分） + 装有10包Drip Coffee的木盒。',
+    preco: 164.99,
+    precoOriginal: 220.00,
+    categorias: ['combo', 'visita'],
+    badge: 'Combo',
+    pesoGramas: 1700,
+    img: 'assets/produto-combo-especiais.jpg',
+    imgs: ['assets/produto-combo-especiais.jpg']
+  },
+  {
+    id: 'combo-trio-so-graos',
+    nome: 'Combo Trio Só Grãos',
+    nome_en: 'Só Grãos Trio Combo',
+    nome_es: 'Combo Trío Só Grãos',
+    nome_fr: 'Combo Trio Só Grãos',
+    nome_zh: '只有豆子三重奏套装',
+    descricao: 'O combo mais completo: 2 Café Tradicional 500g moído + 1 Café Especial 500g em grãos (84 pontos SCA).',
+    descricao_en: 'The most complete combo: 2 Traditional Coffee 500g ground + 1 Specialty Coffee 500g whole beans (84 SCA points).',
+    descricao_es: 'El combo más completo: 2 Café Tradicional 500g molido + 1 Café Especial 500g en grano (84 puntos SCA).',
+    descricao_fr: 'Le combo le plus complet : 2 Café Traditionnel 500g moulu + 1 Café Spécial 500g en grains (84 points SCA).',
+    descricao_zh: '最全面的套装：2袋传统咖啡500g研磨咖啡 + 1袋特级咖啡500g咖啡豆（SCA 84分）。',
+    preco: 112.99,
+    precoOriginal: 140.00,
+    categorias: ['combo', 'dia-a-dia'],
+    badge: 'Combo',
+    pesoGramas: 1650,
+    img: 'assets/produto-combo-trio.jpg',
+    imgs: ['assets/produto-combo-trio.jpg']
   }
 ];
 
