@@ -10,7 +10,6 @@
 const CATEGORIES = [
   { id: 'dia-a-dia', nome: 'Café do dia a dia', nome_en: 'Everyday Coffee', nome_es: 'Café del día a día', nome_fr: 'Café du quotidien', nome_zh: '日常咖啡' },
   { id: 'visita', nome: 'Para receber visita', nome_en: 'For Having Guests Over', nome_es: 'Para recibir visitas', nome_fr: 'Pour recevoir des invités', nome_zh: '待客咖啡' },
-  { id: 'italiana', nome: 'Cafeteira italiana', nome_en: 'Italian Moka Pot', nome_es: 'Cafetera italiana', nome_fr: 'Cafetière italienne', nome_zh: '摩卡壶咖啡' },
   { id: 'sache', nome: 'Sachê individual', nome_en: 'Individual Sachet', nome_es: 'Sobre individual', nome_fr: 'Sachet individuel', nome_zh: '独立包装' },
   { id: 'combo', nome: 'Combos', nome_en: 'Combos', nome_es: 'Combos', nome_fr: 'Combos', nome_zh: '组合套装' }
 ];
@@ -128,7 +127,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味。酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，咖啡豆。500g。',
     preco: 55.00,
     precoOriginal: 60.00,
-    categorias: ['visita', 'italiana'],
+    categorias: ['visita'],
     badge: '84 SCA',
     pesoGramas: 550,
     img: 'assets/produto-especial-500.jpg',
@@ -148,7 +147,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味。酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，咖啡豆。1kg。',
     preco: 110.00,
     precoOriginal: 120.00,
-    categorias: ['visita', 'italiana'],
+    categorias: ['visita'],
     badge: '84 SCA',
     pesoGramas: 1050,
     img: 'assets/produto-especial-500.jpg',
