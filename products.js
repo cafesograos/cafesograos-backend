@@ -7,7 +7,8 @@
 // Café, Kits, Acessórios) -- "categorias" em cada item abaixo tem só 1
 // valor agora, cada produto pertence a um tipo só.
 const CATEGORIES = [
-  { id: 'cafes', nome: 'Cafés', nome_en: 'Coffees', nome_es: 'Cafés', nome_fr: 'Cafés', nome_zh: '咖啡' },
+  { id: 'tradicional', nome: 'Tradicional', nome_en: 'Traditional', nome_es: 'Tradicional', nome_fr: 'Traditionnel', nome_zh: '传统' },
+  { id: 'especial', nome: 'Especial', nome_en: 'Specialty', nome_es: 'Especial', nome_fr: 'Spécial', nome_zh: '特级' },
   { id: 'kits', nome: 'Kits', nome_en: 'Kits', nome_es: 'Kits', nome_fr: 'Kits', nome_zh: '套装' },
   { id: 'sache', nome: 'Sachê individual', nome_en: 'Individual Sachet', nome_es: 'Sobre individual', nome_fr: 'Sachet individuel', nome_zh: '独立包装' },
   { id: 'acessorios', nome: 'Acessórios', nome_en: 'Accessories', nome_es: 'Accesorios', nome_fr: 'Accessoires', nome_zh: '配件' }
@@ -30,7 +31,7 @@ const PRODUCTS = [
     descricao_zh: '您日常生活的伙伴，小巧装便于尝试或携带：浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡，研磨咖啡。250g。',
     preco: 18.99,
     precoOriginal: 22.00,
-    categorias: ['cafes'],
+    categorias: ['tradicional'],
     pesoGramas: 280,
     img: 'assets/produto-tradicional-250.jpg',
     imgs: ['assets/produto-tradicional-250.jpg']
@@ -88,7 +89,7 @@ const PRODUCTS = [
     descricao_zh: '您日常生活的伙伴：浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡，研磨咖啡。500g。',
     preco: 32.01,
     precoOriginal: 33.00,
-    categorias: ['cafes'],
+    categorias: ['tradicional'],
     pesoGramas: 550,
     img: 'assets/produto-tradicional-500.jpg',
     imgs: ['assets/produto-tradicional-500.jpg']
@@ -107,7 +108,7 @@ const PRODUCTS = [
     descricao_zh: '您日常生活的伙伴：浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡，研磨咖啡。1kg。',
     preco: 64.00,
     precoOriginal: 66.00,
-    categorias: ['cafes'],
+    categorias: ['tradicional'],
     pesoGramas: 1050,
     img: 'assets/produto-tradicional-500.jpg',
     imgs: ['assets/produto-tradicional-500.jpg']
@@ -126,7 +127,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味。酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，咖啡豆。500g。',
     preco: 55.00,
     precoOriginal: 60.00,
-    categorias: ['cafes'],
+    categorias: ['especial'],
     badge: '84 SCA',
     pesoGramas: 550,
     img: 'assets/produto-especial-500.jpg',
@@ -146,7 +147,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味。酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，咖啡豆。1kg。',
     preco: 110.00,
     precoOriginal: 120.00,
-    categorias: ['cafes'],
+    categorias: ['especial'],
     badge: '84 SCA',
     pesoGramas: 1050,
     img: 'assets/produto-especial-500.jpg',
@@ -166,7 +167,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味。酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，研磨咖啡。500g。',
     preco: 55.00,
     precoOriginal: 60.00,
-    categorias: ['cafes'],
+    categorias: ['especial'],
     badge: '84 SCA',
     pesoGramas: 550,
     img: 'assets/produto-especial-500.jpg',
@@ -186,7 +187,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味。酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，研磨咖啡。1kg。',
     preco: 110.00,
     precoOriginal: 120.00,
-    categorias: ['cafes'],
+    categorias: ['especial'],
     badge: '84 SCA',
     pesoGramas: 1050,
     img: 'assets/produto-especial-500.jpg',
