@@ -20,12 +20,14 @@ function definirHandlerMensagem(callback) {
 }
 
 // Agrupa mensagens que chegam próximas umas das outras do mesmo número antes
-// de chamar a IA — sem isso, quando o cliente manda em duas partes (ex: "quanto
-// custa?" e, 2s depois, "qual é o preço?" completando o mesmo pensamento, ou
-// só quebrando uma frase longa em várias bolhas), a IA respondia à primeira
-// sem nunca ver a segunda, gerando resposta fragmentada ou repetida. Espera
-// um intervalo sem mensagem nova antes de juntar tudo e responder de uma vez.
-const JANELA_AGRUPAMENTO_MS = 6000;
+// de chamar a IA — sem isso, quando o cliente manda em duas partes (ex: "bom
+// dia" e, uns segundos depois, "vocês vendem pelo aplicativo?" completando o
+// mesmo pensamento, ou só quebrando uma frase longa em várias bolhas), a IA
+// respondia à primeira sem nunca ver a segunda, gerando duas respostas em
+// vez de uma só. 6s não bastava — teste real mostrou 18s de intervalo entre
+// duas bolhas da mesma pessoa; 20s dá margem confortável sem fazer o
+// cliente esperar tempo absurdo pela primeira resposta.
+const JANELA_AGRUPAMENTO_MS = 20000;
 const buffersMensagem = new Map(); // telefone -> { textos, jid, timer }
 
 function enfileirarMensagemRecebida(telefone, texto, jidOriginal) {
