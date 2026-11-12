@@ -38,6 +38,26 @@ const PRODUCTS = [
     imgs: ['assets/produto-tradicional-250.jpg']
   },
   {
+    id: 'cafe-tradicional-250-moido-copo',
+    nome: 'Café Tradicional 250g + Copo',
+    nome_en: 'Traditional Coffee 250g + Cup',
+    nome_es: 'Café Tradicional 250g + Vaso',
+    nome_fr: 'Café Traditionnel 250g + Tasse',
+    nome_zh: '传统咖啡250g + 咖啡杯',
+    descricao: 'O café do dia a dia já com o copo pra levar ele junto: Café Tradicional 250g moído + copo térmico Café Só Grãos de 350ml. Torra encorpada, café forte e constante, sem perder a qualidade. 100% arábica.',
+    descricao_en: 'Your everyday coffee with the cup to take it along: Traditional Coffee 250g ground + Café Só Grãos 350ml thermal cup. Full-bodied roast for a strong, consistent coffee without sacrificing quality. 100% arabica.',
+    descricao_es: 'El café del día a día ya con el vaso para llevarlo contigo: Café Tradicional 250g molido + vaso térmico Café Só Grãos de 350ml. Tueste con cuerpo, para un café fuerte y constante, sin perder calidad. 100% arábica.',
+    descricao_fr: 'Le café du quotidien avec la tasse pour l\'emporter : Café Traditionnel 250g moulu + tasse thermique Café Só Grãos de 350ml. Torréfaction corsée, pour un café fort et constant, sans perdre en qualité. 100% arabica.',
+    descricao_zh: '日常咖啡搭配随行杯：传统咖啡250g研磨咖啡 + Café Só Grãos 350ml保温杯。浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡。',
+    preco: 28.99,
+    precoOriginal: 39.00,
+    categorias: ['dia-a-dia', 'visita'],
+    badge: 'Kit',
+    pesoGramas: 400,
+    img: 'assets/produto-tradicional-250-copo.jpg',
+    imgs: ['assets/produto-tradicional-250-copo.jpg']
+  },
+  {
     id: 'cafe-tradicional-500-moido',
     nome: 'Café Tradicional 500g',
     nome_en: 'Traditional Coffee 500g',
