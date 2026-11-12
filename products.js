@@ -3,15 +3,14 @@
 // real de cada item em /api/create-preference (nunca confiamos no preço
 // que o cliente manda). Campos "_en"/"_es" são só pra exibição (o site
 // troca de idioma no navegador) — preço, peso e id continuam únicos.
-// Filtros da vitrine são por uso (o que a pessoa vai fazer com o café), não
-// por tipo de produto -- "categorias" em cada item abaixo pode ter mais de
-// um valor (ex.: um café serve tanto pra receber visita quanto pra cafeteira
-// italiana).
+// Filtros da vitrine são por tipo de produto (igual referência da Baggio:
+// Café, Kits, Acessórios) -- "categorias" em cada item abaixo tem só 1
+// valor agora, cada produto pertence a um tipo só.
 const CATEGORIES = [
-  { id: 'dia-a-dia', nome: 'Café do dia a dia', nome_en: 'Everyday Coffee', nome_es: 'Café del día a día', nome_fr: 'Café du quotidien', nome_zh: '日常咖啡' },
-  { id: 'visita', nome: 'Para receber visita', nome_en: 'For Having Guests Over', nome_es: 'Para recibir visitas', nome_fr: 'Pour recevoir des invités', nome_zh: '待客咖啡' },
+  { id: 'cafes', nome: 'Cafés', nome_en: 'Coffees', nome_es: 'Cafés', nome_fr: 'Cafés', nome_zh: '咖啡' },
+  { id: 'kits', nome: 'Kits', nome_en: 'Kits', nome_es: 'Kits', nome_fr: 'Kits', nome_zh: '套装' },
   { id: 'sache', nome: 'Sachê individual', nome_en: 'Individual Sachet', nome_es: 'Sobre individual', nome_fr: 'Sachet individuel', nome_zh: '独立包装' },
-  { id: 'combo', nome: 'Combos', nome_en: 'Combos', nome_es: 'Combos', nome_fr: 'Combos', nome_zh: '组合套装' }
+  { id: 'acessorios', nome: 'Acessórios', nome_en: 'Accessories', nome_es: 'Accesorios', nome_fr: 'Accessoires', nome_zh: '配件' }
 ];
 
 const PRODUCTS = [
@@ -31,7 +30,7 @@ const PRODUCTS = [
     descricao_zh: '您日常生活的伙伴，小巧装便于尝试或携带：浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡，研磨咖啡。250g。',
     preco: 18.99,
     precoOriginal: 22.00,
-    categorias: ['dia-a-dia'],
+    categorias: ['cafes'],
     pesoGramas: 280,
     img: 'assets/produto-tradicional-250.jpg',
     imgs: ['assets/produto-tradicional-250.jpg']
@@ -50,7 +49,7 @@ const PRODUCTS = [
     descricao_zh: '日常咖啡搭配随行杯：传统咖啡250g研磨咖啡 + Café Só Grãos 350ml保温杯。浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡。',
     preco: 28.99,
     precoOriginal: 39.00,
-    categorias: ['dia-a-dia'],
+    categorias: ['kits'],
     badge: 'Kit',
     pesoGramas: 400,
     img: 'assets/produto-tradicional-250-copo.jpg',
@@ -70,7 +69,7 @@ const PRODUCTS = [
     descricao_zh: 'Café Só Grãos保温杯，350ml，让您随时随地享用保温咖啡。单独销售，1个。',
     preco: 25.99,
     precoOriginal: 34.99,
-    categorias: [],
+    categorias: ['acessorios'],
     pesoGramas: 30,
     img: 'assets/produto-copo-350.jpg',
     imgs: ['assets/produto-copo-350.jpg']
@@ -89,7 +88,7 @@ const PRODUCTS = [
     descricao_zh: '您日常生活的伙伴：浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡，研磨咖啡。500g。',
     preco: 32.01,
     precoOriginal: 33.00,
-    categorias: ['dia-a-dia'],
+    categorias: ['cafes'],
     pesoGramas: 550,
     img: 'assets/produto-tradicional-500.jpg',
     imgs: ['assets/produto-tradicional-500.jpg']
@@ -108,7 +107,7 @@ const PRODUCTS = [
     descricao_zh: '您日常生活的伙伴：浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡，研磨咖啡。1kg。',
     preco: 64.00,
     precoOriginal: 66.00,
-    categorias: ['dia-a-dia'],
+    categorias: ['cafes'],
     pesoGramas: 1050,
     img: 'assets/produto-tradicional-500.jpg',
     imgs: ['assets/produto-tradicional-500.jpg']
@@ -127,7 +126,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味。酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，咖啡豆。500g。',
     preco: 55.00,
     precoOriginal: 60.00,
-    categorias: ['visita'],
+    categorias: ['cafes'],
     badge: '84 SCA',
     pesoGramas: 550,
     img: 'assets/produto-especial-500.jpg',
@@ -147,7 +146,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味。酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，咖啡豆。1kg。',
     preco: 110.00,
     precoOriginal: 120.00,
-    categorias: ['visita'],
+    categorias: ['cafes'],
     badge: '84 SCA',
     pesoGramas: 1050,
     img: 'assets/produto-especial-500.jpg',
@@ -167,7 +166,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味。酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，研磨咖啡。500g。',
     preco: 55.00,
     precoOriginal: 60.00,
-    categorias: ['visita'],
+    categorias: ['cafes'],
     badge: '84 SCA',
     pesoGramas: 550,
     img: 'assets/produto-especial-500.jpg',
@@ -187,7 +186,7 @@ const PRODUCTS = [
     descricao_zh: '我们最精致的咖啡：SCA评分体系84分，经Coopercitrus合作社评定。香气带有焦糖、巧克力与坚果的气息，口感呈现牛奶巧克力、焦糖与坚果风味。酸度中低，醇厚度中高，余韵绵长浓郁。100%阿拉比卡，研磨咖啡。1kg。',
     preco: 110.00,
     precoOriginal: 120.00,
-    categorias: ['visita'],
+    categorias: ['cafes'],
     badge: '84 SCA',
     pesoGramas: 1050,
     img: 'assets/produto-especial-500.jpg',
@@ -225,7 +224,7 @@ const PRODUCTS = [
     descricao_fr: 'Juste la boîte organisatrice de notre Drip Coffee, vendue vide, sans les sachets de café à l\'intérieur. Pour qui en a déjà une et veut la remplacer, ou en a simplement besoin pour du rangement.',
     descricao_zh: '仅为我们Drip Coffee的收纳盒，空盒出售，不含咖啡包。适合已有产品想补充盒子，或只是需要用它来收纳物品的您。',
     preco: 20.00,
-    categorias: [],
+    categorias: ['acessorios'],
     pesoGramas: 50,
     img: 'assets/produto-drip-coffee.jpg',
     imgs: ['assets/produto-drip-coffee.jpg']
@@ -264,7 +263,7 @@ const PRODUCTS = [
     descricao_zh: '认识我们两条产品线的理想方式：1袋特级咖啡500g咖啡豆（SCA 84分）+ 1袋传统咖啡500g研磨咖啡 + 装有10包Drip Coffee的木盒。',
     preco: 145.00,
     precoOriginal: 200.00,
-    categorias: ['combo', 'visita'],
+    categorias: ['kits'],
     badge: 'Combo',
     pesoGramas: 1200,
     img: 'assets/produto-combo-experiencia.jpg',
@@ -284,7 +283,7 @@ const PRODUCTS = [
     descricao_zh: '献给已经喜爱我们日常咖啡的您：2袋传统咖啡500g研磨咖啡 + 装有10包Drip Coffee的木盒。',
     preco: 124.99,
     precoOriginal: 150.00,
-    categorias: ['combo', 'dia-a-dia'],
+    categorias: ['kits'],
     badge: 'Combo',
     pesoGramas: 1200,
     img: 'assets/produto-combo-classicos.jpg',
@@ -304,7 +303,7 @@ const PRODUCTS = [
     descricao_zh: '献给想要加倍感官体验的您：2袋特级咖啡500g咖啡豆（SCA 84分） + 装有10包Drip Coffee的木盒。',
     preco: 164.99,
     precoOriginal: 220.00,
-    categorias: ['combo', 'visita'],
+    categorias: ['kits'],
     badge: 'Combo',
     pesoGramas: 1200,
     img: 'assets/produto-combo-especiais.jpg',
@@ -324,7 +323,7 @@ const PRODUCTS = [
     descricao_zh: '最全面的套装：2袋传统咖啡500g研磨咖啡 + 1袋特级咖啡500g咖啡豆（SCA 84分）。',
     preco: 112.99,
     precoOriginal: 140.00,
-    categorias: ['combo', 'dia-a-dia'],
+    categorias: ['kits'],
     badge: 'Combo',
     pesoGramas: 1500,
     img: 'assets/produto-combo-trio.jpg',
