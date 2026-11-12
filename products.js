@@ -58,7 +58,6 @@ const PRODUCTS = [
     imgs: ['assets/produto-tradicional-250-copo.jpg']
   },
   {
-    // pesoGramas estimado (copo térmico vazio) — ajustar quando pesar de verdade.
     id: 'copo-termico-350',
     nome: 'Copo Térmico Café Só Grãos 350ml',
     nome_en: 'Café Só Grãos 350ml Thermal Cup',
@@ -73,7 +72,7 @@ const PRODUCTS = [
     preco: 25.99,
     precoOriginal: 34.99,
     categorias: ['visita'],
-    pesoGramas: 120,
+    pesoGramas: 30,
     img: 'assets/produto-copo-350.jpg',
     imgs: ['assets/produto-copo-350.jpg']
   },
