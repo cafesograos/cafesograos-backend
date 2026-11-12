@@ -58,6 +58,26 @@ const PRODUCTS = [
     imgs: ['assets/produto-tradicional-250-copo.jpg']
   },
   {
+    // pesoGramas estimado (copo térmico vazio) — ajustar quando pesar de verdade.
+    id: 'copo-termico-350',
+    nome: 'Copo Térmico Café Só Grãos 350ml',
+    nome_en: 'Café Só Grãos 350ml Thermal Cup',
+    nome_es: 'Vaso Térmico Café Só Grãos 350ml',
+    nome_fr: 'Tasse Thermique Café Só Grãos 350ml',
+    nome_zh: 'Café Só Grãos 350ml保温杯',
+    descricao: 'Copo térmico Café Só Grãos, 350ml — perfeito pra levar seu café pra qualquer lugar sem perder a temperatura. Vendido avulso, 1 unidade.',
+    descricao_en: 'Café Só Grãos thermal cup, 350ml — perfect for taking your coffee anywhere without losing the temperature. Sold individually, 1 unit.',
+    descricao_es: 'Vaso térmico Café Só Grãos, 350ml — perfecto para llevar tu café a cualquier lugar sin perder la temperatura. Vendido por separado, 1 unidad.',
+    descricao_fr: 'Tasse thermique Café Só Grãos, 350ml — parfaite pour emporter votre café partout sans perdre la température. Vendue à l\'unité.',
+    descricao_zh: 'Café Só Grãos保温杯，350ml，让您随时随地享用保温咖啡。单独销售，1个。',
+    preco: 25.99,
+    precoOriginal: 34.99,
+    categorias: ['visita'],
+    pesoGramas: 120,
+    img: 'assets/produto-copo-350.jpg',
+    imgs: ['assets/produto-copo-350.jpg']
+  },
+  {
     id: 'cafe-tradicional-500-moido',
     nome: 'Café Tradicional 500g',
     nome_en: 'Traditional Coffee 500g',
