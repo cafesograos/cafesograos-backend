@@ -17,6 +17,27 @@ const CATEGORIES = [
 
 const PRODUCTS = [
   {
+    // pesoGramas estimado (proporcional ao 500g, que é 550g com embalagem)
+    // — ajustar quando o dono pesar o pacote de verdade.
+    id: 'cafe-tradicional-250-moido',
+    nome: 'Café Tradicional 250g',
+    nome_en: 'Traditional Coffee 250g',
+    nome_es: 'Café Tradicional 250g',
+    nome_fr: 'Café Traditionnel 250g',
+    nome_zh: '传统咖啡 250g',
+    descricao: 'O parceiro do seu dia a dia, em versão compacta pra experimentar ou levar no dia a dia: torra encorpada, para um café forte e constante, sem perder a qualidade. 100% arábica, moído. 250g.',
+    descricao_en: 'Your everyday companion, in a compact size to try out or carry around: a full-bodied roast for a strong, consistent coffee without sacrificing quality. 100% arabica, ground. 250g.',
+    descricao_es: 'El compañero de tu día a día, en versión compacta para probar o llevar contigo: tueste con cuerpo, para un café fuerte y constante, sin perder calidad. 100% arábica, molido. 250g.',
+    descricao_fr: 'Le compagnon de votre quotidien, en format compact à essayer ou à emporter : torréfaction corsée, pour un café fort et constant, sans perdre en qualité. 100% arabica, moulu. 250g.',
+    descricao_zh: '您日常生活的伙伴，小巧装便于尝试或携带：浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡，研磨咖啡。250g。',
+    preco: 18.99,
+    precoOriginal: 22.00,
+    categorias: ['dia-a-dia'],
+    pesoGramas: 280,
+    img: 'assets/produto-tradicional-250.jpg',
+    imgs: ['assets/produto-tradicional-250.jpg']
+  },
+  {
     id: 'cafe-tradicional-500-moido',
     nome: 'Café Tradicional 500g',
     nome_en: 'Traditional Coffee 500g',
