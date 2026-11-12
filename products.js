@@ -50,7 +50,7 @@ const PRODUCTS = [
     descricao_zh: '日常咖啡搭配随行杯：传统咖啡250g研磨咖啡 + Café Só Grãos 350ml保温杯。浓郁醇厚的烘焙，带来强劲稳定的口感，品质毫不妥协。100%阿拉比卡。',
     preco: 28.99,
     precoOriginal: 39.00,
-    categorias: ['dia-a-dia', 'visita'],
+    categorias: ['dia-a-dia'],
     badge: 'Kit',
     pesoGramas: 400,
     img: 'assets/produto-tradicional-250-copo.jpg',
@@ -70,7 +70,7 @@ const PRODUCTS = [
     descricao_zh: 'Café Só Grãos保温杯，350ml，让您随时随地享用保温咖啡。单独销售，1个。',
     preco: 25.99,
     precoOriginal: 34.99,
-    categorias: ['visita'],
+    categorias: [],
     pesoGramas: 30,
     img: 'assets/produto-copo-350.jpg',
     imgs: ['assets/produto-copo-350.jpg']
