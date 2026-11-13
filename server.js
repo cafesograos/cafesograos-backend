@@ -491,9 +491,21 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       if (existentes.length === 0) {
         freeGift = true;
       } else {
+        // O "NOT EXISTS" evita o cupom ser aplicado em dois pedidos ao mesmo
+        // tempo (ex.: duas abas de checkout abertas antes de pagar qualquer
+        // uma): um cupom já travado por outro pedido ainda não finalizado
+        // (pending/approved) não aparece de novo aqui. O índice único em
+        // orders(discount_id) (ver db.js) é quem garante isso de verdade
+        // mesmo numa corrida bem no limite — essa consulta só evita o caso
+        // comum, sem precisar lidar com erro de corrida na maioria das vezes.
         const { rows: cupons } = await pool.query(
-          `SELECT * FROM discounts WHERE LOWER(TRIM(customer_email)) = LOWER(TRIM($1))
-           AND used_at IS NULL AND expires_at > now() ORDER BY created_at DESC LIMIT 1`,
+          `SELECT d.* FROM discounts d
+           WHERE LOWER(TRIM(d.customer_email)) = LOWER(TRIM($1))
+             AND d.used_at IS NULL AND d.expires_at > now()
+             AND NOT EXISTS (
+               SELECT 1 FROM orders o WHERE o.discount_id = d.id AND o.status IN ('pending', 'approved')
+             )
+           ORDER BY d.created_at DESC LIMIT 1`,
           [cliente.email]
         );
         desconto = cupons[0] || null;

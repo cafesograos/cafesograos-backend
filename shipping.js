@@ -66,6 +66,8 @@ function limparCep(cep) {
   return String(cep || '').replace(/\D/g, '');
 }
 
+let tokenRefreshPromise = null;
+
 async function getValidToken() {
   if (!pool) throw new Error('Banco de dados não configurado.');
   const { rows } = await pool.query('SELECT * FROM melhorenvio_tokens ORDER BY id DESC LIMIT 1');
@@ -77,7 +79,20 @@ async function getValidToken() {
     return row.access_token;
   }
 
-  // Token expirado (ou perto disso): renova com o refresh_token.
+  // Token expirado (ou perto disso). O refresh_token só vale uma vez, então
+  // se duas cotações de frete caírem aqui ao mesmo tempo (ex.: dois clientes
+  // calculando frete juntos), a segunda chamada reaproveita a renovação já em
+  // andamento em vez de disparar outra com o mesmo refresh_token (que falharia
+  // ou corromperia o token salvo no banco).
+  if (!tokenRefreshPromise) {
+    tokenRefreshPromise = renovarToken(row).finally(() => {
+      tokenRefreshPromise = null;
+    });
+  }
+  return tokenRefreshPromise;
+}
+
+async function renovarToken(row) {
   const res = await fetch(`${ME_BASE}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

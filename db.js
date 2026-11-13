@@ -246,6 +246,14 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews (status);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_phone_popup ON leads (phone) WHERE cadastro_popup = true;`);
 
+  // Trava de verdade contra o mesmo cupom sendo aplicado em dois pedidos ao
+  // mesmo tempo (ex.: cliente abre duas abas de checkout antes de pagar
+  // qualquer uma): só pode existir 1 pedido não-finalizado (pending/approved)
+  // usando um dado discount_id. A consulta em server.js já evita isso na
+  // prática, mas esse índice é a garantia que não depende de nenhuma lógica
+  // de aplicação — nem numa corrida bem no limite.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_discount_reservado ON orders (discount_id) WHERE discount_id IS NOT NULL AND status IN ('pending', 'approved');`);
+
   console.log('Banco de dados pronto (tabelas orders, reviews, discounts, leads).');
 }
 

@@ -188,6 +188,24 @@ async function processarAudioRecebido(telefone, mediaId) {
   }
 }
 
+// A Meta garante entrega "pelo menos uma vez" — o mesmo evento pode chegar
+// duplicado nesse webhook (reenvio por timeout, retry de rede etc.). Sem
+// filtrar pelo id da mensagem, uma reentrega faria a IA responder de novo
+// pra algo que o cliente já recebeu resposta. Cache em memória (não precisa
+// sobreviver a restart: reentrega da Meta acontece em minutos, não em dias).
+const mensagensProcessadas = new Map(); // msg.id -> timestamp
+const JANELA_DEDUP_MS = 10 * 60 * 1000;
+
+function jaProcessada(msgId) {
+  const agora = Date.now();
+  for (const [id, ts] of mensagensProcessadas) {
+    if (agora - ts > JANELA_DEDUP_MS) mensagensProcessadas.delete(id);
+  }
+  if (mensagensProcessadas.has(msgId)) return true;
+  mensagensProcessadas.set(msgId, agora);
+  return false;
+}
+
 // Chamado pelo POST /webhook-whatsapp (ver server.js) a cada evento que a
 // Meta entrega pro número configurado. Processa mensagem de texto e de
 // áudio recebida de cliente (ignora reação, imagem, documento etc. por
@@ -212,6 +230,10 @@ function processarWebhookRecebido(body) {
       for (const msg of valor?.messages || []) {
         const telefone = msg.from;
         if (!telefone) continue;
+        if (msg.id && jaProcessada(msg.id)) {
+          console.log(`[whatsapp-oficial] mensagem ${msg.id} já processada (reentrega da Meta) — ignorada.`);
+          continue;
+        }
         if (msg.type === 'text' && msg.text?.body) {
           if (!handlerMensagem) continue;
           enfileirarMensagemRecebida(telefone, msg.text.body, telefone);
