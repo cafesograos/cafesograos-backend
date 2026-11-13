@@ -197,6 +197,22 @@ async function initDb() {
     );
   `);
 
+  // Contatos conhecidos (ex: cliente empresa recorrente, como o Helder da
+  // Panobianco) — cadastrado uma vez pelo dono em /admin/whatsapp/contatos,
+  // pra IA já reconhecer quem é na próxima conversa (nome, empresa,
+  // observação) em vez de tratar como desconhecido toda vez. Telefone é
+  // chave única; busca ignora formatação (só os últimos 11 dígitos batem).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS clientes_conhecidos (
+      id SERIAL PRIMARY KEY,
+      telefone TEXT NOT NULL UNIQUE,
+      nome_contato TEXT,
+      empresa TEXT,
+      observacao TEXT,
+      criado_em TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
   // Textos das mensagens automáticas do WhatsApp (boas-vindas, confirmação
   // de compra), editáveis pelo dono direto no painel admin — sem precisar
   // mexer em código pra ajustar uma palavra. Placeholders tipo {nome} são

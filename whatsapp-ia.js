@@ -66,8 +66,13 @@ function montarCatalogoTexto(PRODUCTS) {
   return PRODUCTS.map((p) => `- id: ${p.id} | ${p.nome} | R$ ${p.preco.toFixed(2).replace('.', ',')}${p.precoOriginal ? ` (de R$ ${p.precoOriginal.toFixed(2).replace('.', ',')})` : ''} | ${p.descricao}`).join('\n');
 }
 
-function montarSystemPrompt(PRODUCTS) {
+function montarSystemPrompt(PRODUCTS, clienteConhecido) {
+  const contextoCliente = clienteConhecido ? `
+
+CONTATO CONHECIDO: esse telefone já está cadastrado como ${clienteConhecido.nome_contato ? clienteConhecido.nome_contato : 'contato'}${clienteConhecido.empresa ? `, da empresa ${clienteConhecido.empresa}` : ''}.${clienteConhecido.observacao ? ` Observação salva sobre ele: "${clienteConhecido.observacao}".` : ''} Trate com naturalidade quem ele é desde a primeira mensagem (ex: já pode chamar pelo nome, sem perguntar de novo quem é ou qual empresa) — mas não invente nada além do que está escrito aqui.` : '';
+
   return `Você é o Alberto, dono da Café Só Grãos — uma nova marca de cafés 100% arábica que busca a qualidade e a perfeição em cada lote (torra semanal, direto do produtor, sediada em Araraquara/SP). Está conversando por WhatsApp com um cliente.
+${contextoCliente}
 
 APRESENTAÇÃO: se essa for a primeira mensagem da conversa (sem histórico anterior), se apresente antes de responder — diga que é o Alberto, da Café Só Grãos, e pergunte como pode ajudar. Nas mensagens seguintes da mesma conversa não precisa se apresentar de novo.
 
@@ -98,7 +103,7 @@ FECHAMENTO: pra gerar o link de pagamento você precisa, antes de chamar a ferra
 
 PAGAMENTO: o link de pagamento (ferramenta criar_pedido) aceita cartão de crédito, débito e Pix. Se perguntarem sobre taxa: crédito à vista não tem taxa nenhuma pro cliente; só parcelado tem uma taxinha da maquininha. Se for compra feita pessoalmente (não pelo link), também aceita dinheiro. Empresa (CNPJ) pode pedir boleto — mas isso não é pelo link automático: explique que é emitido direto pela CNPJ, depois de uma análise de crédito, e chame a ferramenta escalar_atendimento pra isso ser combinado com o diretor (não tente gerar boleto nem aprovar crédito sozinho).
 
-TOM: respostas curtas (é WhatsApp, não e-mail), caloroso e acolhedor, direto, em português do Brasil, sem erro de ortografia ou gramática (revise a frase antes de responder — concordância, conjugação de verbo completa como "experimentar" não "experimenta"; nunca invente verbo que não existe, ex: "torrefazer" não existe, o certo é "torrar"/"torramos"). Quero que o cliente sinta que tá falando com uma pessoa de verdade, não com uma IA nem com mensagem pronta — então reconheça o que o cliente falou/perguntou antes de responder, use um tom próximo, nunca seco ou só "informativo". Emoji: só quando realmente encaixa naturalmente na frase (não force) — a maioria das respostas não precisa de nenhum, e nunca mais de 1 por mensagem. Nunca use travessão (—) pra separar ideia na frase — troque por vírgula. Sempre termine a mensagem com uma pergunta, pra manter a conversa fluindo — nunca encerre só informando algo sem perguntar nada de volta.
+TOM: respostas curtas (é WhatsApp, não e-mail), caloroso e acolhedor, direto, em português do Brasil, sem erro de ortografia ou gramática (revise a frase antes de responder — concordância, conjugação de verbo completa como "experimentar" não "experimenta"; nunca invente verbo que não existe, ex: "torrefazer" não existe, o certo é "torrar"/"torramos"). Quero que o cliente sinta que tá falando com uma pessoa de verdade, não com uma IA nem com mensagem pronta — então reconheça o que o cliente falou/perguntou antes de responder, use um tom próximo, nunca seco ou só "informativo". Emoji: só quando realmente encaixa naturalmente na frase (não force) — a maioria das respostas não precisa de nenhum, e nunca mais de 1 por mensagem. Nunca use travessão (—) em nenhum lugar da mensagem, nem em frase corrida nem em lista/bullet point — troque sempre por vírgula ou dois pontos. Errado: "Combo Clássicos (R$124,99) — pra quem curte o dia a dia". Certo: "Combo Clássicos (R$124,99): pra quem curte o dia a dia". Sempre termine a mensagem com uma pergunta, pra manter a conversa fluindo — nunca encerre só informando algo sem perguntar nada de volta.
 
 COMPARAÇÃO INTERNA: se o cliente perguntar a diferença entre o Tradicional e o Especial, nunca fale como se o Tradicional fosse inferior/menos bom ("mais simples", "menos sofisticado") — cada um tem seu propósito (Tradicional: forte e constante pro dia a dia; Especial: perfil mais complexo e refinado, pra quem quer explorar sabor). Apresente como escolha de perfil/gosto, nunca como hierarquia de qualidade.
 
@@ -158,12 +163,13 @@ async function salvarRespostaAssistente(pool, telefone, texto) {
 }
 
 async function responderMensagem(telefone, textoCliente, deps) {
-  const { pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento } = deps;
+  const { pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, buscarClienteConhecido } = deps;
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
 
   await salvarMensagem(pool, telefone, 'user', textoCliente);
   const messages = await carregarHistorico(pool, telefone);
-  const system = montarSystemPrompt(PRODUCTS);
+  const clienteConhecido = buscarClienteConhecido ? await buscarClienteConhecido(telefone) : null;
+  const system = montarSystemPrompt(PRODUCTS, clienteConhecido);
 
   let resposta;
   let rodadas = 0;
@@ -208,9 +214,12 @@ async function responderMensagem(telefone, textoCliente, deps) {
 
   // Às vezes o modelo chama a ferramenta e não escreve nenhum texto de volta
   // — sem essa rede de segurança, o cliente ficaria sem resposta nenhuma
-  // mesmo depois de ter combinado uma retirada de verdade com o diretor.
+  // mesmo depois de escalar pro diretor. Texto genérico de propósito: essa
+  // mesma escalação serve pra retirada, reclamação, boleto, qualquer coisa
+  // — um texto específico de "retirada" já saiu errado uma vez pra um
+  // cliente que tinha escalado por outro motivo (boleto).
   const textoModelo = resposta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-  const textoResposta = textoModelo || (escalouNessaRodada ? 'Combinado! Já avisei aqui que você vem buscar. Qualquer coisa me chama.' : textoModelo);
+  const textoResposta = textoModelo || (escalouNessaRodada ? 'Combinado! Já passei isso pro meu diretor, ele deve te retornar em breve.' : textoModelo);
   const esperaMs = await calcularEsperaMs(pool, telefone, textoResposta);
   return { texto: textoResposta, esperaMs };
 }

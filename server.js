@@ -2832,6 +2832,72 @@ app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) 
   res.send(adminLayout({ title: 'Mensagens enviadas', ativo: 'whatsapp', body }));
 }));
 
+// Cadastro de contatos conhecidos (ex: cliente empresa recorrente, como o
+// Helder da Panobianco) — a IA passa a reconhecer quem é desde a primeira
+// mensagem da conversa (ver buscarClienteConhecido + CONTATO CONHECIDO no
+// prompt, em whatsapp-ia.js), em vez de tratar como desconhecido toda vez.
+app.get('/admin/whatsapp/contatos', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const { rows } = await pool.query(`SELECT * FROM clientes_conhecidos ORDER BY criado_em DESC`);
+
+  const body = `
+    <a href="/admin/whatsapp" style="display:inline-block;margin-bottom:14px;">← WhatsApp</a>
+    <h1>Contatos conhecidos</h1>
+    <p class="pedido-detalhe" style="margin-bottom:14px;">Cadastre aqui clientes que você já conhece (ex: empresa que compra recorrente) — a IA passa a reconhecer o telefone e já sabe quem é, sem precisar perguntar de novo a cada conversa.</p>
+
+    <form method="POST" action="/admin/whatsapp/contatos" class="pedido-card" style="max-width:480px;display:block;margin-bottom:24px;">
+      <label style="display:block;font-weight:700;margin-bottom:6px;">Telefone (com DDD)</label>
+      <input type="text" name="telefone" required placeholder="16996325215" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:12px;">
+      <label style="display:block;font-weight:700;margin-bottom:6px;">Nome do contato</label>
+      <input type="text" name="nome_contato" placeholder="Helder" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:12px;">
+      <label style="display:block;font-weight:700;margin-bottom:6px;">Empresa</label>
+      <input type="text" name="empresa" placeholder="Panobianco Centro" style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:12px;">
+      <label style="display:block;font-weight:700;margin-bottom:6px;">Observação (o que a IA deve saber sobre ele)</label>
+      <textarea name="observacao" rows="3" placeholder="Cliente recorrente, compra café pra revenda, paga por boleto mensal." style="width:100%;font-family:inherit;padding:10px;border-radius:8px;border:1px solid #ddd;margin-bottom:16px;"></textarea>
+      <button type="submit" class="btn-mini btn-mini-primary">Salvar contato</button>
+    </form>
+
+    <table class="mini">
+      <tr><th>Telefone</th><th>Nome</th><th>Empresa</th><th>Observação</th><th></th></tr>
+      ${rows.length === 0 ? '<tr><td colspan="5">Nenhum contato cadastrado ainda.</td></tr>' : rows.map((r) => `
+        <tr>
+          <td><a href="https://wa.me/${escapeHtml(String(r.telefone).replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">${escapeHtml(r.telefone)}</a></td>
+          <td>${escapeHtml(r.nome_contato || '—')}</td>
+          <td>${escapeHtml(r.empresa || '—')}</td>
+          <td>${escapeHtml(r.observacao || '—')}</td>
+          <td>
+            <form method="POST" action="/admin/whatsapp/contatos/${r.id}/excluir" onsubmit="return confirm('Apagar esse contato?');">
+              <button type="submit" class="btn-mini">Excluir</button>
+            </form>
+          </td>
+        </tr>
+      `).join('')}
+    </table>
+  `;
+  res.send(adminLayout({ title: 'Contatos conhecidos', ativo: 'whatsapp', body }));
+}));
+
+app.post('/admin/whatsapp/contatos', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const telefone = telefoneParaE164(req.body?.telefone);
+  if (!telefone) return res.status(400).send('Telefone inválido.');
+  await pool.query(
+    `INSERT INTO clientes_conhecidos (telefone, nome_contato, empresa, observacao)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (telefone) DO UPDATE SET nome_contato = EXCLUDED.nome_contato, empresa = EXCLUDED.empresa, observacao = EXCLUDED.observacao`,
+    [telefone, req.body?.nome_contato || null, req.body?.empresa || null, req.body?.observacao || null]
+  );
+  logAdminAcao(req, 'contato_conhecido_salvo', telefone);
+  res.redirect('/admin/whatsapp/contatos');
+}));
+
+app.post('/admin/whatsapp/contatos/:id/excluir', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  await pool.query('DELETE FROM clientes_conhecidos WHERE id = $1', [req.params.id]);
+  logAdminAcao(req, 'contato_conhecido_excluido', req.params.id);
+  res.redirect('/admin/whatsapp/contatos');
+}));
+
 // Lista de conversas da IA no WhatsApp, mais recente primeiro — pra o dono
 // fiscalizar o que está sendo respondido sem precisar abrir o próprio
 // WhatsApp (que nem recebe essas mensagens, já que quem responde é a API
@@ -3214,6 +3280,21 @@ async function escalarAtendimento(telefoneCliente, motivo) {
 // Ferramentas do assistente administrativo (ver responderConsultaAdmin em
 // whatsapp-ia.js) — só leitura, só usadas quando o próprio dono pergunta
 // pelo WhatsApp dele.
+// Busca se esse telefone já é um contato conhecido (cadastrado em
+// /admin/whatsapp/contatos) — compara só os últimos 11 dígitos, mesmo
+// critério usado pro resto do sistema (telefone pode vir com ou sem "55"
+// na frente dependendo do canal).
+async function buscarClienteConhecido(telefone) {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `SELECT nome_contato, empresa, observacao FROM clientes_conhecidos
+     WHERE RIGHT(regexp_replace(telefone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace($1, '\\D', '', 'g'), 11)
+     LIMIT 1`,
+    [telefone || '']
+  );
+  return rows[0] || null;
+}
+
 async function vendasWhatsappHoje() {
   if (!pool) return { erro: 'Banco de dados não configurado.' };
   const { rows } = await pool.query(`
@@ -3300,7 +3381,7 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   console.log(`[whatsapp-ia] gerando resposta pra ${telefone}...`);
   try {
     const { texto: resposta, esperaMs } = await responderMensagem(telefone, texto, {
-      pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento
+      pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, buscarClienteConhecido
     });
     console.log(`[whatsapp-ia] resposta gerada pra ${telefone} (espera ${Math.round(esperaMs / 1000)}s): "${(resposta || '').slice(0, 80)}"`);
     if (resposta) {
