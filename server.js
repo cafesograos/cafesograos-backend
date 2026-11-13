@@ -3334,6 +3334,38 @@ async function resumoAtendimentosHoje() {
   };
 }
 
+// Diferente de resumoAtendimentosHoje (só quem CHAMOU a loja), isso é quem a
+// LOJA chamou primeiro hoje, sem o cliente ter pedido — lembrete de recompra
+// (30 dias após compra) e reengajamento (lead que esfriou). Existe porque o
+// dono reparou que só perguntando "como estão os atendimentos" ele só via
+// quem contatou a loja, nunca quem a loja contatou.
+async function contatosProativosHoje() {
+  if (!pool) return { erro: 'Banco de dados não configurado.' };
+  const [recompra, reengajamento] = await Promise.all([
+    pool.query(`
+      SELECT customer_name AS nome, customer_phone AS telefone, whatsapp_recompra_enviado_em AS enviado_em
+      FROM orders
+      WHERE whatsapp_recompra_enviado_em >= date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'
+      ORDER BY whatsapp_recompra_enviado_em ASC
+    `),
+    pool.query(`
+      SELECT name AS nome, phone AS telefone, whatsapp_reengajamento_enviado_em AS enviado_em
+      FROM leads
+      WHERE whatsapp_reengajamento_enviado_em >= date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'
+      ORDER BY whatsapp_reengajamento_enviado_em ASC
+    `)
+  ]);
+  const fmtHora = (d) => new Date(d).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+  const listaRecompra = recompra.rows.map((r) => ({ nome: r.nome, telefone: r.telefone, hora: fmtHora(r.enviado_em) }));
+  const listaReengajamento = reengajamento.rows.map((r) => ({ nome: r.nome, telefone: r.telefone, hora: fmtHora(r.enviado_em) }));
+  const telefonesUnicos = new Set([...listaRecompra, ...listaReengajamento].map((r) => r.telefone));
+  return {
+    total_pessoas_chamadas_pela_loja: telefonesUnicos.size,
+    lembrete_recompra: { total: listaRecompra.length, pessoas: listaRecompra },
+    reengajamento: { total: listaReengajamento.length, pessoas: listaReengajamento }
+  };
+}
+
 // Liga a IA só pra quem manda mensagem primeiro (reativo) — nunca inicia
 // conversa sozinha. Sem ANTHROPIC_API_KEY, só ignora e fica em silêncio (as
 // mensagens automáticas de boas-vindas/confirmação continuam funcionando).
@@ -3359,6 +3391,7 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
       const resposta = await responderDono(texto, {
         vendasWhatsappHoje,
         resumoAtendimentosHoje,
+        contatosProativosHoje,
         escalacaoPendente,
         responderClientePendente: async (textoParaCliente) => {
           await enviarMensagemWhatsApp(escalacaoPendente.telefone_cliente, textoParaCliente);

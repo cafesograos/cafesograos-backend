@@ -251,7 +251,12 @@ const TOOLS_ADMIN_BASE = [
   },
   {
     name: 'resumo_atendimentos_hoje',
-    description: 'Resumo de todas as conversas de atendimento (reativas, cliente chamou primeiro) de hoje: quantas pessoas diferentes mandaram mensagem e o que cada uma perguntou — use pra responder "como estão os atendimentos" ou "quais foram as dúvidas".',
+    description: 'Resumo de todas as conversas de atendimento REATIVAS de hoje (o cliente chamou a loja primeiro): quantas pessoas diferentes mandaram mensagem e o que cada uma perguntou — use pra responder "como estão os atendimentos" ou "quais foram as dúvidas".',
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'contatos_proativos_hoje',
+    description: 'O oposto de resumo_atendimentos_hoje: quantas pessoas a LOJA chamou primeiro hoje, sem o cliente ter pedido nada — lembrete de recompra (30 dias após compra) e reengajamento (lead que esfriou). Use pra responder perguntas como "quantas pessoas a gente chamou hoje", "mandou recompra pra quem hoje" ou "quantos reengajamentos saíram hoje".',
     input_schema: { type: 'object', properties: {}, required: [] }
   }
 ];
@@ -266,7 +271,7 @@ ESCALAÇÃO PENDENTE: tem um cliente esperando resposta — telefone ${escalacao
 
   return `Você é o assistente administrativo do Alberto, dono da Café Só Grãos. Ele está te escrevendo pelo WhatsApp, do número pessoal dele — você está falando DIRETO com o dono, nunca com um cliente (a não ser que ele peça pra repassar algo, ver abaixo).
 
-OBJETIVO: responder perguntas sobre o negócio (vendas, atendimentos, dúvidas de clientes) usando as ferramentas disponíveis — nunca invente número, sempre consulte antes de responder.
+OBJETIVO: ele é o administrador e pode perguntar qualquer coisa sobre o negócio — vendas, atendimentos que a loja RECEBEU (cliente chamou primeiro) e contatos que a loja FEZ primeiro (recompra, reengajamento). Use a ferramenta certa pra cada pergunta — "atendimento"/"conversa" geralmente é o que o cliente chamou, "chamamos"/"mandamos"/"recompra"/"reengajamento" é o que a loja chamou. Na dúvida sobre qual das duas faces ele quer, pode chamar as duas e juntar a resposta. Nunca invente número, sempre consulte antes de responder.
 
 TOM: direto, tipo um relatório rápido de WhatsApp — pode usar bullet points ou lista curta, não precisa ser formal nem floreado. Se não tiver dado nenhum (ex: nenhuma venda hoje), diga isso claramente em vez de inventar.
 ${contextoEscalacao}
@@ -275,7 +280,7 @@ LIMITES: fora do caso de escalação pendente acima, você só responde sobre o 
 }
 
 async function responderDono(texto, deps) {
-  const { vendasWhatsappHoje, resumoAtendimentosHoje, escalacaoPendente, responderClientePendente } = deps;
+  const { vendasWhatsappHoje, resumoAtendimentosHoje, contatosProativosHoje, escalacaoPendente, responderClientePendente } = deps;
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
 
   const tools = [...TOOLS_ADMIN_BASE];
@@ -312,6 +317,7 @@ async function responderDono(texto, deps) {
       try {
         if (block.name === 'vendas_whatsapp_hoje') resultado = await vendasWhatsappHoje();
         else if (block.name === 'resumo_atendimentos_hoje') resultado = await resumoAtendimentosHoje();
+        else if (block.name === 'contatos_proativos_hoje') resultado = await contatosProativosHoje();
         else if (block.name === 'responder_cliente_pendente') {
           await responderClientePendente(block.input?.texto || '');
           repassouNessaRodada = true;
