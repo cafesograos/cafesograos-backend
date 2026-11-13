@@ -2932,7 +2932,7 @@ const TELEFONE_TESTE_IA = '00000000000';
 // próprio POST já re-renderiza aqui em vez de redirecionar — assim dá pra
 // mostrar o aviso de escalação daquela rodada sem precisar guardar estado
 // em lugar nenhum).
-async function renderizarTestarIA(req, res, { avisoEscalacao } = {}) {
+async function renderizarTestarIA(req, res, { avisoEscalacao, avisoTrocaDevolucao } = {}) {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
   const { rows: mensagens } = await pool.query(
     `SELECT role, content, created_at FROM whatsapp_mensagens WHERE phone = $1 ORDER BY created_at ASC`,
@@ -2947,6 +2947,7 @@ async function renderizarTestarIA(req, res, { avisoEscalacao } = {}) {
     </div>
     ${!process.env.ANTHROPIC_API_KEY ? `<div class="pedido-card" style="max-width:560px;background:#FBE2E2;margin-bottom:16px;"><div class="pedido-detalhe" style="color:#C53030;">ANTHROPIC_API_KEY não configurada — a IA não vai conseguir responder.</div></div>` : ''}
     ${avisoEscalacao ? `<div class="pedido-card" style="max-width:560px;background:#FDEFC9;margin-bottom:16px;"><div class="pedido-detalhe">⚠️ Nessa resposta, a IA teria chamado o diretor (escalado pra um humano). Motivo: "${escapeHtml(avisoEscalacao)}"</div></div>` : ''}
+    ${avisoTrocaDevolucao ? `<div class="pedido-card" style="max-width:560px;background:#FDEFC9;margin-bottom:16px;"><div class="pedido-detalhe">⚠️ Nessa resposta, a IA teria avisado o João (financeiro) sobre troca/devolução. Motivo: "${escapeHtml(avisoTrocaDevolucao)}"</div></div>` : ''}
     <div style="display:flex;flex-direction:column;gap:10px;max-width:560px;margin-bottom:20px;">
       ${mensagens.length === 0 ? '<p class="pedido-detalhe">Nenhuma mensagem ainda — escreva como se fosse um cliente, abaixo.</p>' : mensagens.map((m) => `
         <div style="align-self:${m.role === 'assistant' ? 'flex-end' : 'flex-start'};max-width:80%;">
@@ -2988,26 +2989,35 @@ app.get('/admin/whatsapp/testar-ia', requireAdmin, asyncHandler(async (req, res)
   await renderizarTestarIA(req, res);
 }));
 
-// Mesmas ferramentas da IA de verdade, só trocando as duas com efeito
-// colateral real (criar pedido / avisar o dono) por versões que não tocam
-// em nada — assim o dono pode testar o fechamento de pedido e a escalação
-// de ponta a ponta sem gerar pedido fantasma no banco nem se auto-spammar.
+// Mesmas ferramentas da IA de verdade, só trocando as com efeito colateral
+// real (criar pedido / avisar o dono / avisar o João) por versões que não
+// tocam em nada — assim o dono pode testar o fechamento de pedido e as
+// escalações de ponta a ponta sem gerar pedido fantasma no banco, sem se
+// auto-spammar e sem mandar WhatsApp de verdade pro João. Faltava
+// notificarTrocaDevolucao aqui (ferramenta nova, adicionada depois dessa
+// tela) — sem o mock, testar um cenário de troca/devolução quebrava com
+// "notificarTrocaDevolucao is not a function" em vez de simular.
 app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extended: false }), asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
   const mensagem = String(req.body?.mensagem || '').trim();
   if (!mensagem) return res.status(400).send('Escreva uma mensagem.');
 
   let motivoEscalado = null;
+  let motivoTrocaDevolucao = null;
   try {
     const { texto: resposta } = await responderMensagem(TELEFONE_TESTE_IA, mensagem, {
       pool,
       PRODUCTS,
       consultarPedidoPorTelefone,
       criarPedidoViaAtendimento: async () => ({
-        aviso: 'TESTE: nenhum pedido real foi criado nem link de pagamento gerado — isso é só uma simulação pro dono treinar a IA.'
+        aviso: 'TESTE: nenhum pedido real foi criado nem link de pagamento gerado — isso é só uma simulação pro dono treinar a IA.',
+        link: 'https://exemplo.invalido/pagamento-de-teste'
       }),
       escalarAtendimento: async (_telefoneCliente, motivo) => {
         motivoEscalado = motivo || 'não especificado';
+      },
+      notificarTrocaDevolucao: async (_telefoneCliente, motivo) => {
+        motivoTrocaDevolucao = motivo || 'não especificado';
       }
     });
     if (resposta) await salvarRespostaAssistente(pool, TELEFONE_TESTE_IA, resposta);
@@ -3016,7 +3026,7 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
     return res.status(500).send(`Erro ao gerar resposta: ${escapeHtml(err.message)}`);
   }
 
-  await renderizarTestarIA(req, res, { avisoEscalacao: motivoEscalado });
+  await renderizarTestarIA(req, res, { avisoEscalacao: motivoEscalado, avisoTrocaDevolucao: motivoTrocaDevolucao });
 }));
 
 app.post('/admin/whatsapp/testar-ia/limpar', requireAdmin, asyncHandler(async (req, res) => {
@@ -3664,21 +3674,29 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   if (pool && telefone.replace(/\D/g, '') === OWNER_WHATSAPP_NUMBER.replace(/\D/g, '')) {
     if (!process.env.ANTHROPIC_API_KEY) return;
     try {
-      const { rows } = await pool.query(
-        `SELECT id, telefone_cliente, motivo FROM whatsapp_escalacoes WHERE respondido_em IS NULL ORDER BY created_at ASC LIMIT 1`
+      // Pega TODAS as escalações pendentes, não só a mais antiga — com só
+      // uma, o sistema assumia "só pode ser essa" sem checar; se dois
+      // clientes diferentes escalarem antes do dono responder qualquer um
+      // dos dois, uma resposta pensada pro mais recente ia pro mais antigo
+      // por engano. Agora a IA administrativa vê a lista toda e escolhe o
+      // escalacao_id certo (ou pergunta, se não for óbvio) — ver
+      // montarSystemPromptAdmin em whatsapp-ia.js.
+      const { rows: escalacoesPendentes } = await pool.query(
+        `SELECT id, telefone_cliente, motivo FROM whatsapp_escalacoes WHERE respondido_em IS NULL ORDER BY created_at ASC`
       );
-      const escalacaoPendente = rows[0] || null;
-      console.log(`[whatsapp-ia] mensagem do dono${escalacaoPendente ? ` (com escalação #${escalacaoPendente.id} pendente)` : ''}: "${texto.slice(0, 80)}"`);
+      console.log(`[whatsapp-ia] mensagem do dono${escalacoesPendentes.length ? ` (${escalacoesPendentes.length} escalação(ões) pendente(s))` : ''}: "${texto.slice(0, 80)}"`);
       const resposta = await responderDono(texto, {
         vendasWhatsappHoje,
         resumoAtendimentosHoje,
         contatosProativosHoje,
-        escalacaoPendente,
-        responderClientePendente: async (textoParaCliente) => {
-          await enviarMensagemWhatsApp(escalacaoPendente.telefone_cliente, textoParaCliente);
-          await salvarRespostaAssistente(pool, escalacaoPendente.telefone_cliente, textoParaCliente);
-          await pool.query(`UPDATE whatsapp_escalacoes SET respondido_em = now() WHERE id = $1`, [escalacaoPendente.id]);
-          console.log(`[whatsapp-ia] resposta do dono repassada pra ${escalacaoPendente.telefone_cliente} (escalação #${escalacaoPendente.id}).`);
+        escalacoesPendentes,
+        responderClientePendente: async (escalacaoId, textoParaCliente) => {
+          const alvo = escalacoesPendentes.find((e) => e.id === escalacaoId);
+          if (!alvo) throw new Error(`Escalação #${escalacaoId} não encontrada ou já respondida.`);
+          await enviarMensagemWhatsApp(alvo.telefone_cliente, textoParaCliente);
+          await salvarRespostaAssistente(pool, alvo.telefone_cliente, textoParaCliente);
+          await pool.query(`UPDATE whatsapp_escalacoes SET respondido_em = now() WHERE id = $1`, [alvo.id]);
+          console.log(`[whatsapp-ia] resposta do dono repassada pra ${alvo.telefone_cliente} (escalação #${alvo.id}).`);
         }
       });
       if (resposta) await enviarMensagemWhatsApp(OWNER_WHATSAPP_NUMBER, resposta);

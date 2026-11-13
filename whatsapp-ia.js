@@ -188,6 +188,7 @@ async function responderMensagem(telefone, textoCliente, deps) {
   let rodadas = 0;
   let escalouNessaRodada = false;
   let escalouTrocaNessaRodada = false;
+  let pedidoCriadoNessaRodada = null;
   while (rodadas < 5) {
     rodadas++;
     resposta = await anthropic.messages.create({
@@ -211,6 +212,7 @@ async function responderMensagem(telefone, textoCliente, deps) {
           resultado = await consultarPedidoPorTelefone(telefone);
         } else if (block.name === 'criar_pedido') {
           resultado = await criarPedidoViaAtendimento({ ...block.input, telefone });
+          pedidoCriadoNessaRodada = resultado;
         } else if (block.name === 'escalar_atendimento') {
           await escalarAtendimento(telefone, block.input?.motivo || '');
           escalouNessaRodada = true;
@@ -230,16 +232,21 @@ async function responderMensagem(telefone, textoCliente, deps) {
     messages.push({ role: 'user', content: toolResults });
   }
 
-  // Às vezes o modelo chama a ferramenta e não escreve nenhum texto de volta
-  // — sem essa rede de segurança, o cliente ficaria sem resposta nenhuma
-  // mesmo depois de escalar pro diretor. Texto genérico de propósito: essa
-  // mesma escalação serve pra retirada, reclamação, boleto, qualquer coisa
-  // — um texto específico de "retirada" já saiu errado uma vez pra um
-  // cliente que tinha escalado por outro motivo (boleto).
+  // Às vezes o modelo chama uma ferramenta e não escreve nenhum texto de
+  // volta — sem essa rede de segurança, o cliente ficaria sem resposta
+  // nenhuma. Antes isso só era tratado pras duas escalações (texto genérico
+  // de propósito, pra servir qualquer motivo) — mas criar_pedido também
+  // podia cair nesse buraco, e nesse caso era bem mais grave: o pedido e o
+  // link de pagamento já tinham sido gerados de verdade, só que o cliente
+  // nunca recebia o link porque o texto saiu vazio. Último fallback genérico
+  // garante que NUNCA sai uma resposta vazia pro cliente, seja qual for a
+  // ferramenta chamada.
   const textoModelo = resposta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-  const textoResposta = textoModelo || (escalouTrocaNessaRodada
-    ? 'Pode ficar tranquilo! Já avisei nossa equipe, alguém vai entrar em contato com você em breve.'
-    : (escalouNessaRodada ? 'Combinado! Já passei isso pro meu diretor, ele deve te retornar em breve.' : textoModelo));
+  const textoResposta = textoModelo
+    || (escalouTrocaNessaRodada ? 'Pode ficar tranquilo! Já avisei nossa equipe, alguém vai entrar em contato com você em breve.' : null)
+    || (escalouNessaRodada ? 'Combinado! Já passei isso pro meu diretor, ele deve te retornar em breve.' : null)
+    || (pedidoCriadoNessaRodada ? `Prontinho! Segue o link pra finalizar o pagamento: ${pedidoCriadoNessaRodada.link}` : null)
+    || 'Desculpa a demora! Pode repetir o que você precisa? Quero ter certeza de que entendi certinho antes de responder.';
   const esperaMs = await calcularEsperaMs(pool, telefone, textoResposta);
   return { texto: textoResposta, esperaMs };
 }
@@ -281,13 +288,23 @@ const TOOLS_ADMIN_BASE = [
   }
 ];
 
-function montarSystemPromptAdmin(escalacaoPendente) {
-  const contextoEscalacao = escalacaoPendente ? `
+function montarSystemPromptAdmin(escalacoesPendentes) {
+  const temEscalacoes = escalacoesPendentes && escalacoesPendentes.length > 0;
+  // Lista TODAS as pendentes, não só a mais antiga — com só uma, o sistema
+  // vazio assumia "é essa" sem checar; se duas pessoas escalarem antes do
+  // dono responder qualquer uma das duas, ele podia responder pensando na
+  // mais recente e a mensagem ia pro cliente errado (a mais antiga). Agora
+  // a IA vê todas e só decide escalacao_id quando der pra saber qual é —
+  // senão pergunta, em vez de adivinhar.
+  const contextoEscalacao = temEscalacoes ? `
 
-ESCALAÇÃO PENDENTE: tem um cliente esperando resposta — telefone ${escalacaoPendente.telefone_cliente}, motivo: "${escalacaoPendente.motivo}". Decida com cuidado:
-- Se a mensagem do dono for claramente a resposta ou instrução pra ESSE cliente (ex: respondendo a dúvida dele, dizendo o que repassar), chame responder_cliente_pendente.
-- Se for uma pergunta sobre o negócio em geral (vendas, atendimentos, dúvidas do dia), use as ferramentas de relatório normalmente — NÃO mexe nessa escalação.
-- Se não der pra saber com certeza qual das duas coisas o dono quer, NÃO chame nenhuma ferramenta — só pergunte pra ele qual é a intenção. Nunca adivinhe: mandar a coisa errada pro cliente errado já aconteceu antes e não pode se repetir.` : '';
+ESCALAÇÕES PENDENTES (${escalacoesPendentes.length}): tem cliente(s) esperando resposta.
+${escalacoesPendentes.map((e) => `- escalacao_id ${e.id} — telefone ${e.telefone_cliente}, motivo: "${e.motivo}"`).join('\n')}
+Decida com cuidado:
+- Se a mensagem do dono for claramente a resposta ou instrução pra UM desses clientes, chame responder_cliente_pendente com o escalacao_id EXATO da lista acima (nunca invente um id) e o texto a repassar.
+- Se tiver mais de uma pendente e não for óbvio qual cliente ele quer responder, NÃO escolha sozinha — pergunte pra ele qual (pode citar o motivo de cada uma pra ajudar a lembrar).
+- Se for uma pergunta sobre o negócio em geral (vendas, atendimentos, dúvidas do dia), use as ferramentas de relatório normalmente — NÃO mexe em nenhuma escalação.
+- Se não der pra saber com certeza qual das coisas o dono quer, NÃO chame nenhuma ferramenta — só pergunte pra ele qual é a intenção. Nunca adivinhe: mandar a coisa errada pro cliente errado já aconteceu antes e não pode se repetir.` : '';
 
   return `Você é o assistente administrativo do Alberto, dono da Café Só Grãos. Ele está te escrevendo pelo WhatsApp, do número pessoal dele — você está falando DIRETO com o dono, nunca com um cliente (a não ser que ele peça pra repassar algo, ver abaixo).
 
@@ -300,18 +317,21 @@ LIMITES: fora do caso de escalação pendente acima, você só responde sobre o 
 }
 
 async function responderDono(texto, deps) {
-  const { vendasWhatsappHoje, resumoAtendimentosHoje, contatosProativosHoje, escalacaoPendente, responderClientePendente } = deps;
+  const { vendasWhatsappHoje, resumoAtendimentosHoje, contatosProativosHoje, escalacoesPendentes, responderClientePendente } = deps;
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
 
   const tools = [...TOOLS_ADMIN_BASE];
-  if (escalacaoPendente) {
+  if (escalacoesPendentes && escalacoesPendentes.length > 0) {
     tools.push({
       name: 'responder_cliente_pendente',
-      description: 'Envia a mensagem pro cliente que está esperando resposta na escalação pendente (ver contexto no system prompt). Só chame isso quando tiver certeza de que a mensagem do dono é a resposta/instrução pra esse cliente específico.',
+      description: 'Envia a mensagem pro cliente de UMA escalação pendente específica (ver a lista no system prompt). Informe o escalacao_id EXATO da lista — nunca invente um id, e nunca chame isso sem ter certeza de qual cliente é.',
       input_schema: {
         type: 'object',
-        properties: { texto: { type: 'string', description: 'A mensagem a enviar pro cliente, em nome da loja.' } },
-        required: ['texto']
+        properties: {
+          escalacao_id: { type: 'integer', description: 'O id exato da escalação pendente (da lista no system prompt) que essa resposta é para.' },
+          texto: { type: 'string', description: 'A mensagem a enviar pro cliente, em nome da loja.' }
+        },
+        required: ['escalacao_id', 'texto']
       }
     });
   }
@@ -325,7 +345,7 @@ async function responderDono(texto, deps) {
     resposta = await anthropic.messages.create({
       model: MODEL_ADMIN,
       max_tokens: 1024,
-      system: montarSystemPromptAdmin(escalacaoPendente),
+      system: montarSystemPromptAdmin(escalacoesPendentes),
       tools,
       messages
     });
@@ -339,7 +359,7 @@ async function responderDono(texto, deps) {
         else if (block.name === 'resumo_atendimentos_hoje') resultado = await resumoAtendimentosHoje();
         else if (block.name === 'contatos_proativos_hoje') resultado = await contatosProativosHoje();
         else if (block.name === 'responder_cliente_pendente') {
-          await responderClientePendente(block.input?.texto || '');
+          await responderClientePendente(block.input?.escalacao_id, block.input?.texto || '');
           repassouNessaRodada = true;
           resultado = { ok: true };
         } else resultado = { erro: 'Ferramenta desconhecida.' };
