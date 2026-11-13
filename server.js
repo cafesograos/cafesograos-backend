@@ -2816,10 +2816,8 @@ function handlerLeadContato(urlBase) {
 app.post('/admin/leads/:id/contato', requireAdmin, handlerLeadContato('/admin/leads'));
 app.post('/vendedor/contatos/:id/contato', requireVendedor, handlerLeadContato('/vendedor/contatos'));
 
-// Pareamento do número de WhatsApp dedicado à automação (ver whatsapp.js).
-// Escaneia o QR code com o WhatsApp do celular dedicado (Aparelhos conectados
-// → Conectar um aparelho) — depois disso a sessão fica salva no banco e não
-// precisa escanear de novo, só se desconectar.
+// Painel do WhatsApp — API oficial da Meta (ver whatsapp-oficial.js), sem QR
+// code: a conexão é só variável de ambiente (WHATSAPP_TOKEN/WHATSAPP_WABA_ID).
 app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
   const status = getStatusWhatsApp();
   const msgBoasVindas = await buscarMensagemConfig('boas_vindas');
@@ -3490,6 +3488,15 @@ async function processarFilaReengajamentoWhatsApp() {
 // nunca insiste todo dia (assim que manda esse "oi", ele vira a mensagem mais
 // recente da conversa, então não bate mais no filtro "última mensagem foi
 // ontem à noite" pras próximas rodadas).
+//
+// Fica só nessa janela de 1h (8h-9h) de propósito — não dá pra alargar pro
+// dia todo: quem esfriou lá pelas 18h de ontem só continua dentro das 24h
+// (texto livre liberado) até lá pelas 18h de hoje, e abrir esse envio pra
+// qualquer hora do dia arriscaria mandar fora dessa janela. Por isso, em vez
+// de alargar o horário, o LIMIT por rodada subiu de 1 pra 5 — com 6 rodadas
+// de 10 min nessa 1h, dá pra zerar até 30 conversas esfriadas numa única
+// manhã (contra 6 antes), sem tirar o espaçamento entre envios que evita
+// parecer rajada de mensagem pro WhatsApp.
 async function processarFilaRetomarConversaWhatsApp() {
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
   if (automacoesWhatsAppPausadas()) return;
@@ -3509,7 +3516,7 @@ async function processarFilaRetomarConversaWhatsApp() {
        WHERE role = 'assistant'
          AND (created_at AT TIME ZONE 'America/Sao_Paulo')::date = (now() AT TIME ZONE 'America/Sao_Paulo')::date - interval '1 day'
          AND EXTRACT(HOUR FROM created_at AT TIME ZONE 'America/Sao_Paulo') >= 18
-       LIMIT 1`,
+       LIMIT 5`,
       [TELEFONE_TESTE_IA, OWNER_WHATSAPP_NUMBER]
     );
     for (const { phone } of rows) {

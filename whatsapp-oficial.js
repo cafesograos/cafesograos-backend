@@ -1,10 +1,10 @@
 // Integração oficial com a WhatsApp Business Platform (Cloud API) da Meta —
-// substitui o Baileys (whatsapp.js, mantido só como histórico) porque a
-// conexão não-oficial (tipo WhatsApp Web) corria risco real de bloqueio pelo
-// WhatsApp por não ser um canal autorizado. Diferente do Baileys, aqui não
-// existe "conexão" nem QR code pra escanear: é tudo chamada HTTP autenticada
-// por token (WHATSAPP_TOKEN) contra a Graph API, e o número é identificado
-// pelo ID da conta (WHATSAPP_WABA_ID).
+// substitui a conexão não-oficial via Baileys (tipo WhatsApp Web, removida
+// depois da migração) porque esse tipo de conexão corria risco real de
+// bloqueio pelo WhatsApp por não ser um canal autorizado. Diferente dela,
+// aqui não existe "conexão" nem QR code pra escanear: é tudo chamada HTTP
+// autenticada por token (WHATSAPP_TOKEN) contra a Graph API, e o número é
+// identificado pelo ID da conta (WHATSAPP_WABA_ID).
 
 const GRAPH_API_VERSION = 'v25.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -257,9 +257,10 @@ module.exports = {
   definirHandlerMensagem,
   processarWebhookRecebido,
   getStatusConexao,
-  // Compatibilidade com a interface antiga (ver whatsapp.js) — a API oficial
-  // não tem QR code nem "conectar"/"desconectar" de verdade, é tudo
-  // configuração por variável de ambiente, então essas funções viram no-op.
+  // Compatibilidade com a interface antiga (da conexão via Baileys, já
+  // removida) — a API oficial não tem QR code nem "conectar"/"desconectar"
+  // de verdade, é tudo configuração por variável de ambiente, então essas
+  // funções viram no-op.
   iniciarWhatsApp: async () => {},
   desconectarWhatsApp: async () => {},
   getQrAtual: () => null,
