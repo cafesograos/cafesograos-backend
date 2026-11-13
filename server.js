@@ -1192,6 +1192,244 @@ app.get('/vendedor/logout', (req, res) => {
   res.redirect('/vendedor/login');
 });
 
+// Painel do Gustavo (gestor de tráfego pago): só leitura — vendas por
+// período, produto mais vendido, pedidos e contatos, pra ele decidir onde
+// investir em anúncio. Nenhuma rota de escrita existe aqui (sem excluir
+// pedido, sem marcar entrada/contato, sem emitir etiqueta) — mesmo esquema
+// de sessão assinada do admin/vendedor, senha e cookie própria, sessões
+// isoladas das outras duas.
+const TRAFEGO_PASSWORD = process.env.TRAFEGO_PASSWORD;
+const TRAFEGO_SESSION_COOKIE = 'trafego_sessao';
+
+const trafegoLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Muitas tentativas. Tente novamente em alguns minutos.'
+});
+const trafegoAutenticadoLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 1000,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+app.use('/trafego', trafegoAutenticadoLimiter);
+
+function senhaCorretaTrafego(recebida) {
+  if (!TRAFEGO_PASSWORD) return false;
+  const hashRecebida = crypto.createHash('sha256').update(String(recebida ?? '')).digest();
+  const hashEsperada = crypto.createHash('sha256').update(TRAFEGO_PASSWORD).digest();
+  return crypto.timingSafeEqual(hashRecebida, hashEsperada);
+}
+
+function assinarSessaoTrafego(exp) {
+  const payload = Buffer.from(JSON.stringify({ exp })).toString('base64url');
+  const assinatura = crypto.createHmac('sha256', TRAFEGO_PASSWORD || '').update(payload).digest('base64url');
+  return `${payload}.${assinatura}`;
+}
+
+function sessaoValidaTrafego(cookieValue) {
+  if (!TRAFEGO_PASSWORD || !cookieValue) return false;
+  const partes = String(cookieValue).split('.');
+  if (partes.length !== 2) return false;
+  const [payload, assinatura] = partes;
+  const assinaturaEsperada = crypto.createHmac('sha256', TRAFEGO_PASSWORD).update(payload).digest('base64url');
+  const bufRecebido = Buffer.from(assinatura);
+  const bufEsperado = Buffer.from(assinaturaEsperada);
+  if (bufRecebido.length !== bufEsperado.length) return false;
+  if (!crypto.timingSafeEqual(bufRecebido, bufEsperado)) return false;
+  try {
+    const { exp } = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return typeof exp === 'number' && Date.now() < exp;
+  } catch {
+    return false;
+  }
+}
+
+function requireTrafego(req, res, next) {
+  if (sessaoValidaTrafego(getCookie(req, TRAFEGO_SESSION_COOKIE))) return next();
+  res.redirect(`/trafego/login?proximo=${encodeURIComponent(req.originalUrl)}`);
+}
+
+function trafegoLoginPage({ erro, proximo } = {}) {
+  return `
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrar - Café Só Grãos</title>
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link href="https://api.fontshare.com/v2/css?f[]=tanker@400&f[]=general-sans@400,500,700&display=swap" rel="stylesheet">
+    <meta name="theme-color" content="#211714">
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        font-family: 'General Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        background: #211714; color: #211714; padding: 16px;
+      }
+      .login-card { background: #fff; border-radius: 16px; padding: 32px 28px; width: 100%; max-width: 340px; }
+      h1 { margin: 0 0 20px; font-size: 22px; font-family: 'Tanker', sans-serif; font-weight: 400; }
+      input[type=password] {
+        width: 100%; padding: 12px 14px; border: 1px solid #ddd; border-radius: 8px;
+        font-size: 15px; font-family: inherit; margin-bottom: 12px;
+      }
+      button {
+        width: 100%; padding: 12px; border-radius: 8px; border: none; background: #D66B3E;
+        color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit;
+      }
+      .erro { color: #C53030; font-size: 13px; margin: -6px 0 12px; }
+    </style>
+    </head><body>
+      <form class="login-card" method="POST" action="/trafego/login">
+        <h1>Métricas — Café Só Grãos</h1>
+        ${erro ? '<p class="erro">Senha incorreta.</p>' : ''}
+        <input type="hidden" name="proximo" value="${escapeHtml(destinoSeguro(proximo, '/trafego'))}">
+        <input type="password" name="senha" placeholder="Senha" autofocus required>
+        <button type="submit">Entrar</button>
+      </form>
+    </body></html>
+  `;
+}
+
+app.get('/trafego/login', (req, res) => {
+  if (sessaoValidaTrafego(getCookie(req, TRAFEGO_SESSION_COOKIE))) {
+    return res.redirect(destinoSeguro(req.query.proximo, '/trafego'));
+  }
+  res.send(trafegoLoginPage({ proximo: req.query.proximo }));
+});
+
+app.post('/trafego/login', trafegoLimiter, express.urlencoded({ extended: false }), (req, res) => {
+  const proximo = destinoSeguro(req.body?.proximo, '/trafego');
+  if (!senhaCorretaTrafego(req.body?.senha)) {
+    console.log(`[trafego] login_falhou — IP ${req.ip}`);
+    return res.status(401).send(trafegoLoginPage({ erro: true, proximo }));
+  }
+  console.log(`[trafego] login_ok — IP ${req.ip}`);
+  const exp = Date.now() + SESSION_DURATION_MS;
+  const cookie = [
+    `${TRAFEGO_SESSION_COOKIE}=${encodeURIComponent(assinarSessaoTrafego(exp))}`,
+    'HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/',
+    `Max-Age=${Math.floor(SESSION_DURATION_MS / 1000)}`
+  ].join('; ');
+  res.setHeader('Set-Cookie', cookie);
+  res.redirect(proximo);
+});
+
+app.get('/trafego/logout', (req, res) => {
+  res.setHeader('Set-Cookie', `${TRAFEGO_SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
+  res.redirect('/trafego/login');
+});
+
+const TRAFEGO_NAV = [
+  { id: 'painel', label: 'Painel', href: '/trafego' },
+  { id: 'pedidos', label: 'Pedidos', href: '/trafego/pedidos' },
+  { id: 'leads', label: 'Contatos', href: '/trafego/contatos' },
+  { id: 'ga', label: 'Google Analytics ↗', href: 'https://analytics.google.com/analytics/web/', external: true },
+  { id: 'sair', label: 'Sair', href: '/trafego/logout' }
+];
+
+// Mesmo CSS/estrutura do adminLayout (cards do painel + lista de
+// pedidos/contatos) — só troca a navegação, que aqui nunca tem nenhum link
+// de ação de escrita.
+function trafegoLayout({ title, ativo, body }) {
+  const navHtml = TRAFEGO_NAV.map((item) => `
+    <a href="${item.href}" ${item.external ? 'target="_blank" rel="noopener noreferrer"' : ''} class="${item.id === ativo ? 'ativo' : ''}">${item.label}</a>
+  `).join('');
+  const refreshHtml = `<button class="admin-refresh" onclick="location.reload()" aria-label="Atualizar" title="Atualizar">⟳</button>`;
+
+  return `
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${escapeHtml(title)} - Café Só Grãos</title>
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <link href="https://api.fontshare.com/v2/css?f[]=tanker@400&f[]=general-sans@400,500,700&display=swap" rel="stylesheet">
+    <meta name="theme-color" content="#211714">
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        font-family: 'General Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        margin: 0; background: #F7F5F4; color: #211714; -webkit-font-smoothing: antialiased;
+      }
+      a { color: #D66B3E; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .admin-nav {
+        position: sticky; top: 0; z-index: 10; background: #211714;
+        padding: 10px 12px; display: flex; align-items: center; gap: 8px;
+      }
+      .admin-nav-links { display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch; flex: 1; min-width: 0; }
+      .admin-nav a {
+        color: rgba(255,255,255,.65); font-size: 13px; font-weight: 600; text-decoration: none;
+        padding: 8px 14px; border-radius: 999px; white-space: nowrap; transition: background .15s, color .15s;
+      }
+      .admin-nav a:hover { background: rgba(255,255,255,.08); color: #fff; }
+      .admin-nav a.ativo { background: #D66B3E; color: #fff; }
+      .admin-refresh {
+        flex-shrink: 0; background: rgba(255,255,255,.1); border: none; color: #fff;
+        width: 36px; height: 36px; border-radius: 999px; font-size: 18px; line-height: 1;
+        cursor: pointer; display: flex; align-items: center; justify-content: center;
+      }
+      .admin-refresh:hover { background: rgba(255,255,255,.2); }
+      .admin-refresh:active { transform: rotate(180deg); transition: transform .3s; }
+      .admin-body { padding: 16px; max-width: 900px; margin: 0 auto; }
+      h1 { margin: 4px 0 20px; font-size: 24px; font-family: 'Tanker', sans-serif; color: #211714; font-weight: 400; }
+      section { margin-bottom: 28px; }
+      section h2 { font-size: 12px; font-weight: 700; color: #8a6f5c; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
+      .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+      .card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
+      .card span { display: block; font-size: 12px; color: #8a6f5c; margin-bottom: 4px; font-weight: 600; }
+      .card strong { font-size: 22px; font-weight: 700; }
+      .card.alerta { box-shadow: 0 1px 3px rgba(33,23,20,.08), inset 3px 0 0 #D66B3E; }
+      .card.alerta strong { color: #D66B3E; }
+      .card-link { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 700; }
+      table.mini { border-collapse: collapse; width: 100%; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
+      table.mini th, table.mini td { padding: 10px 14px; text-align: left; font-size: 13px; border-bottom: 1px solid #F0E9E2; }
+      table.mini th { background: #FAF6F0; color: #5a4a3f; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+      table.mini tr:last-child td { border-bottom: none; }
+      .badge { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 4px 10px; border-radius: 999px; }
+      .badge-pending { background: #FDF0DD; color: #B7791F; }
+      .badge-approved { background: #DEF3E5; color: #1F8A4C; }
+      .badge-rejected { background: #FBE2E2; color: #C53030; }
+      .badge-in_process { background: #E4E9FB; color: #3651C7; }
+      .badge-cancelled, .badge-refunded { background: #EDEAE6; color: #6B5B4F; }
+      .filtros { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+      .filtros a { font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 999px; background: #fff; color: #5a4a3f; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
+      .filtros a:hover { text-decoration: none; background: #F0E9E2; }
+      .filtros a.ativo { background: #211714; color: #fff; }
+      .lista-vazia { text-align: center; color: #8a6f5c; padding: 32px 16px; background: #fff; border-radius: 12px; font-size: 14px; }
+      .pedido-lista, .avaliacao-lista { display: flex; flex-direction: column; gap: 12px; }
+      .pedido-card, .avaliacao-card-admin { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 1px 3px rgba(33,23,20,.08); }
+      .pedido-topo { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
+      .pedido-cliente { font-weight: 700; font-size: 15px; margin-top: 6px; }
+      .pedido-data { font-size: 12px; color: #8a6f5c; }
+      .pedido-total { font-size: 18px; font-weight: 700; white-space: nowrap; }
+      .pedido-selos { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+      .selo { font-size: 11px; background: #FDF0DD; color: #8a5a1f; padding: 4px 10px; border-radius: 999px; font-weight: 700; }
+      .pedido-detalhe { font-size: 13px; color: #5a4a3f; line-height: 1.5; }
+      .pedido-detalhe strong { color: #211714; }
+      .pedido-itens { font-size: 13px; color: #5a4a3f; margin: 10px 0; padding: 10px 12px; background: #FAF6F0; border-radius: 8px; }
+      .pedido-linhas { display: flex; justify-content: space-between; font-size: 13px; color: #5a4a3f; }
+      .aviso-frete { padding: 10px 14px; border-radius: 8px; font-size: 14px; margin-bottom: 14px; }
+      .aviso-frete-ok { background: #EAF4E9; color: #2E5C31; }
+      .aviso-frete-erro { background: #FBE2E2; color: #C53030; }
+      @media (max-width: 480px) { .admin-body { padding: 12px; } .cards { grid-template-columns: 1fr 1fr; } }
+    </style>
+    </head><body>
+    <nav class="admin-nav"><div class="admin-nav-links">${navHtml}</div>${refreshHtml}</nav>
+    <div class="admin-body">${body}</div>
+    </body></html>
+  `;
+}
+
+app.get('/trafego', requireTrafego, asyncHandler((req, res) => renderizarPainel(req, res, {
+  layout: trafegoLayout, urlPedidos: '/trafego/pedidos', mostrarAvaliacoes: false
+})));
+app.get('/trafego/pedidos', requireTrafego, asyncHandler((req, res) => renderizarPedidos(req, res, {
+  urlBase: '/trafego/pedidos', layout: trafegoLayout, mostrarTotal: true, ocultarFrete: true,
+  mostrarEntrada: false, mostrarExcluir: false, somenteLeitura: true
+})));
+app.get('/trafego/contatos', requireTrafego, asyncHandler((req, res) => renderizarLeads(req, res, {
+  urlBase: '/trafego/contatos', layout: trafegoLayout, mostrarLinkWhatsapp: false, somenteLeitura: true
+})));
+
 // Painel do João dá acesso a pedidos (sem valor em dinheiro nenhum — só o
 // dono vê preço/total/frete), emissão de etiqueta da Melhor Envio, avaliações
 // e contatos. Reaproveita a sessão/login já existentes do vendedor (o
@@ -1870,8 +2108,12 @@ const FRETE_ERRO_MSG = {
 };
 
 // Painel geral: vendas, pendências e produtos mais vendidos, com atalhos
-// pros outros painéis e pro Google Analytics / InfinitePay.
-app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
+// pros outros painéis e pro Google Analytics / InfinitePay. Compartilhado
+// entre o admin (vê tudo) e o painel só-leitura do Gustavo (tráfego pago) —
+// ele precisa dos mesmos números (venda do dia/semana/mês, produto que mais
+// vende) pra decidir onde investir em anúncio, mas sem o card de avaliações
+// (não é operação dele) nem nenhum link de ação.
+async function renderizarPainel(req, res, { layout, urlPedidos, mostrarAvaliacoes }) {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const [hoje, semana, mes, statusRows, semRastreioRows, avaliacoesPendentesRows, topProdutosRows, interessadosRows] = await Promise.all([
@@ -1923,16 +2165,18 @@ app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
       <div class="cards">
         <div class="card ${semRastreio > 0 ? 'alerta' : ''}">
           <span>Pedidos sem rastreio</span><strong>${semRastreio}</strong>
-          <a class="card-link" href="/admin/pedidos">Ver pedidos →</a>
+          <a class="card-link" href="${urlPedidos}">Ver pedidos →</a>
         </div>
         <div class="card ${interessados > 0 ? 'alerta' : ''}">
           <span>Interessados que não pagaram (dados completos, link gerado)</span><strong>${interessados}</strong>
-          <a class="card-link" href="/admin/pedidos?status=pending">Ver interessados →</a>
+          <a class="card-link" href="${urlPedidos}?status=pending">Ver interessados →</a>
         </div>
+        ${mostrarAvaliacoes ? `
         <div class="card ${avaliacoesPendentes > 0 ? 'alerta' : ''}">
           <span>Avaliações aguardando aprovação</span><strong>${avaliacoesPendentes}</strong>
           <a class="card-link" href="/admin/avaliacoes">Ver avaliações →</a>
         </div>
+        ` : ''}
       </div>
     </section>
 
@@ -1953,8 +2197,12 @@ app.get('/admin', requireAdmin, asyncHandler(async (req, res) => {
     </section>
   `;
 
-  res.send(adminLayout({ title: 'Painel', ativo: 'painel', body }));
-}));
+  res.send(layout({ title: 'Painel', ativo: 'painel', body }));
+}
+
+app.get('/admin', requireAdmin, asyncHandler((req, res) => renderizarPainel(req, res, {
+  layout: adminLayout, urlPedidos: '/admin/pedidos', mostrarAvaliacoes: true
+})));
 
 // Trilha de auditoria das ações do admin (excluir pedido, editar rastreio,
 // aprovar/rejeitar avaliação) — antes nada disso ficava registrado, então
@@ -1967,7 +2215,7 @@ function logAdminAcao(req, acao, detalhe) {
 // (vê pra despachar/gerar etiqueta e marcar "entrada no sistema" — ele tem
 // o próprio sistema de vendas, precisa do total do pedido pra isso — mas
 // sem o detalhe do frete nem o botão de excluir, que continuam só do dono).
-async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocultarFrete, mostrarEntrada, mostrarExcluir }) {
+async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocultarFrete, mostrarEntrada, mostrarExcluir, somenteLeitura }) {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   // "a_enviar"/"enviados" não são status de pagamento de verdade (esses
@@ -2033,6 +2281,7 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}${Number(i.unit_price) > 0 ? ` — ${reais(i.unit_price)} cada (${reais(i.unit_price * i.quantity)})` : ''}`).join('<br>')}</div>
       ${ocultarFrete ? '' : `<div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>`}
+      ${somenteLeitura ? '' : `
       ${mostrarEntrada ? `
         <form method="POST" action="${urlBase}/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
           <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
@@ -2069,6 +2318,7 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
           </form>
         ` : ''}
       </div>
+      `}
     </div>
   `).join('');
 
@@ -2508,7 +2758,7 @@ app.post('/api/cadastro-popup', formularioLimiter, async (req, res) => {
 // /admin/whatsapp) — fora isso, contato continua manual, feito por você.
 // Sem valor em dinheiro nenhum aqui também — mesma lógica serve pro admin e
 // pro painel do João.
-async function renderizarLeads(req, res, { urlBase, layout, mostrarLinkWhatsapp }) {
+async function renderizarLeads(req, res, { urlBase, layout, mostrarLinkWhatsapp, somenteLeitura }) {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
   const { rows } = await pool.query('SELECT * FROM leads ORDER BY created_at DESC LIMIT 500');
@@ -2525,12 +2775,14 @@ async function renderizarLeads(req, res, { urlBase, layout, mostrarLinkWhatsapp 
       ${l.email ? `<div class="pedido-detalhe" style="margin-top:10px;"><strong>E-mail:</strong> ${escapeHtml(l.email)}</div>` : ''}
       ${l.phone ? `<div class="pedido-detalhe"><strong>WhatsApp:</strong> ${escapeHtml(l.phone)}</div>` : ''}
       ${l.cep ? `<div class="pedido-detalhe"><strong>CEP:</strong> ${escapeHtml(l.cep.replace(/(\d{5})(\d{3})/, '$1-$2'))}</div>` : ''}
+      ${somenteLeitura ? '' : `
       <form method="POST" action="${urlBase}/${l.id}/contato" class="pedido-entrada${l.contatado ? ' marcada' : ''}">
         <label>
           <input type="checkbox" ${l.contatado ? 'checked' : ''}>
           Já entrei em contato
         </label>
       </form>
+      `}
     </div>
   `).join('');
 
