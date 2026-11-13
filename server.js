@@ -3257,6 +3257,10 @@ async function processarFilaRetomarConversaWhatsApp() {
 // é pra onde vai o aviso quando a IA precisa de um humano.
 const OWNER_WHATSAPP_NUMBER = '5516997567559';
 
+// Número do João, do financeiro — avisado direto (sem passar pelo dono)
+// quando o cliente pede troca ou devolução, pra ele entrar em contato.
+const JOAO_FINANCEIRO_WHATSAPP_NUMBER = '5516996285312';
+
 // Avisa o dono pelo WhatsApp quando a IA de atendimento não consegue
 // resolver algo sozinha. O dono NUNCA fala direto com o cliente — ele
 // responde pro número da loja (ver o desvio em definirHandlerMensagem logo
@@ -3274,6 +3278,19 @@ async function escalarAtendimento(telefoneCliente, motivo) {
     await enviarTemplateWhatsApp(OWNER_WHATSAPP_NUMBER, WHATSAPP_TEMPLATES.escalacao, { telefone_cliente: telefoneCliente, motivo: motivo || 'não especificado' });
   } catch (err) {
     console.error('[whatsapp-ia] falha ao avisar o dono sobre escalação:', err.message);
+  }
+}
+
+// Troca/devolução vai direto pro João (financeiro), sem passar pela fila de
+// escalação do dono (whatsapp_escalacoes) -- essa fila serve pra ele
+// responder algo que a IA repassa de volta pro cliente, mas aqui a IA já
+// deu a resposta final pro cliente ("fique tranquilo..."); o João é quem
+// entra em contato por fora, não tem repasse pela IA depois.
+async function notificarTrocaDevolucao(telefoneCliente, motivo) {
+  try {
+    await enviarTemplateWhatsApp(JOAO_FINANCEIRO_WHATSAPP_NUMBER, WHATSAPP_TEMPLATES.escalacao, { telefone_cliente: telefoneCliente, motivo: motivo || 'não especificado' });
+  } catch (err) {
+    console.error('[whatsapp-ia] falha ao avisar o João sobre troca/devolução:', err.message);
   }
 }
 
@@ -3414,7 +3431,7 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   console.log(`[whatsapp-ia] gerando resposta pra ${telefone}...`);
   try {
     const { texto: resposta, esperaMs } = await responderMensagem(telefone, texto, {
-      pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, buscarClienteConhecido
+      pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido
     });
     console.log(`[whatsapp-ia] resposta gerada pra ${telefone} (espera ${Math.round(esperaMs / 1000)}s): "${(resposta || '').slice(0, 80)}"`);
     if (resposta) {

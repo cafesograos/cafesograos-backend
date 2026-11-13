@@ -51,11 +51,22 @@ const TOOLS = [
   },
   {
     name: 'escalar_atendimento',
-    description: 'Avisa seu diretor que essa conversa precisa de atenção (algo fora do que você consegue resolver sozinha: reclamação, troca, problema que consultar_pedido não explica, retirada pessoal combinada, etc.). Chame isso toda vez que disser que "vai avisar/verificar com o diretor" — a frase sozinha não avisa ninguém, só chamar essa ferramenta avisa de verdade. Retirada pessoal: assim que o cliente confirmar nome + horário que vai buscar, chame AGORA, nessa mesma resposta, mesmo sem saber ainda qual café ele quer — não espere fechar o pedido primeiro. Ele responde pra você, não direto pro cliente — você quem repassa a resposta dele na próxima mensagem dessa conversa.',
+    description: 'Avisa seu diretor que essa conversa precisa de atenção (algo fora do que você consegue resolver sozinha: reclamação, problema que consultar_pedido não explica, retirada pessoal combinada, boleto, etc. -- NÃO use pra troca/devolução, que tem a ferramenta própria escalar_troca_devolucao). Chame isso toda vez que disser que "vai avisar/verificar com o diretor" — a frase sozinha não avisa ninguém, só chamar essa ferramenta avisa de verdade. Retirada pessoal: assim que o cliente confirmar nome + horário que vai buscar, chame AGORA, nessa mesma resposta, mesmo sem saber ainda qual café ele quer — não espere fechar o pedido primeiro. Ele responde pra você, não direto pro cliente — você quem repassa a resposta dele na próxima mensagem dessa conversa.',
     input_schema: {
       type: 'object',
       properties: {
         motivo: { type: 'string', description: 'Resumo curto do que o cliente precisa, pro humano entender rápido ao abrir a conversa.' }
+      },
+      required: ['motivo']
+    }
+  },
+  {
+    name: 'escalar_troca_devolucao',
+    description: 'Chame sempre que o cliente pedir troca ou devolução de um produto (com defeito, errado, insatisfeito, etc.). Avisa direto o João, do financeiro, pra ele entrar em contato com o cliente e resolver. Depois de chamar, responda ao cliente avisando que pode ficar tranquilo, que alguém da equipe vai entrar em contato em breve -- nunca prometa prazo exato nem tente resolver a troca/devolução você mesma (nada de reembolso, prazo ou solução combinada por conta própria).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        motivo: { type: 'string', description: 'Resumo curto do pedido de troca/devolução (qual produto, o que houve), pro João entender rápido ao entrar em contato.' }
       },
       required: ['motivo']
     }
@@ -111,11 +122,13 @@ ABORDAGEM: seja consultiva, não insistente. Tire dúvida, recomende o café cer
 
 RETIRADA NO LOCAL: se o cliente perguntar o endereço ou quiser buscar pessoalmente, informe: Araraquara/SP, na frente do Poupatempo, Edifício América. Pra escalar isso pro diretor, veja a ferramenta escalar_atendimento.
 
+TROCA/DEVOLUÇÃO: se o cliente pedir troca ou devolução de um produto (veio com defeito, errado, não gostou, etc.), chame a ferramenta escalar_troca_devolucao (não a escalar_atendimento normal) e responda dizendo pra ele ficar tranquilo, que alguém da nossa equipe vai entrar em contato em breve -- não prometa prazo, não ofereça reembolso nem combine nenhuma solução sozinha, isso quem resolve é a equipe.
+
 PONTOS DE VENDA FÍSICOS: nosso café também é vendido na Araquímica e na Casa Deliza, ambas em Araraquara — mencione isso só quando encaixar naturalmente na conversa (ex: cliente é de Araraquara e prefere comprar na hora em algum lugar físico, ou pergunta onde mais encontra o produto), nunca forçado. IMPORTANTE: somos uma marca de café, não uma cafeteria/estabelecimento — nunca fale como se tivéssemos loja própria. Araquímica e Casa Deliza são pontos de venda que revendem nosso café, não são "nossas lojas".
 
 CONCORRENTES: se o cliente comparar com outra marca (ex: Pilão, 3 Corações, etc.), nunca afirme como fato algo que você não tem como garantir (ex: "o café dele fica meses em estoque"). Fale sempre em termos de "geralmente", "costuma", "normalmente" pra esse tipo de informação, nunca de forma categórica — e só fale das vantagens do nosso café (torra semanal, direto do produtor), sem precisar atacar a concorrência pra isso.
 
-LIMITES: se o cliente perguntar algo fora disso (reclamação, troca, problema com pedido que você não consegue resolver com a ferramenta consultar_pedido), diga que vai verificar isso com o seu diretor e já volta com a resposta, e chame a ferramenta escalar_atendimento — não invente política nem prometa prazo que você não sabe.`;
+LIMITES: se o cliente perguntar algo fora disso (reclamação, problema com pedido que você não consegue resolver com a ferramenta consultar_pedido -- troca/devolução tem sua própria regra acima), diga que vai verificar isso com o seu diretor e já volta com a resposta, e chame a ferramenta escalar_atendimento — não invente política nem prometa prazo que você não sabe.`;
 }
 
 async function carregarHistorico(pool, telefone) {
@@ -163,7 +176,7 @@ async function salvarRespostaAssistente(pool, telefone, texto) {
 }
 
 async function responderMensagem(telefone, textoCliente, deps) {
-  const { pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, buscarClienteConhecido } = deps;
+  const { pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido } = deps;
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
 
   await salvarMensagem(pool, telefone, 'user', textoCliente);
@@ -174,6 +187,7 @@ async function responderMensagem(telefone, textoCliente, deps) {
   let resposta;
   let rodadas = 0;
   let escalouNessaRodada = false;
+  let escalouTrocaNessaRodada = false;
   while (rodadas < 5) {
     rodadas++;
     resposta = await anthropic.messages.create({
@@ -201,6 +215,10 @@ async function responderMensagem(telefone, textoCliente, deps) {
           await escalarAtendimento(telefone, block.input?.motivo || '');
           escalouNessaRodada = true;
           resultado = { ok: true };
+        } else if (block.name === 'escalar_troca_devolucao') {
+          await notificarTrocaDevolucao(telefone, block.input?.motivo || '');
+          escalouTrocaNessaRodada = true;
+          resultado = { ok: true };
         } else {
           resultado = { erro: 'Ferramenta desconhecida.' };
         }
@@ -219,7 +237,9 @@ async function responderMensagem(telefone, textoCliente, deps) {
   // — um texto específico de "retirada" já saiu errado uma vez pra um
   // cliente que tinha escalado por outro motivo (boleto).
   const textoModelo = resposta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-  const textoResposta = textoModelo || (escalouNessaRodada ? 'Combinado! Já passei isso pro meu diretor, ele deve te retornar em breve.' : textoModelo);
+  const textoResposta = textoModelo || (escalouTrocaNessaRodada
+    ? 'Pode ficar tranquilo! Já avisei nossa equipe, alguém vai entrar em contato com você em breve.'
+    : (escalouNessaRodada ? 'Combinado! Já passei isso pro meu diretor, ele deve te retornar em breve.' : textoModelo));
   const esperaMs = await calcularEsperaMs(pool, telefone, textoResposta);
   return { texto: textoResposta, esperaMs };
 }
