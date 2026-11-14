@@ -86,6 +86,12 @@ async function initDb() {
   // rastreio) deixava o botão "Pagar e gerar etiqueta" livre pra clicar de
   // novo e cobrar a mesma etiqueta duas vezes.
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS melhorenvio_etiqueta_paga_em TIMESTAMPTZ;`);
+  // Quanto a Melhor Envio cotou de verdade pelo envio (não é o mesmo que
+  // shipping_cost, que é o que foi COBRADO do cliente -- em frete grátis
+  // shipping_cost fica 0, mas a loja paga o valor real assim mesmo). Sem
+  // isso não tinha como saber depois quanto cada envio custou de verdade
+  // pra loja, só o extrato bruto da Melhor Envio (sem dizer qual pedido é qual).
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS melhorenvio_valor_real NUMERIC;`);
   // De onde veio o pedido — 'site' (checkout público, também o default dos
   // pedidos antigos sem essa coluna), 'whatsapp_ia' (fechado direto na
   // conversa com a IA) ou 'vendedor' (o João monta manualmente pro

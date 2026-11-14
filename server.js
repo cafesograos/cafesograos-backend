@@ -2281,6 +2281,7 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
       <div class="pedido-detalhe"><strong>Endereço:</strong> ${escapeHtml(o.address)}, ${escapeHtml(o.address_number)} ${escapeHtml(o.address_complement || '')} — ${escapeHtml(o.neighborhood)}, ${escapeHtml(o.city)}/${escapeHtml(o.state)} · CEP ${escapeHtml(o.cep)}</div>
       <div class="pedido-itens">${(o.items || []).map((i) => `${escapeHtml(i.quantity)}x ${escapeHtml(i.title)}${Number(i.unit_price) > 0 ? ` — ${reais(i.unit_price)} cada (${reais(i.unit_price * i.quantity)})` : ''}`).join('<br>')}</div>
       ${ocultarFrete ? '' : `<div class="pedido-linhas"><span>Frete${o.shipping_carrier ? ` (${escapeHtml(o.shipping_carrier)})` : ''}</span><strong>${Number(o.shipping_cost) === 0 ? 'Grátis' : reais(o.shipping_cost)}</strong></div>`}
+      ${(!ocultarFrete && o.melhorenvio_valor_real) ? `<div class="pedido-linhas" style="color:#8a6f5c;"><span>Custo real do envio (Melhor Envio)</span><strong>${reais(o.melhorenvio_valor_real)}</strong></div>` : ''}
       ${somenteLeitura ? '' : `
       ${mostrarEntrada ? `
         <form method="POST" action="${urlBase}/${o.id}/entrada" class="pedido-entrada${o.entrada_sistema ? ' marcada' : ''}">
@@ -2465,8 +2466,19 @@ function handlerFreteCarrinho(urlBase) {
         produtos: itensParaDeclaracao(order)
       });
 
-      await pool.query('UPDATE orders SET melhorenvio_order_id = $1 WHERE id = $2', [resultado.id, order.id]);
-      logAdminAcao(req, 'frete_carrinho', `pedido #${order.id} → item Melhor Envio ${resultado.id}`);
+      // Preço real cotado pela Melhor Envio pra esse envio (não é o mesmo
+      // que order.shipping_cost, o que foi cobrado do cliente — em frete
+      // grátis isso fica 0, mas a loja paga esse valor de verdade mesmo
+      // assim). Sem registrar aqui, depois não tinha como saber quanto cada
+      // pedido custou de verdade — só o extrato bruto da Melhor Envio, sem
+      // dizer qual pedido é qual. Campo defensivo (nunca visto o nome exato
+      // documentado) — se nenhum bater, fica null em vez de quebrar o fluxo.
+      const valorReal = Number(resultado.price ?? resultado.custom_price ?? resultado.total) || null;
+      await pool.query(
+        'UPDATE orders SET melhorenvio_order_id = $1, melhorenvio_valor_real = $2 WHERE id = $3',
+        [resultado.id, valorReal, order.id]
+      );
+      logAdminAcao(req, 'frete_carrinho', `pedido #${order.id} → item Melhor Envio ${resultado.id}${valorReal ? ` (R$${valorReal})` : ''}`);
       res.redirect(`${urlBase}?frete_ok=carrinho`);
     } catch (err) {
       console.error(`Erro ao inserir pedido #${order.id} no carrinho da Melhor Envio:`, err.message);
