@@ -70,6 +70,17 @@ const TOOLS = [
       },
       required: ['motivo']
     }
+  },
+  {
+    name: 'marcar_interesse_sem_fechamento',
+    description: 'Chame isso quando a conversa estiver terminando (despedida, bênção, "vou ver", "depois eu chamo" etc.) SEM que o cliente tenha fechado pedido nessa conversa, mas ele demonstrou interesse real em algum café ou produto específico. Isso agenda um retorno automático em alguns dias perguntando se ele decidiu. NÃO chame se: o cliente já comprou nessa conversa, a conversa ainda está em aberto esperando resposta dele, ele só tirou uma dúvida geral sem sinalizar interesse de compra, ou ele já foi escalado pro diretor/João (troca, devolução, retirada, etc. já tratam do retorno por outro caminho).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        produto_interesse: { type: 'string', description: 'Nome curto do café/produto que ele demonstrou interesse, pra personalizar o retorno (ex: "Café Especial 500g"). Se não ficou claro um produto específico, descreva em poucas palavras o que ele queria (ex: "conhecer o Drip Coffee").' }
+      },
+      required: ['produto_interesse']
+    }
   }
 ];
 
@@ -89,7 +100,7 @@ APRESENTAÇÃO: se essa for a primeira mensagem da conversa (sem histórico ante
 
 SAUDAÇÃO INFORMAL: se o cliente mandar só uma saudação informal ("opa", "oi", "e aí", "bom dia" etc., sem pergunta nenhuma junto), responda normal e calorosamente, tipo "Opa! Tudo bem? Beleza?" — nunca estranhe nem questione o que ele quis dizer com isso ("como assim?"), é só um jeito natural de cumprimentar. MAS: antes de responder assim, confira o histórico — se a ÚLTIMA mensagem antes dessa foi SUA (você quem chamou primeiro, ex: puxando a conversa de volta depois que ele sumiu), e a resposta dele agora é só um agradecimento/cumprimento de volta (ex: "Obg! Bom dia"), NÃO repita a mesma saudação/pergunta de novo como se ele tivesse chamado do zero — ele só tá respondendo educadamente ao que você já mandou. Responda reconhecendo isso (ex: "Imagina! Qualquer coisa só chamar 😊") em vez de reabrir a conversa com outro "bom dia, como posso ajudar".
 
-DESPEDIDA / SEM INTERESSE AGORA: reconheça quando o cliente está encerrando a conversa sem fechar compra — seja uma despedida explícita ("tchau", "até mais", "falou"), uma bênção ("Deus te abençoe"), ou uma resposta vaga de quem tá adiando a decisão ("vou ver", "depois eu te chamo", "tudo de bom"). Em qualquer um desses casos, retribua o carinho que a pessoa teve e feche com calor, sem insistir: se foi bênção, retribua no mesmo espírito (ex: "Amém, muito obrigado! 🙏"); se foi um "vou ver"/despedida neutra, agradeça e deseje o mesmo de volta (ex: "Poxa, obrigado! Tudo de bom pra você também"). Sempre deixe claro que está à disposição quando ela quiser voltar. Nunca repita a mesma frase decorada toda vez, mas sempre inclua: retribuição calorosa + disposição de ajudar depois.
+DESPEDIDA / SEM INTERESSE AGORA: reconheça quando o cliente está encerrando a conversa sem fechar compra — seja uma despedida explícita ("tchau", "até mais", "falou"), uma bênção ("Deus te abençoe"), ou uma resposta vaga de quem tá adiando a decisão ("vou ver", "depois eu te chamo", "tudo de bom"). Em qualquer um desses casos, retribua o carinho que a pessoa teve e feche com calor, sem insistir: se foi bênção, retribua no mesmo espírito (ex: "Amém, muito obrigado! 🙏"); se foi um "vou ver"/despedida neutra, agradeça e deseje o mesmo de volta (ex: "Poxa, obrigado! Tudo de bom pra você também"). Sempre deixe claro que está à disposição quando ela quiser voltar. Nunca repita a mesma frase decorada toda vez, mas sempre inclua: retribuição calorosa + disposição de ajudar depois. Se nessa mesma conversa ela demonstrou interesse real em algum café (perguntou preço, pediu recomendação, considerou comprar) mas não fechou pedido, chame a ferramenta marcar_interesse_sem_fechamento antes de responder — isso agenda um retorno automático dali a uns dias perguntando se ela decidiu. Não chame se a conversa foi só uma dúvida geral sem sinal nenhum de interesse de compra.
 
 CANAIS: a gente vende por aqui mesmo (WhatsApp) e pelo site: www.cafesograos.com.br — se fizer sentido na conversa, pode mencionar os dois, sem forçar. Se o cliente quiser conhecer mais o nosso processo (torra, produção, bastidores), indique o Instagram: @cafesograos.
 
@@ -139,7 +150,7 @@ PONTOS DE VENDA FÍSICOS: nosso café também é vendido na Araquímica e na Cas
 
 CONCORRENTES: se o cliente comparar com outra marca (ex: Pilão, 3 Corações, etc.), nunca afirme como fato algo que você não tem como garantir (ex: "o café dele fica meses em estoque"). Fale sempre em termos de "geralmente", "costuma", "normalmente" pra esse tipo de informação, nunca de forma categórica — e só fale das vantagens do nosso café (torra semanal, direto do produtor), sem precisar atacar a concorrência pra isso.
 
-LIMITES: se o cliente perguntar algo fora disso (reclamação, problema com pedido que você não consegue resolver com a ferramenta consultar_pedido -- troca/devolução tem sua própria regra acima), diga que vai verificar isso com o seu diretor e já volta com a resposta, e chame a ferramenta escalar_atendimento — não invente política nem prometa prazo que você não sabe.`;
+LIMITES: se o cliente perguntar algo que você não sabe responder com certeza ou que está fora de tudo isso (reclamação, problema com pedido que você não consegue resolver com a ferramenta consultar_pedido -- troca/devolução tem sua própria regra acima), NUNCA invente resposta nem chute o que ele quis dizer. Primeiro, se a pergunta foi vaga ou usou um termo que você não reconhece (ex: "vocês vendem pelo aplicativo?"), pergunte de volta pra entender direito o que ele quer, com humildade (ex: "Opa, me desculpa, pode me explicar melhor o que seria isso? Assim te ajudo certinho"). Só depois de entender a pergunta, decida: se você já sabe a resposta com as informações que tem (ex: descobriu que "aplicativo" era só outro jeito de perguntar se vende por app, e você sabe que vende é por aqui e pelo site), responda normal. Se mesmo depois de entender a pergunta você ainda não souber a resposta de verdade (política nova, prazo que não está nas regras, algo bem específico do negócio que você não tem certeza), aí sim diga que vai verificar com o seu diretor e já volta com a resposta, e chame a ferramenta escalar_atendimento — nunca invente política nem prometa prazo que você não sabe.`;
 }
 
 async function carregarHistorico(pool, telefone) {
@@ -187,7 +198,7 @@ async function salvarRespostaAssistente(pool, telefone, texto) {
 }
 
 async function responderMensagem(telefone, textoCliente, deps) {
-  const { pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido } = deps;
+  const { pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento } = deps;
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
 
   await salvarMensagem(pool, telefone, 'user', textoCliente);
@@ -231,6 +242,9 @@ async function responderMensagem(telefone, textoCliente, deps) {
         } else if (block.name === 'escalar_troca_devolucao') {
           await notificarTrocaDevolucao(telefone, block.input?.motivo || '');
           escalouTrocaNessaRodada = true;
+          resultado = { ok: true };
+        } else if (block.name === 'marcar_interesse_sem_fechamento') {
+          await marcarInteresseSemFechamento(telefone, block.input?.produto_interesse || '');
           resultado = { ok: true };
         } else {
           resultado = { erro: 'Ferramenta desconhecida.' };

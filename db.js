@@ -165,6 +165,23 @@ async function initDb() {
   await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_reengajamento_contagem INTEGER DEFAULT 0;`);
   await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_reengajamento_enviado_em TIMESTAMPTZ;`);
 
+  // Follow-up de conversa com interesse real que esfriou sem fechar pedido
+  // (diferente do reengajamento acima, que é por cadastro/lead a cada 7 dias):
+  // a IA marca aqui quando o cliente se despede/adia decisão numa conversa
+  // onde demonstrou interesse em algum café — e alguns dias depois perguntamos
+  // se ele decidiu (ver processarFilaFollowUpInteresse). enviado_em null =
+  // ainda não mandamos; produto_interesse é só pra personalizar a mensagem.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_followups (
+      id SERIAL PRIMARY KEY,
+      phone TEXT NOT NULL,
+      produto_interesse TEXT,
+      criado_em TIMESTAMPTZ DEFAULT now(),
+      enviado_em TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_followups_pendente ON whatsapp_followups (phone, enviado_em);`);
+
   // Sessão do WhatsApp (Baileys) guardada no banco em vez de em arquivo —
   // o disco do Railway não persiste entre deploys, então sem isso cada
   // deploy novo exigiria escanear o QR code de novo.

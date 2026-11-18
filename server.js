@@ -1924,7 +1924,11 @@ const WHATSAPP_TEMPLATES = {
   // normalmente nunca mandou mensagem pro número da loja, então isso também
   // cai fora da janela de 24h e precisa ser template, igual os outros.
   escalacao: 'aviso_atendimento_humano',
-  reengajamento: 'reengajamento_interesse'
+  reengajamento: 'reengajamento_interesse',
+  // Follow-up de conversa que esfriou com interesse real demonstrado (ver
+  // marcarInteresseSemFechamento e processarFilaFollowUpInteresse) —
+  // diferente do reengajamento acima, que é por cadastro a cada 7 dias.
+  followup_interesse: 'followup_interesse_cliente'
 };
 
 // Layout compartilhado pelos painéis: mesma barra de navegação em todos,
@@ -3014,6 +3018,7 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
 
   let motivoEscalado = null;
   let motivoTrocaDevolucao = null;
+  let produtoInteresseMarcado = null;
   try {
     const { texto: resposta } = await responderMensagem(TELEFONE_TESTE_IA, mensagem, {
       pool,
@@ -3028,6 +3033,9 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
       },
       notificarTrocaDevolucao: async (_telefoneCliente, motivo) => {
         motivoTrocaDevolucao = motivo || 'não especificado';
+      },
+      marcarInteresseSemFechamento: async (_telefone, produtoInteresse) => {
+        produtoInteresseMarcado = produtoInteresse || 'não especificado';
       }
     });
     if (resposta) await salvarRespostaAssistente(pool, TELEFONE_TESTE_IA, resposta);
@@ -3492,6 +3500,63 @@ async function processarFilaReengajamentoWhatsApp() {
   }
 }
 
+// Follow-up de conversa que esfriou com interesse real (ver
+// marcarInteresseSemFechamento) — diferente do reengajamento acima, que é
+// por cadastro/lead a cada 7 dias: esse é por conversa específica, uns dias
+// depois, perguntando se a pessoa decidiu sobre o produto que ela
+// demonstrou interesse. Pula o envio (sem reprocessar de novo) se o cliente
+// já comprou desde que a conversa esfriou — nesse caso o follow-up só
+// cumprimentaria algo que já virou venda.
+async function processarFilaFollowUpInteresse() {
+  if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (automacoesWhatsAppPausadas()) return;
+  if (!dentroDoHorarioComercial()) return;
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, phone, produto_interesse FROM whatsapp_followups
+       WHERE enviado_em IS NULL AND criado_em <= now() - interval '2 days'
+       ORDER BY criado_em ASC LIMIT 1`
+    );
+    for (const followup of rows) {
+      const telefone = telefoneParaE164(followup.phone);
+      if (!telefone) {
+        await pool.query(`UPDATE whatsapp_followups SET enviado_em = now() WHERE id = $1`, [followup.id]);
+        continue;
+      }
+      try {
+        const { rows: comprou } = await pool.query(
+          `SELECT 1 FROM orders
+           WHERE status = 'approved'
+             AND regexp_replace(customer_phone, '\\D', '', 'g') = regexp_replace($1, '\\D', '', 'g')
+             AND created_at >= (SELECT criado_em FROM whatsapp_followups WHERE id = $2)
+           LIMIT 1`,
+          [telefone, followup.id]
+        );
+        if (comprou.length === 0) {
+          const { rows: leadRows } = await pool.query(
+            `SELECT name FROM leads WHERE regexp_replace(phone, '\\D', '', 'g') = regexp_replace($1, '\\D', '', 'g') LIMIT 1`,
+            [telefone]
+          );
+          const primeiroNome = String(leadRows[0]?.name || '').trim().split(' ')[0];
+          const nomeFormatado = primeiroNome ? `, ${primeiroNome}` : '';
+          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.followup_interesse, {
+            nome_cliente: nomeFormatado,
+            produto_interesse: followup.produto_interesse || 'o café que vocês conversaram'
+          });
+          console.log(`WhatsApp de follow-up de interesse enviado pro telefone ${telefone}.`);
+        } else {
+          console.log(`Follow-up de interesse pulado pro telefone ${telefone} — já comprou desde então.`);
+        }
+      } catch (err) {
+        console.error(`Falha ao enviar follow-up de interesse pro telefone ${telefone}:`, err.message);
+      }
+      await pool.query(`UPDATE whatsapp_followups SET enviado_em = now() WHERE id = $1`, [followup.id]);
+    }
+  } catch (err) {
+    console.error('Erro ao processar fila de follow-up de interesse do WhatsApp:', err);
+  }
+}
+
 // Retoma, uma única vez, uma conversa de atendimento que esfriou à noite:
 // cliente mandou mensagem, a IA respondeu, e ele nunca mais respondeu depois
 // disso. Às 8h da manhã (ainda dentro das 24h da última mensagem dele, então
@@ -3584,6 +3649,22 @@ async function notificarTrocaDevolucao(telefoneCliente, motivo) {
     await enviarTemplateWhatsApp(JOAO_FINANCEIRO_WHATSAPP_NUMBER, WHATSAPP_TEMPLATES.escalacao, { telefone_cliente: telefoneCliente, motivo: motivo || 'não especificado' });
   } catch (err) {
     console.error('[whatsapp-ia] falha ao avisar o João sobre troca/devolução:', err.message);
+  }
+}
+
+// Registra que uma conversa esfriou com interesse real demonstrado, sem
+// fechar pedido — ver processarFilaFollowUpInteresse pra quando isso vira
+// mensagem de verdade pro cliente (alguns dias depois, perguntando se
+// decidiu). Não manda nada na hora, só guarda a fila.
+async function marcarInteresseSemFechamento(telefoneCliente, produtoInteresse) {
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO whatsapp_followups (phone, produto_interesse) VALUES ($1, $2)`,
+      [telefoneCliente, produtoInteresse || null]
+    );
+  } catch (err) {
+    console.error('[whatsapp-ia] falha ao marcar interesse sem fechamento:', err.message);
   }
 }
 
@@ -3732,7 +3813,7 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   console.log(`[whatsapp-ia] gerando resposta pra ${telefone}...`);
   try {
     const { texto: resposta, esperaMs } = await responderMensagem(telefone, texto, {
-      pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido
+      pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento
     });
     console.log(`[whatsapp-ia] resposta gerada pra ${telefone} (espera ${Math.round(esperaMs / 1000)}s): "${(resposta || '').slice(0, 80)}"`);
     if (resposta) {
@@ -3765,6 +3846,7 @@ initDb().finally(() => {
     setInterval(processarFilaFeedbackWhatsApp, 60 * 60 * 1000);
     setInterval(processarFilaRecompraWhatsApp, 60 * 60 * 1000);
     setInterval(processarFilaReengajamentoWhatsApp, 60 * 60 * 1000);
+    setInterval(processarFilaFollowUpInteresse, 60 * 60 * 1000);
     // A cada 10 min — só age mesmo dentro da hora das 8h, mas checa mais
     // vezes nela pra não ficar quase 1h sem agir caso o processo suba já
     // dentro dessa janela.
