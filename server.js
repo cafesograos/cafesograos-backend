@@ -3669,8 +3669,11 @@ async function marcarInteresseSemFechamento(telefoneCliente, produtoInteresse) {
       [telefoneCliente]
     );
     if (rows.length > 0) {
+      // COALESCE($1, produto_interesse): só troca o produto salvo se a nova
+      // chamada de fato trouxe um — sem isso, uma despedida sem produto
+      // específico apagaria o interesse real já registrado antes.
       await pool.query(
-        `UPDATE whatsapp_followups SET produto_interesse = $1, criado_em = now() WHERE id = $2`,
+        `UPDATE whatsapp_followups SET produto_interesse = COALESCE($1, produto_interesse), criado_em = now() WHERE id = $2`,
         [produtoInteresse || null, rows[0].id]
       );
     } else {
