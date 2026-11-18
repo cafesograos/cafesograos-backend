@@ -277,6 +277,20 @@ async function initDb() {
   // de aplicação — nem numa corrida bem no limite.
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_discount_reservado ON orders (discount_id) WHERE discount_id IS NOT NULL AND status IN ('pending', 'approved');`);
 
+  // Mesma trava de verdade, agora pro brinde de boas-vindas: a consulta em
+  // server.js que decide "é a primeira compra dessa pessoa" só olha pedidos
+  // já aprovados (de propósito — olhar "pending" ali também mudaria quando o
+  // cupom de desconto da segunda compra passa a valer), então duas abas de
+  // checkout clicando "finalizar" quase ao mesmo tempo podem ler "nenhuma
+  // compra aprovada ainda" nas duas antes de qualquer INSERT terminar. Esse
+  // índice único (por telefone normalizado — só os últimos 11 dígitos, pra
+  // bater telefone com ou sem "55" na frente) garante no banco que só existe
+  // 1 pedido não-finalizado com free_gift=true por telefone, mesmo numa
+  // corrida bem no limite — o código em server.js trata a violação de
+  // constraint e grava o segundo pedido sem o brinde, em vez de devolver
+  // erro pro cliente.
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_freegift_reservado ON orders (RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11)) WHERE free_gift = true AND status IN ('pending', 'approved') AND customer_phone IS NOT NULL AND customer_phone <> '';`);
+
   console.log('Banco de dados pronto (tabelas orders, reviews, discounts, leads).');
 }
 

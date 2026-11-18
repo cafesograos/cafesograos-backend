@@ -486,7 +486,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       const { rows: existentes } = await pool.query(
         `SELECT 1 FROM orders WHERE status = 'approved' AND (
            LOWER(TRIM(customer_email)) = LOWER(TRIM($1))
-           OR customer_phone = $2
+           OR ($2 <> '' AND RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace($2, '\\D', '', 'g'), 11))
            OR (LOWER(TRIM(address)) = LOWER(TRIM($3)) AND LOWER(TRIM(address_number)) = LOWER(TRIM($4)))
          ) LIMIT 1`,
         [cliente.email, cliente.telefone || '', entrega.endereco, entrega.numero]
@@ -608,35 +608,50 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     // antes, um link de pagamento ativo na InfinitePay sem nenhum pedido
     // correspondente no banco pra reconciliar quando o webhook chegasse.
     if (pool) {
-      await pool.query(
-        `INSERT INTO orders
+      const valoresInsert = (freeGiftFinal) => [
+        orderNsu,
+        cliente.nome,
+        cliente.email,
+        cliente.telefone || null,
+        cpfDigits,
+        cnpjDigits || null,
+        entrega.cep,
+        entrega.endereco,
+        entrega.numero,
+        entrega.complemento || null,
+        entrega.bairro,
+        entrega.cidade,
+        entrega.estado,
+        JSON.stringify(itensParaPedido),
+        shippingCost,
+        shippingCarrier,
+        shippingServiceId,
+        Number(pesoTotalKg.toFixed(3)),
+        total,
+        freeGiftFinal,
+        desconto ? desconto.id : null,
+        desconto ? desconto.percent : null
+      ];
+      const sqlInsert = `INSERT INTO orders
           (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
-         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
-        [
-          orderNsu,
-          cliente.nome,
-          cliente.email,
-          cliente.telefone || null,
-          cpfDigits,
-          cnpjDigits || null,
-          entrega.cep,
-          entrega.endereco,
-          entrega.numero,
-          entrega.complemento || null,
-          entrega.bairro,
-          entrega.cidade,
-          entrega.estado,
-          JSON.stringify(itensParaPedido),
-          shippingCost,
-          shippingCarrier,
-          shippingServiceId,
-          Number(pesoTotalKg.toFixed(3)),
-          total,
-          freeGift,
-          desconto ? desconto.id : null,
-          desconto ? desconto.percent : null
-        ]
-      );
+         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`;
+      try {
+        await pool.query(sqlInsert, valoresInsert(freeGift));
+      } catch (err) {
+        // idx_orders_freegift_reservado barrou: outro pedido desse mesmo
+        // telefone já reservou o brinde há milissegundos (duas abas de
+        // checkout, por exemplo) — grava o pedido sem o brinde em vez de
+        // devolver erro pro cliente. O item "brinde" ainda aparece na lista
+        // de itens (não dá pra desfazer o peso/frete já calculados com ele),
+        // mas free_gift fica false, então ninguém recebe 2 brindes de verdade.
+        if (err.code === '23505' && err.constraint === 'idx_orders_freegift_reservado') {
+          console.warn(`[pedido] Corrida no brinde de boas-vindas pro telefone ${cliente.telefone} — gravando pedido sem free_gift.`);
+          freeGift = false;
+          await pool.query(sqlInsert, valoresInsert(false));
+        } else {
+          throw err;
+        }
+      }
     }
 
     const initPoint = await criarLinkPagamento({
@@ -1856,17 +1871,29 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
     webhookUrl: `${BACKEND_URL}/webhook-infinitepay`
   });
 
-  await pool.query(
-    `INSERT INTO orders
+  const sqlInsertIA = `INSERT INTO orders
       (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent, canal_venda)
-     VALUES ($1,'pending',$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULL,NULL,'whatsapp_ia')`,
-    [
-      orderNsu, nome, telefone || null, documentoNormalizado(cpf), cep, endereco, numero, complemento || null,
-      bairro, cidade, estado, JSON.stringify(itensParaPedido),
-      shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
-      brindeQuantidade > 0
-    ]
-  );
+     VALUES ($1,'pending',$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULL,NULL,'whatsapp_ia')`;
+  const valoresInsertIA = (freeGiftFinal) => [
+    orderNsu, nome, telefone || null, documentoNormalizado(cpf), cep, endereco, numero, complemento || null,
+    bairro, cidade, estado, JSON.stringify(itensParaPedido),
+    shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
+    freeGiftFinal
+  ];
+  try {
+    await pool.query(sqlInsertIA, valoresInsertIA(brindeQuantidade > 0));
+  } catch (err) {
+    // Mesma trava do checkout do site (idx_orders_freegift_reservado): se
+    // esse telefone já tem outro pedido com brinde reservado há milissegundos
+    // (cliente mandando "quero comprar" em duas conversas/aparelhos quase ao
+    // mesmo tempo), grava sem o brinde em vez de travar a criação do pedido.
+    if (err.code === '23505' && err.constraint === 'idx_orders_freegift_reservado') {
+      console.warn(`[whatsapp-ia] Corrida no brinde de boas-vindas pro telefone ${telefone} — gravando pedido sem free_gift.`);
+      await pool.query(sqlInsertIA, valoresInsertIA(false));
+    } else {
+      throw err;
+    }
+  }
   console.log(`[whatsapp-ia] pedido criado — ${orderNsu} (${nome}, ${reais(total)})`);
 
   return { link: initPoint, resumo: itensParaPedido, shippingCost, shippingCarrier, total };
