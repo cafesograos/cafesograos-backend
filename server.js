@@ -3659,10 +3659,26 @@ async function notificarTrocaDevolucao(telefoneCliente, motivo) {
 async function marcarInteresseSemFechamento(telefoneCliente, produtoInteresse) {
   if (!pool) return;
   try {
-    await pool.query(
-      `INSERT INTO whatsapp_followups (phone, produto_interesse) VALUES ($1, $2)`,
-      [telefoneCliente, produtoInteresse || null]
+    // Se já existe um follow-up pendente pra esse telefone (ainda não
+    // enviado), só atualiza o produto de interesse em vez de criar outra
+    // linha — sem essa checagem, um cliente que conversa e se despede várias
+    // vezes sem fechar acumularia um follow-up pra cada conversa, e levaria
+    // vários "oi, decidiu?" em sequência quando a fila processasse.
+    const { rows } = await pool.query(
+      `SELECT id FROM whatsapp_followups WHERE phone = $1 AND enviado_em IS NULL LIMIT 1`,
+      [telefoneCliente]
     );
+    if (rows.length > 0) {
+      await pool.query(
+        `UPDATE whatsapp_followups SET produto_interesse = $1, criado_em = now() WHERE id = $2`,
+        [produtoInteresse || null, rows[0].id]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO whatsapp_followups (phone, produto_interesse) VALUES ($1, $2)`,
+        [telefoneCliente, produtoInteresse || null]
+      );
+    }
   } catch (err) {
     console.error('[whatsapp-ia] falha ao marcar interesse sem fechamento:', err.message);
   }
