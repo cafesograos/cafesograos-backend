@@ -740,7 +740,7 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
       } else {
         const telefoneOrder = telefoneParaE164(order.customer_phone);
         if (telefoneOrder) {
-          const primeiroNomeOrder = order.customer_name ? `, ${String(order.customer_name).trim().split(' ')[0]}` : '';
+          const primeiroNomeOrder = order.customer_name ? String(order.customer_name).trim().split(' ')[0] : 'cliente';
           await enviarTemplateWhatsApp(telefoneOrder, WHATSAPP_TEMPLATES.confirmacao_compra, { nome_cliente: primeiroNomeOrder, numero_pedido: order.id });
         }
       }
@@ -3335,7 +3335,7 @@ async function processarFilaBoasVindasWhatsApp() {
       let enviouComSucesso = false;
       if (telefone) {
         const primeiroNomeLead = String(lead.name || '').trim().split(' ')[0];
-        const nomeFormatado = primeiroNomeLead ? `, ${primeiroNomeLead}` : '';
+        const nomeFormatado = primeiroNomeLead || 'cliente';
         try {
           await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.boas_vindas, { nome_cliente: nomeFormatado });
           console.log(`WhatsApp de boas-vindas enviado pro lead #${lead.id}.`);
@@ -3382,7 +3382,7 @@ async function processarFilaFeedbackWhatsApp() {
     for (const pedido of rows) {
       const telefone = telefoneParaE164(pedido.customer_phone);
       if (telefone) {
-        const primeiroNome = pedido.customer_name ? `, ${String(pedido.customer_name).trim().split(' ')[0]}` : '';
+        const primeiroNome = pedido.customer_name ? String(pedido.customer_name).trim().split(' ')[0] : 'cliente';
         try {
           await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.feedback_pedido, { nome_cliente: primeiroNome });
           console.log(`WhatsApp de feedback enviado pro pedido #${pedido.id}.`);
@@ -3419,7 +3419,7 @@ async function processarFilaRecompraWhatsApp() {
     for (const pedido of rows) {
       const telefone = telefoneParaE164(pedido.customer_phone);
       if (telefone) {
-        const primeiroNome = pedido.customer_name ? `, ${String(pedido.customer_name).trim().split(' ')[0]}` : '';
+        const primeiroNome = pedido.customer_name ? String(pedido.customer_name).trim().split(' ')[0] : 'cliente';
         try {
           await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.lembrete_recompra, { nome_cliente: primeiroNome });
           console.log(`WhatsApp de lembrete de recompra enviado pro pedido #${pedido.id}.`);
@@ -3475,7 +3475,7 @@ async function processarFilaReengajamentoWhatsApp() {
       let enviouComSucesso = false;
       if (telefone) {
         const primeiroNome = String(lead.name || '').trim().split(' ')[0];
-        const nomeFormatado = primeiroNome ? `, ${primeiroNome}` : '';
+        const nomeFormatado = primeiroNome || 'cliente';
         const destaque = await buscarMensagemConfig('destaque_reengajamento');
         try {
           await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.reengajamento, { nome_cliente: nomeFormatado, destaque });
@@ -3538,7 +3538,7 @@ async function processarFilaFollowUpInteresse() {
             [telefone]
           );
           const primeiroNome = String(leadRows[0]?.name || '').trim().split(' ')[0];
-          const nomeFormatado = primeiroNome ? `, ${primeiroNome}` : '';
+          const nomeFormatado = primeiroNome || 'cliente';
           await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.followup_interesse, {
             nome_cliente: nomeFormatado,
             produto_interesse: followup.produto_interesse || 'o café que vocês conversaram'
