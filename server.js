@@ -2758,10 +2758,21 @@ app.post('/api/cadastro-popup', formularioLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Informe seu nome e um telefone válido com DDD.' });
     }
 
-    await pool.query(
-      'INSERT INTO leads (name, phone, cadastro_popup, cep) VALUES ($1, $2, true, $3)',
-      [nome, telefone, cepDigits || null]
+    // Evita duplicar o cadastro (reload da página, duplo toque no botão,
+    // ou a pessoa preenchendo o popup de novo em outra visita) — sem essa
+    // checagem, cada cópia vira uma linha própria em "leads" e a fila de
+    // boas-vindas manda a mensagem automática uma vez por linha, ou seja,
+    // a mesma pessoa recebe "boas-vindas" repetida no WhatsApp.
+    const { rows: jaCadastrado } = await pool.query(
+      `SELECT 1 FROM leads WHERE RIGHT(regexp_replace(phone, '\\D', '', 'g'), 11) = RIGHT($1, 11) AND created_at >= now() - interval '30 days' LIMIT 1`,
+      [telefoneDigits]
     );
+    if (jaCadastrado.length === 0) {
+      await pool.query(
+        'INSERT INTO leads (name, phone, cadastro_popup, cep) VALUES ($1, $2, true, $3)',
+        [nome, telefone, cepDigits || null]
+      );
+    }
     res.json({ ok: true, message: 'Cadastro feito! Na sua primeira compra, você ganha 2 Drip Coffee de brinde.' });
   } catch (err) {
     console.error('Erro ao salvar cadastro do popup:', err);
@@ -3078,7 +3089,7 @@ app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) 
         AND NOT EXISTS (
           SELECT 1 FROM orders o
           WHERE o.status = 'approved'
-            AND regexp_replace(o.customer_phone, '\\D', '', 'g') = regexp_replace(l.phone, '\\D', '', 'g')
+            AND RIGHT(regexp_replace(o.customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace(l.phone, '\\D', '', 'g'), 11)
         )
       ORDER BY l.created_at ASC
     `)
@@ -3465,7 +3476,7 @@ async function processarFilaReengajamentoWhatsApp() {
          AND NOT EXISTS (
            SELECT 1 FROM orders o
            WHERE o.status = 'approved'
-             AND regexp_replace(o.customer_phone, '\\D', '', 'g') = regexp_replace(l.phone, '\\D', '', 'g')
+             AND RIGHT(regexp_replace(o.customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace(l.phone, '\\D', '', 'g'), 11)
          )
        ORDER BY l.created_at ASC LIMIT 1`,
       [LIMITE_MENSAGENS]
@@ -3527,7 +3538,7 @@ async function processarFilaFollowUpInteresse() {
         const { rows: comprou } = await pool.query(
           `SELECT 1 FROM orders
            WHERE status = 'approved'
-             AND regexp_replace(customer_phone, '\\D', '', 'g') = regexp_replace($1, '\\D', '', 'g')
+             AND RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace($1, '\\D', '', 'g'), 11)
              AND created_at >= (SELECT criado_em FROM whatsapp_followups WHERE id = $2)
            LIMIT 1`,
           [telefone, followup.id]
