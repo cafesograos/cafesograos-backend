@@ -454,10 +454,13 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cliente.email)) {
       return res.status(400).json({ error: 'E-mail inválido.' });
     }
-    const cpfDigits = String(cliente.cpf || '').replace(/\D/g, '');
-    if (!cpfValido(cpfDigits)) {
-      return res.status(400).json({ error: 'CPF inválido.' });
+    // Aceita CPF válido OU passaporte (cliente estrangeiro) — mesmo critério
+    // já usado no painel do vendedor e na IA do WhatsApp (documentoValido);
+    // antes só o site rejeitava estrangeiro sem CPF nessa mesma compra.
+    if (!documentoValido(cliente.cpf)) {
+      return res.status(400).json({ error: 'Documento inválido — informe um CPF válido ou o número do passaporte (pra cliente estrangeiro).' });
     }
+    const cpfDigits = documentoNormalizado(cliente.cpf);
     // CNPJ é opcional — só quem quer nota fiscal de empresa preenche. Só
     // validamos se a pessoa preencheu algo; campo vazio passa direto.
     const cnpjDigits = String(cliente.cnpj || '').replace(/\D/g, '');
@@ -599,21 +602,11 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     // separada no link de pagamento (não muda o valor cobrado de qualquer forma).
     const itensParaPagamento = line_items.filter((i) => i.unit_price > 0);
 
-    const initPoint = await criarLinkPagamento({
-      items: itensParaPagamento,
-      customer,
-      address: {
-        cep: String(entrega.cep || '').replace(/\D/g, ''),
-        street: entrega.endereco,
-        neighborhood: entrega.bairro,
-        number: entrega.numero,
-        complement: entrega.complemento || undefined
-      },
-      orderNsu,
-      redirectUrl: `${SITE_URL}/sucesso.html`,
-      webhookUrl: `${req.protocol}://${req.get('host')}/webhook-infinitepay`
-    });
-
+    // Salva o pedido ANTES de criar o link de pagamento (não depois): assim,
+    // se der algum erro entre as duas chamadas, o pior cenário é um pedido
+    // "pending" sem link (inofensivo, nunca vira cobrança) — e não, como era
+    // antes, um link de pagamento ativo na InfinitePay sem nenhum pedido
+    // correspondente no banco pra reconciliar quando o webhook chegasse.
     if (pool) {
       await pool.query(
         `INSERT INTO orders
@@ -645,6 +638,21 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
         ]
       );
     }
+
+    const initPoint = await criarLinkPagamento({
+      items: itensParaPagamento,
+      customer,
+      address: {
+        cep: String(entrega.cep || '').replace(/\D/g, ''),
+        street: entrega.endereco,
+        neighborhood: entrega.bairro,
+        number: entrega.numero,
+        complement: entrega.complemento || undefined
+      },
+      orderNsu,
+      redirectUrl: `${SITE_URL}/sucesso.html`,
+      webhookUrl: `${req.protocol}://${req.get('host')}/webhook-infinitepay`
+    });
 
     res.json({ init_point: initPoint });
   } catch (err) {
@@ -2132,10 +2140,14 @@ async function renderizarPainel(req, res, { layout, urlPedidos, mostrarAvaliacoe
     pool.query(`SELECT status, COUNT(*) AS n FROM orders GROUP BY status ORDER BY n DESC`),
     pool.query(`SELECT COUNT(*) AS n FROM orders WHERE status='approved' AND (tracking_code IS NULL OR tracking_code = '')`),
     pool.query(`SELECT COUNT(*) AS n FROM reviews WHERE status='pending'`),
+    // Exclui item com unit_price = 0 (o Drip Coffee de brinde da primeira
+    // compra) — sem esse filtro, cada brinde grátis contava como "vendido"
+    // igual um produto pago, inflando a contagem dele no ranking conforme a
+    // taxa de primeira compra cresce.
     pool.query(`
       SELECT item->>'title' AS titulo, SUM((item->>'quantity')::int) AS qtd
       FROM orders, jsonb_array_elements(items) AS item
-      WHERE status = 'approved'
+      WHERE status = 'approved' AND COALESCE((item->>'unit_price')::numeric, 0) > 0
       GROUP BY titulo
       ORDER BY qtd DESC
       LIMIT 5
@@ -2512,10 +2524,19 @@ function handlerFretePagar(urlBase) {
       // Só chama comprarEtiquetas (que debita a carteira de verdade) se
       // ainda não tiver pago essa etiqueta — se uma tentativa anterior já
       // pagou mas falhou depois (gerar etiqueta ou buscar o rastreio), o
-      // retry cai direto pra gerarEtiquetas sem cobrar de novo.
+      // retry cai direto pra gerarEtiquetas sem cobrar de novo. Marca ANTES
+      // de cobrar, com a condição "ainda não paga" no próprio UPDATE (em vez
+      // de checar e só depois marcar): isso faz o banco decidir atomicamente
+      // quem "ganha" a corrida, pra um clique duplo rápido (ou um retry de
+      // conexão lenta) nunca debitar a carteira duas vezes pela mesma etiqueta.
       if (!order.melhorenvio_etiqueta_paga_em) {
-        await comprarEtiquetas([order.melhorenvio_order_id]);
-        await pool.query('UPDATE orders SET melhorenvio_etiqueta_paga_em = now() WHERE id = $1', [order.id]);
+        const { rowCount } = await pool.query(
+          'UPDATE orders SET melhorenvio_etiqueta_paga_em = now() WHERE id = $1 AND melhorenvio_etiqueta_paga_em IS NULL',
+          [order.id]
+        );
+        if (rowCount > 0) {
+          await comprarEtiquetas([order.melhorenvio_order_id]);
+        }
       }
       await gerarEtiquetas([order.melhorenvio_order_id]);
 
@@ -3047,7 +3068,12 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
       },
       marcarInteresseSemFechamento: async (_telefone, produtoInteresse) => {
         produtoInteresseMarcado = produtoInteresse || 'não especificado';
-      }
+      },
+      // Usa a função real (só leitura, sem risco nenhum na simulação): sem
+      // isso, o teste sempre tratava o número de teste como desconhecido,
+      // então nunca reproduzia como a IA trata um contato cadastrado (ex:
+      // cliente de empresa recorrente, já reconhecido pelo nome).
+      buscarClienteConhecido
     });
     if (resposta) await salvarRespostaAssistente(pool, TELEFONE_TESTE_IA, resposta);
   } catch (err) {
