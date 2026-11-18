@@ -414,6 +414,48 @@ function telefoneParaE164(telefoneRaw) {
   return '+55' + digitos;
 }
 
+// Evita o brinde de boas-vindas em dobro quando duas requisições de criação
+// de pedido pro MESMO telefone chegam quase ao mesmo tempo (duas abas de
+// checkout, ou o cliente mandando "quero comprar" duas vezes pro WhatsApp).
+// Usa pg_advisory_xact_lock (existe só enquanto a transação está aberta, sem
+// deixar nenhum resíduo no banco depois) em vez de um índice único: pedido
+// "pending" nunca é limpo quando o cliente abandona o checkout sem pagar, e
+// um índice que olhasse pending indefinidamente travaria pra sempre quem já
+// abandonou um checkout antigo com brinde — foi exatamente isso que
+// aconteceu na primeira tentativa dessa correção (achado só no deploy,
+// contra dados reais de produção).
+async function inserirPedidoComTravaDeBrinde(pool, telefoneCru, freeGiftDesejado, sqlInsert, montarValores) {
+  const telDigits = String(telefoneCru || '').replace(/\D/g, '').slice(-11);
+  if (!freeGiftDesejado || telDigits.length < 10) {
+    await pool.query(sqlInsert, montarValores(freeGiftDesejado));
+    return freeGiftDesejado;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [telDigits]);
+    // Re-checa DENTRO do lock: se outra requisição pro mesmo telefone já
+    // reservou o brinde enquanto esperávamos a vez, essa aqui não ganha.
+    const { rows: jaReservado } = await client.query(
+      `SELECT 1 FROM orders WHERE free_gift = true AND status IN ('pending', 'approved')
+       AND RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = $1 LIMIT 1`,
+      [telDigits]
+    );
+    const freeGiftFinal = jaReservado.length === 0;
+    if (!freeGiftFinal) {
+      console.warn(`[pedido] Corrida no brinde de boas-vindas pro telefone ${telDigits} — gravando pedido sem free_gift.`);
+    }
+    await client.query(sqlInsert, montarValores(freeGiftFinal));
+    await client.query('COMMIT');
+    return freeGiftFinal;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // Cria um link de pagamento a partir dos itens do carrinho + dados de entrega,
 // salva o pedido no banco e devolve o link (init_point) para o checkout da InfinitePay.
 app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
@@ -635,23 +677,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       const sqlInsert = `INSERT INTO orders
           (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
          VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`;
-      try {
-        await pool.query(sqlInsert, valoresInsert(freeGift));
-      } catch (err) {
-        // idx_orders_freegift_reservado barrou: outro pedido desse mesmo
-        // telefone já reservou o brinde há milissegundos (duas abas de
-        // checkout, por exemplo) — grava o pedido sem o brinde em vez de
-        // devolver erro pro cliente. O item "brinde" ainda aparece na lista
-        // de itens (não dá pra desfazer o peso/frete já calculados com ele),
-        // mas free_gift fica false, então ninguém recebe 2 brindes de verdade.
-        if (err.code === '23505' && err.constraint === 'idx_orders_freegift_reservado') {
-          console.warn(`[pedido] Corrida no brinde de boas-vindas pro telefone ${cliente.telefone} — gravando pedido sem free_gift.`);
-          freeGift = false;
-          await pool.query(sqlInsert, valoresInsert(false));
-        } else {
-          throw err;
-        }
-      }
+      freeGift = await inserirPedidoComTravaDeBrinde(pool, cliente.telefone, freeGift, sqlInsert, valoresInsert);
     }
 
     const initPoint = await criarLinkPagamento({
@@ -1880,20 +1906,7 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
     shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
     freeGiftFinal
   ];
-  try {
-    await pool.query(sqlInsertIA, valoresInsertIA(brindeQuantidade > 0));
-  } catch (err) {
-    // Mesma trava do checkout do site (idx_orders_freegift_reservado): se
-    // esse telefone já tem outro pedido com brinde reservado há milissegundos
-    // (cliente mandando "quero comprar" em duas conversas/aparelhos quase ao
-    // mesmo tempo), grava sem o brinde em vez de travar a criação do pedido.
-    if (err.code === '23505' && err.constraint === 'idx_orders_freegift_reservado') {
-      console.warn(`[whatsapp-ia] Corrida no brinde de boas-vindas pro telefone ${telefone} — gravando pedido sem free_gift.`);
-      await pool.query(sqlInsertIA, valoresInsertIA(false));
-    } else {
-      throw err;
-    }
-  }
+  await inserirPedidoComTravaDeBrinde(pool, telefone, brindeQuantidade > 0, sqlInsertIA, valoresInsertIA);
   console.log(`[whatsapp-ia] pedido criado — ${orderNsu} (${nome}, ${reais(total)})`);
 
   return { link: initPoint, resumo: itensParaPedido, shippingCost, shippingCarrier, total };
@@ -3915,7 +3928,16 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
 });
 
 const PORT = process.env.PORT || 3000;
-initDb().finally(() => {
+initDb().catch((err) => {
+  // Sem esse catch, uma migração que falhasse virava uma rejeição de
+  // promise não tratada — aparecia nos logs como um stack trace solto
+  // alguns instantes DEPOIS de "Servidor rodando na porta...", sem
+  // nenhuma pista de que veio do initDb. Agora fica claro, com destaque,
+  // de onde veio e o que quebrou (o .finally() abaixo continua subindo o
+  // servidor mesmo assim, igual já era antes — uma tabela/índice que não
+  // foi criado não deveria, sozinho, tirar o site do ar).
+  console.error('[FALHA NA MIGRAÇÃO DO BANCO] initDb() rejeitou:', err);
+}).finally(() => {
   app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
   if (pool) {
     agendarBackupDiario(pool);
