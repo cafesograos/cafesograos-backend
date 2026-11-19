@@ -414,40 +414,108 @@ function telefoneParaE164(telefoneRaw) {
   return '+55' + digitos;
 }
 
-// Evita o brinde de boas-vindas em dobro quando duas requisições de criação
-// de pedido pro MESMO telefone chegam quase ao mesmo tempo (duas abas de
-// checkout, ou o cliente mandando "quero comprar" duas vezes pro WhatsApp).
-// Usa pg_advisory_xact_lock (existe só enquanto a transação está aberta, sem
-// deixar nenhum resíduo no banco depois) em vez de um índice único: pedido
-// "pending" nunca é limpo quando o cliente abandona o checkout sem pagar, e
-// um índice que olhasse pending indefinidamente travaria pra sempre quem já
-// abandonou um checkout antigo com brinde — foi exatamente isso que
-// aconteceu na primeira tentativa dessa correção (achado só no deploy,
-// contra dados reais de produção).
-async function inserirPedidoComTravaDeBrinde(pool, telefoneCru, freeGiftDesejado, sqlInsert, montarValores) {
-  const telDigits = String(telefoneCru || '').replace(/\D/g, '').slice(-11);
-  if (!freeGiftDesejado || telDigits.length < 10) {
-    await pool.query(sqlInsert, montarValores(freeGiftDesejado));
-    return freeGiftDesejado;
+// O brinde de boas-vindas (free_gift) tem DOIS efeitos bem diferentes, e esta
+// função trata cada um com a chave certa:
+//
+// 1) O item físico (Drip Coffee grátis) já vai dentro de `items` desde a
+//    CRIAÇÃO do pedido — não tem como "tirar" depois. Se dois pedidos
+//    concorrentes do mesmo cliente (duas abas, ou site + WhatsApp) nascerem
+//    com free_gift e os DOIS forem aprovados, a única trava possível aqui é
+//    avisar o humano que prepara o envio (orders.free_gift_duplicado, lido
+//    no painel admin) pra não mandar o brinde físico de novo. Esse aviso
+//    casa por TELEFONE OU E-MAIL — falso positivo (telefone compartilhado
+//    por família) é aceitável porque é só um aviso revisado por humano, e
+//    sem o telefone como chave os pedidos do WhatsApp (sem e-mail) ficariam
+//    sem proteção nenhuma.
+//
+// 2) O cupom de 5% é criado de verdade aqui dentro, sem revisão humana —
+//    esse sim precisa de uma chave precisa. Usa só e-mail (o que o resto do
+//    sistema já usa pra reconhecer o cliente ao aplicar o cupom
+//    automaticamente — ver comentário em db.js na criação da tabela
+//    discounts): travar o CUPOM por telefone deixaria dois buracos — o
+//    mesmo cliente com telefones diferentes ainda duplicaria o cupom, e um
+//    telefone compartilhado negaria o cupom legítimo de outra pessoa.
+//
+// Em ambos os casos, o lock é no momento da APROVAÇÃO (dentro de
+// atualizarStatusPedido), não na criação do pedido: na criação não dá pra
+// saber se um "pending" concorrente vai ser abandonado ou aprovado depois, e
+// qualquer janela de tempo pra adivinhar isso sempre deixa um caso residual
+// (já tentado e descartado — ver histórico de commits). Checar
+// orders.status também não bastaria pro cupom, porque esse status é escrito
+// numa UPDATE separada, fora do lock — duas aprovações quase simultâneas do
+// mesmo cliente podiam ver uma a outra como já aprovada e as duas deixarem
+// de gerar o cupom; por isso o cupom se verifica contra a própria tabela
+// discounts, escrita dentro do mesmo lock que o lê.
+async function gerarCupomBrindeSemDuplicar(pool, order) {
+  const telDigits = String(order.customer_phone || '').replace(/\D/g, '').slice(-11);
+  const telValido = telDigits.length >= 10 ? telDigits : null;
+  const emailNorm = order.customer_email ? order.customer_email.trim().toLowerCase() : null;
+  if (!telValido && !emailNorm) {
+    console.warn(`[pedido] Pedido #${order.id} com free_gift sem e-mail nem telefone válido — sem como checar duplicidade.`);
+    return;
   }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [telDigits]);
-    // Re-checa DENTRO do lock: se outra requisição pro mesmo telefone já
-    // reservou o brinde enquanto esperávamos a vez, essa aqui não ganha.
-    const { rows: jaReservado } = await client.query(
-      `SELECT 1 FROM orders WHERE free_gift = true AND status IN ('pending', 'approved')
-       AND RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = $1 LIMIT 1`,
-      [telDigits]
+    // Pede os dois locks (quando existirem) na mesma ordem sempre — telefone
+    // antes de e-mail — pra nunca inverter a ordem entre chamadas
+    // concorrentes e assim nunca dar deadlock. Travar pelas duas chaves (e
+    // não só uma) é o que garante que um pedido do WhatsApp (sem e-mail, só
+    // telefone) serializa corretamente contra um pedido do site (com e-mail
+    // e telefone) do mesmo cliente.
+    if (telValido) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`brinde_tel:${telValido}`]);
+    if (emailNorm) await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`brinde_email:${emailNorm}`]);
+
+    // Aviso de brinde físico duplicado (item já vai nos `items` do pedido
+    // desde a criação, então não tem como "tirar" depois — só avisar o
+    // humano que prepara o envio pra não mandar de novo). Aqui vale casar
+    // por telefone OU e-mail: é só um aviso pra revisão humana, então pecar
+    // pro lado de avisar demais (ex.: telefone compartilhado por família) é
+    // preferível a não avisar nunca os pedidos do WhatsApp (sem e-mail).
+    const { rows: irmaosAprovadosComBrinde } = await client.query(
+      `SELECT id FROM orders WHERE free_gift = true AND status = 'approved' AND id <> $1
+       AND (
+         ($2::text IS NOT NULL AND RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = $2)
+         OR ($3::text IS NOT NULL AND lower(trim(customer_email)) = $3)
+       )`,
+      [order.id, telValido, emailNorm]
     );
-    const freeGiftFinal = jaReservado.length === 0;
-    if (!freeGiftFinal) {
-      console.warn(`[pedido] Corrida no brinde de boas-vindas pro telefone ${telDigits} — gravando pedido sem free_gift.`);
+    if (irmaosAprovadosComBrinde.length > 0) {
+      // Marca os DOIS lados quando isso acontece (não só o pedido atual) —
+      // não dá pra saber de forma confiável qual dos pedidos concorrentes é
+      // "o original", e o aviso é só pra revisão humana antes de enviar; o
+      // painel mostra o aviso em qualquer pedido aprovado que tenha outro
+      // irmão aprovado com free_gift=true, pra o dono conferir os dois e
+      // decidir enviar o brinde físico uma vez só. Sem isso, o pedido que
+      // foi aprovado PRIMEIRO nunca seria revisitado pra ganhar o aviso
+      // quando o segundo aparecesse depois.
+      const idsIrmaos = irmaosAprovadosComBrinde.map((r) => r.id);
+      console.warn(`[pedido] Pedido #${order.id} aprovado — existe(m) outro(s) pedido(s) aprovado(s) deste cliente também com free_gift=true (#${idsIrmaos.join(', #')}). Marcando free_gift_duplicado nos dois lados pra o dono conferir antes de enviar o brinde físico.`);
+      await client.query('UPDATE orders SET free_gift_duplicado = true WHERE id = ANY($1::int[])', [[order.id, ...idsIrmaos]]);
     }
-    await client.query(sqlInsert, montarValores(freeGiftFinal));
+
+    // Cupom de 5%: diferente do aviso acima, isso é automático (sem revisão
+    // humana) e some de verdade com dinheiro, então a chave precisa ser
+    // precisa — só e-mail (ver comentário no topo desta função sobre por
+    // que telefone sozinho deixaria buracos nos dois sentidos).
+    if (!emailNorm) {
+      console.warn(`[pedido] Pedido #${order.id} com free_gift mas sem e-mail — cupom de boas-vindas não pôde ser gerado.`);
+    } else {
+      const { rows: jaGerado } = await client.query(
+        `SELECT 1 FROM discounts WHERE lower(trim(customer_email)) = $1 LIMIT 1`,
+        [emailNorm]
+      );
+      if (jaGerado.length > 0) {
+        console.warn(`[pedido] Cupom de boas-vindas já usado pelo e-mail ${emailNorm} — pedido #${order.id} aprovado sem gerar cupom novo.`);
+      } else {
+        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        await client.query(
+          'INSERT INTO discounts (customer_email, percent, expires_at) VALUES ($1, 5, $2)',
+          [order.customer_email, expiresAt]
+        );
+      }
+    }
     await client.query('COMMIT');
-    return freeGiftFinal;
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -677,7 +745,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       const sqlInsert = `INSERT INTO orders
           (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
          VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`;
-      freeGift = await inserirPedidoComTravaDeBrinde(pool, cliente.telefone, freeGift, sqlInsert, valoresInsert);
+      await pool.query(sqlInsert, valoresInsert(freeGift));
     }
 
     const initPoint = await criarLinkPagamento({
@@ -750,11 +818,12 @@ async function atualizarStatusPedido(preferenceId, novoStatus, paymentId) {
     // aprovado — evita gerar cupom pra carrinho abandonado ou queimar
     // o cupom de alguém que desistiu no meio do checkout.
     if (order.free_gift) {
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-      await pool.query(
-        'INSERT INTO discounts (customer_email, percent, expires_at) VALUES ($1, 5, $2)',
-        [order.customer_email, expiresAt]
-      );
+      try {
+        await gerarCupomBrindeSemDuplicar(pool, order);
+      } catch (err) {
+        console.error(`Falha ao gerar cupom de brinde (pedido #${order.id}):`, err);
+        Sentry.captureException(err, { extra: { preferenceId, orderId: order.id, etapa: 'cupom_brinde' } });
+      }
     }
     if (order.discount_id) {
       await pool.query('UPDATE discounts SET used_at = now() WHERE id = $1', [order.discount_id]);
@@ -1906,7 +1975,7 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
     shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
     freeGiftFinal
   ];
-  await inserirPedidoComTravaDeBrinde(pool, telefone, brindeQuantidade > 0, sqlInsertIA, valoresInsertIA);
+  await pool.query(sqlInsertIA, valoresInsertIA(brindeQuantidade > 0));
   console.log(`[whatsapp-ia] pedido criado — ${orderNsu} (${nome}, ${reais(total)})`);
 
   return { link: initPoint, resumo: itensParaPedido, shippingCost, shippingCarrier, total };
@@ -2324,10 +2393,16 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
       </div>
       ${(o.free_gift || o.discount_percent || o.tracking_code) ? `
         <div class="pedido-selos">
-          ${o.free_gift ? '<span class="selo">🎁 Brinde</span>' : ''}
+          ${o.free_gift_duplicado ? '<span class="selo" style="background:#c0392b;color:#fff;">⚠️ Este cliente tem outro pedido aprovado com brinde — confira antes de enviar de novo</span>' : (o.free_gift ? '<span class="selo">🎁 Brinde</span>' : '')}
           ${(o.discount_percent && mostrarTotal) ? `<span class="selo">-${escapeHtml(o.discount_percent)}% cupom</span>` : ''}
           ${o.tracking_code ? `<span class="selo">📦 Enviado: ${escapeHtml(o.tracking_code)}</span>` : ''}
         </div>
+        ${(o.free_gift_duplicado && !somenteLeitura) ? `
+          <form method="POST" action="${urlBase}/${o.id}/resolver-brinde-duplicado" style="margin-top:4px;">
+            <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
+            <button type="submit" class="btn-mini">Já conferi — remover aviso</button>
+          </form>
+        ` : ''}
       ` : ''}
       ${o.status === 'pending' && (Date.now() - new Date(o.created_at).getTime()) > 10 * 60 * 1000 ? `
         <div class="pedido-detalhe" style="margin-top:8px;color:#B7791F;">⚠️ Não pago há mais de 10 min — a InfinitePay não nos avisa se o pagamento falhar, então confira no <a href="https://app.infinitepay.io/" target="_blank" rel="noopener noreferrer">painel da InfinitePay</a>${mostrarTotal ? ' pela data/valor acima' : ''}${o.customer_phone ? ` ou chame a pessoa no <a href="https://wa.me/55${escapeHtml(o.customer_phone.replace(/\D/g, ''))}" target="_blank" rel="noopener noreferrer">WhatsApp</a>` : ''}.</div>
@@ -2645,6 +2720,25 @@ function handlerEntrada(urlBase) {
 }
 app.post('/admin/pedidos/:id/entrada', requireAdmin, express.urlencoded({ extended: false }), handlerEntrada('/admin/pedidos'));
 app.post('/vendedor/pedidos/:id/entrada', requireVendedor, express.urlencoded({ extended: false }), handlerEntrada('/vendedor/pedidos'));
+
+// "Já conferi" do aviso de brinde físico duplicado (free_gift_duplicado) —
+// esse campo só é ligado pelo sistema (gerarCupomBrindeSemDuplicar), nunca
+// manualmente, então aqui é só dispensar depois que o dono já olhou os
+// pedidos envolvidos e decidiu o que fazer (não é um toggle como a entrada
+// no sistema de vendas, porque marcar de volta não faria sentido sem o
+// sistema ter detectado a duplicidade de novo).
+function handlerResolverBrindeDuplicado(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+    await pool.query('UPDATE orders SET free_gift_duplicado = false WHERE id = $1', [req.params.id]);
+    logAdminAcao(req, 'brinde_duplicado_resolvido', `pedido #${req.params.id}`);
+
+    res.redirect(voltarParaPedido(urlBase, req.body?.status, req.params.id));
+  });
+}
+app.post('/admin/pedidos/:id/resolver-brinde-duplicado', requireAdmin, express.urlencoded({ extended: false }), handlerResolverBrindeDuplicado('/admin/pedidos'));
+app.post('/vendedor/pedidos/:id/resolver-brinde-duplicado', requireVendedor, express.urlencoded({ extended: false }), handlerResolverBrindeDuplicado('/vendedor/pedidos'));
 
 // Exclui um pedido (ex.: pedidos de teste feitos durante o desenvolvimento).
 // Só no painel admin de propósito — ação destrutiva, não faz parte do que o

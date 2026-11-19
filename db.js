@@ -44,6 +44,18 @@ async function initDb() {
   // garante que o campo apareça sem precisar recriar a tabela.
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_code TEXT;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS free_gift BOOLEAN DEFAULT false;`);
+  // O item físico do brinde (Drip Coffee grátis) já vai dentro de `items`
+  // desde a CRIAÇÃO do pedido — diferente do cupom de 5% (que só existe na
+  // aprovação), não tem como "tirar" o brinde físico de um pedido depois
+  // que ele foi criado. Por isso, se dois pedidos concorrentes do mesmo
+  // cliente (duas abas, ou site + WhatsApp) ambos nascerem com free_gift e
+  // os DOIS forem aprovados, marcamos os DOIS lados (dentro de
+  // gerarCupomBrindeSemDuplicar, em server.js — não dá pra saber qual dos
+  // dois é "o original") pra avisar no painel admin que esse brinde físico
+  // NÃO deve ser enviado de novo — o negócio é
+  // operado manualmente, então o alerta pro humano que prepara o envio é a
+  // trava real aqui, não um bloqueio automático na criação do pedido.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS free_gift_duplicado BOOLEAN DEFAULT false;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_id INTEGER;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_percent NUMERIC;`);
   // Marcação manual do admin: "já lancei esse pedido no meu sistema de
@@ -277,13 +289,24 @@ async function initDb() {
   // de aplicação — nem numa corrida bem no limite.
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_discount_reservado ON orders (discount_id) WHERE discount_id IS NOT NULL AND status IN ('pending', 'approved');`);
 
-  // (Corrida do brinde de boas-vindas: resolvida com pg_advisory_xact_lock
-  // em server.js, não com índice único — pedido "pending" nunca é limpo do
-  // banco quando o cliente abandona o checkout sem pagar, então um índice
-  // que olhasse status IN ('pending','approved') travaria pra sempre
-  // qualquer cliente que já tivesse abandonado um checkout antigo com
-  // brinde. Um lock de transação, ao contrário, só existe enquanto o
-  // request está rodando.)
+  // (Corrida do brinde de boas-vindas: resolvida em server.js dentro de
+  // gerarCupomBrindeSemDuplicar, no momento da APROVAÇÃO do pedido — não na
+  // criação. A trava usa pg_advisory_xact_lock por e-mail normalizado e checa
+  // se já existe linha em discounts pra esse e-mail (reaproveitando
+  // idx_discounts_email_norm, de cima), tudo dentro da mesma transação que
+  // faz o INSERT do cupom. Checar orders.status não funciona porque esse
+  // status é escrito numa UPDATE separada, fora do lock — duas aprovações
+  // quase simultâneas do mesmo cliente podiam ver uma a outra como já
+  // aprovada e as duas deixarem de gerar o cupom. E-mail, não telefone, é a
+  // chave certa aqui porque é o que o resto do sistema já usa pra reconhecer
+  // o cliente ao aplicar o cupom automaticamente (ver comentário acima de
+  // CREATE TABLE discounts) — travar por telefone deixava dois buracos: o
+  // mesmo cliente com dois pedidos de telefones diferentes ainda duplicava
+  // o cupom, e um telefone compartilhado por duas pessoas diferentes negava
+  // o brinde legítimo da segunda. Um índice único em orders, como o de cima,
+  // não serviria aqui pelo mesmo motivo de sempre: pedido "pending" nunca é
+  // limpo do banco, então um índice olhando status IN ('pending','approved')
+  // travaria pra sempre quem já abandonou um checkout antigo com brinde.)
 
   console.log('Banco de dados pronto (tabelas orders, reviews, discounts, leads).');
 }
