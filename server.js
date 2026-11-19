@@ -1900,6 +1900,132 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
   ` }));
 }));
 
+// Quantos Drip Coffee de brinde de boas-vindas esse telefone tem direito
+// (0 se já comprou aprovado antes, 1 na primeira compra, 2 se também veio
+// do cadastro antecipado no popup) — extraído daqui pra ser a ÚNICA fonte
+// dessa regra entre a prévia de frete e a criação real do pedido (ver as
+// duas funções logo abaixo): tinha duas cópias quase iguais, e a da prévia
+// não checava o cadastro_popup, então um cliente elegível aos 2 Drip Coffee
+// via um frete cotado mais leve do que o pedido real ia cobrar depois.
+// Telefone vazio/ausente ainda conta como elegível a 1 (igual ao código
+// original de criarPedidoViaAtendimento): nunca bate em "já comprou" nem em
+// "tel>=10 dígitos", então cai no caso simples de primeira compra.
+async function brindeQuantidadeViaAtendimento(telefone) {
+  if (!pool) return 0;
+  const telefoneOuVazio = String(telefone || '');
+  const { rows: jaComprou } = await pool.query(
+    `SELECT 1 FROM orders WHERE status = 'approved'
+     AND RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace($1, '\\D', '', 'g'), 11) LIMIT 1`,
+    [telefoneOuVazio]
+  );
+  if (jaComprou.length > 0) return 0;
+  const telefoneDigits = telefoneOuVazio.replace(/\D/g, '');
+  if (telefoneDigits.length < 10) return 1;
+  // RIGHT(...,11) nos dois lados, igual ao resto do arquivo: o telefone que
+  // chega aqui vem do WhatsApp (carrega o "55" na frente), mas leads.phone é
+  // salvo como a pessoa digitou no popup do site (sem "55") — comparar sem
+  // normalizar os dois pros mesmos 11 dígitos nunca batia, e o cliente que
+  // se cadastrou no popup ficava preso em 1 Drip Coffee em vez de 2.
+  const { rows: cadastroPopup } = await pool.query(
+    `SELECT 1 FROM leads WHERE cadastro_popup = true AND RIGHT(regexp_replace(phone, '\\D', '', 'g'), 11) = RIGHT($1, 11) LIMIT 1`,
+    [telefoneDigits]
+  );
+  return cadastroPopup.length > 0 ? 2 : 1;
+}
+
+// Resolve os itens que a IA mandou (produtoId + quantity) contra o catálogo
+// real do servidor, descartando produto desconhecido e limitando a
+// quantidade a 10 — extraído pelo mesmo motivo das duas funções acima: a
+// prévia de frete e a criação real do pedido precisam validar os itens do
+// mesmo jeito, senão um item que a prévia aceita mas o pedido real rejeita
+// (ou vice-versa) faz os dois discordarem sobre o que está sendo calculado.
+function validarItensViaAtendimento(itens) {
+  return (itens || [])
+    .map((item) => ({
+      produto: PRODUCTS.find((p) => p.id === item.produtoId),
+      quantity: Math.min(10, Math.max(0, parseInt(item.quantity) || 0))
+    }))
+    .filter(({ produto, quantity }) => produto && quantity > 0);
+}
+
+// Peso total (considerando o brinde) e subtotal de catálogo pra um conjunto
+// de itens já validados — extraído pelo mesmo motivo de brindeQuantidadeViaAtendimento
+// acima: a prévia de frete e a criação real do pedido precisam concordar
+// nesse número, senão o frete cotado na conversa diverge do cobrado depois.
+function pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade) {
+  const subtotalCatalogo = itensValidados.reduce((sum, { produto, quantity }) => sum + produto.preco * quantity, 0);
+  let pesoTotalKg = itensValidados.reduce((sum, { produto, quantity }) => sum + ((produto.pesoGramas || 300) * quantity) / 1000, 0);
+  const brindeProduto = brindeQuantidade > 0 ? PRODUCTS.find((p) => p.id === 'drip-coffee-caixa-10') : null;
+  if (brindeProduto) pesoTotalKg += ((brindeProduto.pesoGramas || 400) * brindeQuantidade) / 1000;
+  return { pesoTotalKg, subtotalCatalogo, brindeProduto };
+}
+
+// Rate limit em memória pra calcular_frete via WhatsApp — a ferramenta
+// chama a API real da Melhor Envio a cada chamada, mas (diferente do
+// endpoint público "/api/calcular-frete") não passa pelo freteLimiter
+// (middleware HTTP por IP, que não existe aqui dentro de uma tool call da
+// IA) — sem isso, qualquer conversa poderia pedir frete pra dezenas de CEPs
+// seguidos sem nenhum freio. Mesmo limite generoso do site: 60 por 15 min,
+// mas por telefone em vez de IP. Limpa entradas velhas periodicamente —
+// sem isso, cada telefone novo que já perguntou o frete uma vez fica pra
+// sempre no Map, crescendo sem limite ao longo de meses de uso.
+const chamadasFreteWhatsApp = new Map(); // telefone -> timestamps (ms)
+const JANELA_FRETE_WHATSAPP_MS = 15 * 60 * 1000;
+function freteWhatsAppDentroDoLimite(telefone) {
+  // O número de teste (/admin/whatsapp/testar-ia) não é tráfego de cliente
+  // real — é o dono treinando/validando a IA, às vezes em várias rodadas
+  // seguidas de propósito. Sem essa isenção, uma sessão de teste intensa
+  // esbarraria num throttle pensado pra abuso vindo de fora.
+  if (telefone === TELEFONE_TESTE_IA) return true;
+  const agora = Date.now();
+  const chamadas = (chamadasFreteWhatsApp.get(telefone) || []).filter((t) => agora - t < JANELA_FRETE_WHATSAPP_MS);
+  if (chamadas.length >= 60) return false;
+  chamadas.push(agora);
+  chamadasFreteWhatsApp.set(telefone, chamadas);
+  return true;
+}
+setInterval(() => {
+  const agora = Date.now();
+  for (const [telefone, chamadas] of chamadasFreteWhatsApp) {
+    const restantes = chamadas.filter((t) => agora - t < JANELA_FRETE_WHATSAPP_MS);
+    if (restantes.length === 0) chamadasFreteWhatsApp.delete(telefone);
+    else chamadasFreteWhatsApp.set(telefone, restantes);
+  }
+}, 30 * 60 * 1000);
+
+// Prévia de frete pra IA do WhatsApp: só CEP + itens que o cliente está
+// considerando, sem nome/CPF/endereço completo e sem criar nada — o mesmo
+// cálculo que o site já expõe em "/api/calcular-frete" nas páginas de
+// produto, só que aqui a IA pode usar no meio da conversa, antes de pedir
+// os dados completos pro fechamento (ver ferramenta calcular_frete e a
+// regra FRETE no prompt). Inclui o peso do brinde de boas-vindas pra essa
+// prévia bater com o valor que o pedido real vai ter se ele fechar depois.
+async function calcularFretePreviewViaAtendimento({ cep, telefone, itens }) {
+  // Falha explícita, igual criarPedidoViaAtendimento — sem isso,
+  // brindeQuantidadeViaAtendimento sozinha trataria o pool ausente como "0
+  // brinde" (retorno silencioso), e a prévia cotaria um frete mais leve do
+  // que o pedido real cobraria quando o pool voltasse a funcionar.
+  if (!pool) throw new Error('Banco de dados não configurado.');
+  const itensValidados = validarItensViaAtendimento(itens);
+  if (itensValidados.length === 0) throw new Error('Nenhum item válido informado.');
+  if (!cep) throw new Error('CEP não informado.');
+  // telefone sempre vem preenchido aqui (injetado pelo dispatch da IA e
+  // pelo endpoint de teste, nunca chamado diretamente sem ele) — sem
+  // fallback pro CEP, que juntaria clientes diferentes pedindo o mesmo CEP
+  // popular num único balde de limite.
+  if (!freteWhatsAppDentroDoLimite(telefone)) {
+    throw new Error('Muitos cálculos de frete seguidos — espere um pouco antes de tentar de novo.');
+  }
+
+  const brindeQuantidade = await brindeQuantidadeViaAtendimento(telefone);
+  const { pesoTotalKg, subtotalCatalogo } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
+
+  const freteCalculado = await calcularFrete(cep, pesoTotalKg);
+  const freteGratis = freteGratisParaCep(cep, subtotalCatalogo);
+
+  return { valor: freteGratis ? 0 : freteCalculado.valor, gratis: freteGratis, prazoDias: freteCalculado.prazoDias };
+}
+
 // Cria um pedido de verdade (com link de pagamento InfinitePay) a partir da
 // conversa da IA no WhatsApp — mesma ideia do "/vendedor/novo-pedido" (preço
 // e peso sempre do catálogo do servidor, nunca do que a IA "disse"), mas com
@@ -1909,12 +2035,7 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
 async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, numero, complemento, bairro, cidade, estado, itens, araraquaraConfirmado }) {
   if (!pool) throw new Error('Banco de dados não configurado.');
 
-  const itensValidados = (itens || [])
-    .map((item) => ({
-      produto: PRODUCTS.find((p) => p.id === item.produtoId),
-      quantity: Math.min(10, Math.max(0, parseInt(item.quantity) || 0))
-    }))
-    .filter(({ produto, quantity }) => produto && quantity > 0);
+  const itensValidados = validarItensViaAtendimento(itens);
   if (itensValidados.length === 0) throw new Error('Nenhum item válido informado.');
 
   if (!documentoValido(cpf)) throw new Error('Documento inválido — peça o CPF ou, se for estrangeiro, o número do passaporte.');
@@ -1922,41 +2043,22 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
     throw new Error('Faltam dados obrigatórios do cliente ou do endereço.');
   }
 
-  // Brinde de boas-vindas: mesma detecção de "primeira compra" do checkout
-  // do site (por telefone, já que aqui não necessariamente temos e-mail) —
-  // 1 Drip Coffee grátis, ou 2 se o telefone bate com um cadastro no popup.
-  let brindeQuantidade = 0;
-  const { rows: jaComprou } = await pool.query(
-    `SELECT 1 FROM orders WHERE status = 'approved'
-     AND RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace($1, '\\D', '', 'g'), 11) LIMIT 1`,
-    [telefone || '']
-  );
-  if (jaComprou.length === 0) {
-    brindeQuantidade = 1;
-    const telefoneDigits = String(telefone || '').replace(/\D/g, '');
-    if (telefoneDigits.length >= 10) {
-      const { rows: cadastroPopup } = await pool.query(
-        `SELECT 1 FROM leads WHERE cadastro_popup = true AND regexp_replace(phone, '\\D', '', 'g') = $1 LIMIT 1`,
-        [telefoneDigits]
-      );
-      if (cadastroPopup.length > 0) brindeQuantidade = 2;
-    }
-  }
+  // Brinde de boas-vindas (ver brindeQuantidadeViaAtendimento acima — fonte
+  // única dessa regra, compartilhada com a prévia de frete).
+  const brindeQuantidade = await brindeQuantidadeViaAtendimento(telefone);
+
+  const { pesoTotalKg, subtotalCatalogo, brindeProduto } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
 
   const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
     id: produto.id,
     title: produto.nome, quantity, unit_price: produto.preco
   }));
-  const brindeProduto = brindeQuantidade > 0 ? PRODUCTS.find((p) => p.id === 'drip-coffee-caixa-10') : null;
   if (brindeProduto) {
     const sufixo = brindeQuantidade > 1 ? ' — Brinde de boas-vindas (cadastro antecipado)' : ' — Brinde de boas-vindas';
     itensParaPedido.push({ title: `${brindeProduto.nome}${sufixo}`, quantity: brindeQuantidade, unit_price: 0 });
   }
 
   const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
-  const subtotalCatalogo = itensValidados.reduce((sum, { produto, quantity }) => sum + produto.preco * quantity, 0);
-  let pesoTotalKg = itensValidados.reduce((sum, { produto, quantity }) => sum + ((produto.pesoGramas || 300) * quantity) / 1000, 0);
-  if (brindeProduto) pesoTotalKg += ((brindeProduto.pesoGramas || 400) * brindeQuantidade) / 1000;
 
   const freteCalculado = await calcularFrete(cep, pesoTotalKg);
   // Mesma regra do checkout do site agora: decidida pelo CEP real do pedido
@@ -3210,6 +3312,10 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
         aviso: 'TESTE: nenhum pedido real foi criado nem link de pagamento gerado — isso é só uma simulação pro dono treinar a IA.',
         link: 'https://exemplo.invalido/pagamento-de-teste'
       }),
+      // calcular_frete não cria nada, só consulta o cálculo (igual à
+      // calculadora de frete do site) — sem risco nenhum usar a função real
+      // aqui também, igual já acontece com buscarClienteConhecido abaixo.
+      calcularFretePreviewViaAtendimento,
       escalarAtendimento: async (_telefoneCliente, motivo) => {
         motivoEscalado = motivo || 'não especificado';
       },
@@ -4115,7 +4221,7 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   console.log(`[whatsapp-ia] gerando resposta pra ${telefone}...`);
   try {
     const { texto: resposta, partes, esperaMs } = await responderMensagem(telefone, texto, {
-      pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento
+      pool, PRODUCTS, criarPedidoViaAtendimento, calcularFretePreviewViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento
     });
     console.log(`[whatsapp-ia] resposta gerada pra ${telefone} (espera ${Math.round(esperaMs / 1000)}s, ${partes.length} msg(s)): "${(resposta || '').slice(0, 80)}"`);
     if (resposta) {

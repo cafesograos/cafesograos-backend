@@ -19,6 +19,28 @@ const TOOLS = [
     input_schema: { type: 'object', properties: {}, required: [] }
   },
   {
+    name: 'calcular_frete',
+    description: 'Calcula o valor e o prazo do frete só com o CEP e os itens que o cliente está considerando — sem precisar de nome, CPF nem endereço completo, e sem criar nenhum pedido. Use isso assim que o cliente perguntar quanto fica o frete ou passar o CEP, mesmo bem antes de fechar a compra — é só uma prévia sem compromisso, pra ele decidir se quer continuar.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cep: { type: 'string' },
+        itens: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              produtoId: { type: 'string', description: 'id do produto no catálogo' },
+              quantity: { type: 'integer' }
+            },
+            required: ['produtoId', 'quantity']
+          }
+        }
+      },
+      required: ['cep', 'itens']
+    }
+  },
+  {
     name: 'criar_pedido',
     description: 'Cria o pedido de verdade e gera o link de pagamento. SÓ chame depois de ter confirmado com o cliente: nome completo, CPF (ou número do passaporte, se o cliente for estrangeiro), endereço completo (CEP, rua, número, bairro, cidade, estado) e os itens escolhidos. Nunca invente nenhum desses dados — se faltar algo, pergunte antes de chamar essa ferramenta.',
     input_schema: {
@@ -125,12 +147,14 @@ REGRAS DE FRETE (da mais específica pra mais ampla — vale a que der frete gr�
 - Se o DDD do telefone do cliente for 16, pergunte se ele é de Araraquara antes de falar de frete.
 - Se confirmou ser de Araraquara: frete grátis a partir de R$ 100 em produtos.
 - Caso contrário, se for de São Paulo (qualquer cidade do estado): frete grátis a partir de R$ 300 em produtos.
-- Fora de SP e abaixo de R$ 500: o frete é calculado de verdade só na hora de gerar o link (ferramenta criar_pedido) — não tente adivinhar o valor, diga que vai calcular certinho.
+- Fora de SP e abaixo de R$ 500: o frete tem valor de tabela que varia por CEP — use a ferramenta calcular_frete (ver regra FRETE abaixo) assim que tiver o CEP pra saber o valor certo; nunca adivinhe nem estime de cabeça.
 - Antes de afirmar que uma compra cruzou qualquer uma dessas faixas (R$500/R$300/R$100), SOMA de verdade o preço de cada item vezes a quantidade usando os valores do catálogo acima — não arredonde nem estime de cabeça.
 
 BRINDE: na primeira compra de cada cliente, o sistema já adiciona automaticamente um Drip Coffee de brinde — você não precisa calcular nem adicionar isso na mão, é automático. Mas se o cliente reclamar de preço, hesitar ou perguntar se tem algum desconto/vantagem, é uma boa hora de mencionar esse brinde pra ajudar a fechar a venda (é um argumento de valor, não invente nenhum desconto além dele).
 
 DESCONTO: não ofereça nenhum desconto. Trabalhe só com o preço de tabela acima.
+
+FRETE: se o cliente perguntar quanto fica o frete, ou já der o CEP, chame a ferramenta calcular_frete assim que souber o CEP e pelo menos uma ideia do que ele quer levar (pode ser só 1 item, não precisa da lista final) — não espere ele decidir tudo nem peça nome/CPF/endereço completo só pra isso, é uma prévia sem compromisso. Se ele ainda não disse nenhum produto, pergunte rapidinho o que está pensando em levar antes de calcular. Nunca invente o valor do frete nem chute pelo que lembra de outra conversa — sempre chame a ferramenta de novo pra esse CEP.
 
 FECHAMENTO: pra gerar o link de pagamento você precisa, antes de chamar a ferramenta criar_pedido: nome completo, CPF (ou número do passaporte, se o cliente disser que é estrangeiro e não tem CPF), endereço completo (CEP, rua, número, bairro, cidade, estado) e os itens/quantidades escolhidos. Peça esses dados de forma natural, não como formulário. Nunca invente nenhum desses dados.
 
@@ -218,7 +242,7 @@ async function salvarRespostaAssistente(pool, telefone, texto) {
 }
 
 async function responderMensagem(telefone, textoCliente, deps) {
-  const { pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento } = deps;
+  const { pool, PRODUCTS, criarPedidoViaAtendimento, calcularFretePreviewViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento } = deps;
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
 
   await salvarMensagem(pool, telefone, 'user', textoCliente);
@@ -252,6 +276,8 @@ async function responderMensagem(telefone, textoCliente, deps) {
       try {
         if (block.name === 'consultar_pedido') {
           resultado = await consultarPedidoPorTelefone(telefone);
+        } else if (block.name === 'calcular_frete') {
+          resultado = await calcularFretePreviewViaAtendimento({ ...block.input, telefone });
         } else if (block.name === 'criar_pedido') {
           resultado = await criarPedidoViaAtendimento({ ...block.input, telefone });
           pedidoCriadoNessaRodada = resultado;
