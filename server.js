@@ -15,7 +15,7 @@ const {
   definirHandlerMensagem, processarWebhookRecebido,
   getStatusConexao: getStatusWhatsApp
 } = require('./whatsapp-oficial');
-const { responderMensagem, salvarRespostaAssistente, responderDono } = require('./whatsapp-ia');
+const { responderMensagem, salvarRespostaAssistente, responderDono, dividirEmPartes, limparDelimitador } = require('./whatsapp-ia');
 const crypto = require('crypto');
 
 const app = express();
@@ -1037,6 +1037,27 @@ function escapeHtml(value) {
   }[c]));
 }
 
+// Renderiza uma linha de whatsapp_mensagens como uma ou mais "bolhas" de
+// chat — a IA pode ter dividido a resposta em até 3 mensagens separadas
+// (ver "MENSAGENS MÚLTIPLAS" no prompt, delimitador "|||"), salvo como uma
+// linha só no histórico (a API da Anthropic exige alternância estrita
+// user/assistant, então não dá pra salvar como várias linhas 'assistant'
+// seguidas) — aqui é onde isso vira bolhas separadas, pra refletir fielmente
+// o que o cliente realmente recebeu. Usada tanto no painel real de
+// conversas quanto na tela de teste, pra nunca divergir uma da outra.
+function renderizarBolhasMensagem(m) {
+  const partesBrutas = m.role === 'assistant' ? dividirEmPartes(m.content) : [m.content].filter(Boolean);
+  const partes = partesBrutas.length > 0 ? partesBrutas : ['(mensagem vazia)'];
+  return partes.map((parte, i) => `
+    <div style="align-self:${m.role === 'assistant' ? 'flex-end' : 'flex-start'};max-width:80%;">
+      <div class="pedido-card" style="background:${m.role === 'assistant' ? '#211714' : '#fff'};color:${m.role === 'assistant' ? '#fff' : '#211714'};padding:10px 14px;">
+        ${escapeHtml(parte).replace(/\n/g, '<br>')}
+      </div>
+      ${i === partes.length - 1 ? `<div class="pedido-detalhe" style="font-size:11px;margin-top:2px;text-align:${m.role === 'assistant' ? 'right' : 'left'};">${escapeHtml(new Date(m.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>` : ''}
+    </div>
+  `).join('');
+}
+
 // Express 4 não captura erro/rejeição de rota async automaticamente — sem
 // isso, uma falha inesperada (ex.: soluço de conexão com o banco) vira uma
 // promise rejeitada sem handler, que derruba o processo inteiro (loja E
@@ -2045,7 +2066,9 @@ const WHATSAPP_TEMPLATES = {
   // Follow-up de conversa que esfriou com interesse real demonstrado (ver
   // marcarInteresseSemFechamento e processarFilaFollowUpInteresse) —
   // diferente do reengajamento acima, que é por cadastro a cada 7 dias.
-  followup_interesse: 'followup_interesse_cliente'
+  followup_interesse: 'followup_interesse_cliente',
+  // Cobrança de pagamento pendente (ver processarFilaCobrancaPagamentoPendente).
+  cobranca_pendente: 'cobranca_pagamento_pendente'
 };
 
 // Layout compartilhado pelos painéis: mesma barra de navegação em todos,
@@ -3129,14 +3152,7 @@ async function renderizarTestarIA(req, res, { avisoEscalacao, avisoTrocaDevoluca
     ${avisoEscalacao ? `<div class="pedido-card" style="max-width:560px;background:#FDEFC9;margin-bottom:16px;"><div class="pedido-detalhe">⚠️ Nessa resposta, a IA teria chamado o diretor (escalado pra um humano). Motivo: "${escapeHtml(avisoEscalacao)}"</div></div>` : ''}
     ${avisoTrocaDevolucao ? `<div class="pedido-card" style="max-width:560px;background:#FDEFC9;margin-bottom:16px;"><div class="pedido-detalhe">⚠️ Nessa resposta, a IA teria avisado o João (financeiro) sobre troca/devolução. Motivo: "${escapeHtml(avisoTrocaDevolucao)}"</div></div>` : ''}
     <div style="display:flex;flex-direction:column;gap:10px;max-width:560px;margin-bottom:20px;">
-      ${mensagens.length === 0 ? '<p class="pedido-detalhe">Nenhuma mensagem ainda — escreva como se fosse um cliente, abaixo.</p>' : mensagens.map((m) => `
-        <div style="align-self:${m.role === 'assistant' ? 'flex-end' : 'flex-start'};max-width:80%;">
-          <div class="pedido-card" style="background:${m.role === 'assistant' ? '#211714' : '#fff'};color:${m.role === 'assistant' ? '#fff' : '#211714'};padding:10px 14px;">
-            ${escapeHtml(m.content).replace(/\n/g, '<br>')}
-          </div>
-          <div class="pedido-detalhe" style="font-size:11px;margin-top:2px;text-align:${m.role === 'assistant' ? 'right' : 'left'};">${escapeHtml(new Date(m.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
-        </div>
-      `).join('')}
+      ${mensagens.length === 0 ? '<p class="pedido-detalhe">Nenhuma mensagem ainda — escreva como se fosse um cliente, abaixo.</p>' : mensagens.map(renderizarBolhasMensagem).join('')}
     </div>
     <form method="POST" action="/admin/whatsapp/testar-ia" class="pedido-card" style="max-width:560px;display:block;">
       <label style="display:block;font-weight:700;margin-bottom:6px;">Mensagem (como se fosse o cliente)</label>
@@ -3232,11 +3248,12 @@ app.post('/admin/whatsapp/testar-ia/limpar', requireAdmin, asyncHandler(async (r
 app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
 
-  const [boasVindas, feedback, recompra, reengajamento, semContato] = await Promise.all([
+  const [boasVindas, feedback, recompra, reengajamento, cobranca, semContato] = await Promise.all([
     pool.query(`SELECT id, name, phone, created_at FROM leads WHERE contatado = true ORDER BY created_at DESC LIMIT 100`),
     pool.query(`SELECT id, customer_name AS name, customer_phone AS phone, whatsapp_feedback_enviado_em AS enviado_em FROM orders WHERE whatsapp_feedback_enviado_em IS NOT NULL ORDER BY whatsapp_feedback_enviado_em DESC LIMIT 100`),
     pool.query(`SELECT id, customer_name AS name, customer_phone AS phone, whatsapp_recompra_enviado_em AS enviado_em FROM orders WHERE whatsapp_recompra_enviado_em IS NOT NULL ORDER BY whatsapp_recompra_enviado_em DESC LIMIT 100`),
     pool.query(`SELECT id, name, phone, whatsapp_reengajamento_contagem AS contagem, whatsapp_reengajamento_enviado_em AS enviado_em FROM leads WHERE COALESCE(whatsapp_reengajamento_contagem, 0) > 0 ORDER BY whatsapp_reengajamento_enviado_em DESC LIMIT 100`),
+    pool.query(`SELECT id, customer_name AS name, customer_phone AS phone, whatsapp_cobranca_contagem AS contagem, whatsapp_cobranca_enviado_em AS enviado_em FROM orders WHERE whatsapp_cobranca_enviado_em IS NOT NULL ORDER BY whatsapp_cobranca_enviado_em DESC LIMIT 100`),
     // "Sem nenhum contato": nunca recebeu boas-vindas de verdade (contatado)
     // nem entrou no reengajamento ainda — exclui quem já comprou (esses já
     // recebem confirmação/feedback/recompra pelo pedido, então não estão
@@ -3282,6 +3299,8 @@ app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) 
     ${tabela('Lembrete de recompra', recompra.rows.length, ['Cliente', 'Telefone', 'Enviado em', 'Pedido'], recompra.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${linkPedido(r.id)}</td></tr>`))}
 
     ${tabela('Reengajamento', reengajamento.rows.length, ['Nome', 'Telefone', 'Última vez', 'Quantas vezes'], reengajamento.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${r.contagem}/4</td></tr>`))}
+
+    ${tabela('Cobrança de pagamento pendente', cobranca.rows.length, ['Cliente', 'Telefone', 'Última vez', 'Quantas vezes', 'Pedido'], cobranca.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${r.contagem}/3</td><td>${linkPedido(r.id)}</td></tr>`))}
 
     <section>
       <h2 style="margin-top:28px;">Ainda sem nenhum contato (${semContato.rows.length})</h2>
@@ -3389,16 +3408,23 @@ app.get('/admin/whatsapp/conversas', requireAdmin, asyncHandler(async (req, res)
   const body = `
     <h1>Conversas da IA — WhatsApp</h1>
     <p class="pedido-detalhe" style="margin-bottom:14px;">${rows.length} conversa${rows.length === 1 ? '' : 's'}, mais recente primeiro. Mostra só as últimas 100.</p>
-    ${rows.length === 0 ? '<p class="pedido-detalhe">Nenhuma conversa ainda.</p>' : rows.map((r) => `
+    ${rows.length === 0 ? '<p class="pedido-detalhe">Nenhuma conversa ainda.</p>' : rows.map((r) => {
+      // Preview do snippet: tira o delimitador "|||" (ver dividirEmPartes em
+      // whatsapp-ia.js) ANTES de medir o tamanho, senão o "…" podia aparecer
+      // sobrando (ou faltando) por causa dos caracteres do delimitador que
+      // nunca aparecem pro cliente de verdade.
+      const textoPreview = r.ultima_role === 'assistant' ? limparDelimitador(r.ultima_msg) : (r.ultima_msg || '');
+      return `
       <a href="/admin/whatsapp/conversas/${encodeURIComponent(r.phone)}" class="pedido-card" style="max-width:480px;display:block;margin-bottom:12px;text-decoration:none;color:inherit;">
         <div class="pedido-topo">
           <div class="pedido-cliente">${escapeHtml(r.lead_nome || r.phone)}</div>
           <div class="pedido-data">${escapeHtml(new Date(r.ultima_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
         </div>
-        <div class="pedido-detalhe">${r.ultima_role === 'assistant' ? '🤖' : '🗣️'} ${escapeHtml((r.ultima_msg || '').slice(0, 140))}${(r.ultima_msg || '').length > 140 ? '…' : ''}</div>
+        <div class="pedido-detalhe">${r.ultima_role === 'assistant' ? '🤖' : '🗣️'} ${escapeHtml(textoPreview.slice(0, 140))}${textoPreview.length > 140 ? '…' : ''}</div>
         <div class="pedido-detalhe" style="margin-top:6px;color:#8a6f5c;">${r.total_mensagens} mensage${r.total_mensagens === 1 ? 'm' : 'ns'}</div>
       </a>
-    `).join('')}
+    `;
+    }).join('')}
   `;
   res.send(adminLayout({ title: 'Conversas WhatsApp', ativo: 'whatsapp', body }));
 }));
@@ -3421,14 +3447,7 @@ app.get('/admin/whatsapp/conversas/:phone', requireAdmin, asyncHandler(async (re
     <h1>${escapeHtml(nomeLead || phone)}</h1>
     <p class="pedido-detalhe" style="margin-bottom:14px;"><a href="https://wa.me/${escapeHtml(phone)}" target="_blank" rel="noopener noreferrer">${escapeHtml(phone)} ↗</a> · ${mensagens.length} mensage${mensagens.length === 1 ? 'm' : 'ns'}</p>
     <div style="display:flex;flex-direction:column;gap:10px;max-width:560px;">
-      ${mensagens.map((m) => `
-        <div style="align-self:${m.role === 'assistant' ? 'flex-end' : 'flex-start'};max-width:80%;">
-          <div class="pedido-card" style="background:${m.role === 'assistant' ? '#211714' : '#fff'};color:${m.role === 'assistant' ? '#fff' : '#211714'};padding:10px 14px;">
-            ${escapeHtml(m.content).replace(/\n/g, '<br>')}
-          </div>
-          <div class="pedido-detalhe" style="font-size:11px;margin-top:2px;text-align:${m.role === 'assistant' ? 'right' : 'left'};">${escapeHtml(new Date(m.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</div>
-        </div>
-      `).join('')}
+      ${mensagens.map(renderizarBolhasMensagem).join('')}
     </div>
   `;
   res.send(adminLayout({ title: 'Conversa WhatsApp', ativo: 'whatsapp', body }));
@@ -3553,7 +3572,7 @@ async function processarFilaFeedbackWhatsApp() {
     for (const pedido of rows) {
       const telefone = telefoneParaE164(pedido.customer_phone);
       if (telefone) {
-        const primeiroNome = pedido.customer_name ? String(pedido.customer_name).trim().split(' ')[0] : 'cliente';
+        const primeiroNome = (pedido.customer_name ? String(pedido.customer_name).trim().split(' ')[0] : '') || 'cliente';
         try {
           await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.feedback_pedido, { nome_cliente: primeiroNome });
           console.log(`WhatsApp de feedback enviado pro pedido #${pedido.id}.`);
@@ -3590,7 +3609,7 @@ async function processarFilaRecompraWhatsApp() {
     for (const pedido of rows) {
       const telefone = telefoneParaE164(pedido.customer_phone);
       if (telefone) {
-        const primeiroNome = pedido.customer_name ? String(pedido.customer_name).trim().split(' ')[0] : 'cliente';
+        const primeiroNome = (pedido.customer_name ? String(pedido.customer_name).trim().split(' ')[0] : '') || 'cliente';
         try {
           await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.lembrete_recompra, { nome_cliente: primeiroNome });
           console.log(`WhatsApp de lembrete de recompra enviado pro pedido #${pedido.id}.`);
@@ -3668,6 +3687,99 @@ async function processarFilaReengajamentoWhatsApp() {
     }
   } catch (err) {
     console.error('Erro ao processar fila de reengajamento do WhatsApp:', err);
+  }
+}
+
+// Cobrança de pagamento pendente: pedido com link de pagamento gerado (site
+// ou IA do WhatsApp) que nunca foi aprovado — manda até 3 mensagens
+// perguntando se a pessoa precisa de ajuda ou quer um novo link, espaçadas
+// 24h (desde a criação), depois 2 dias e depois 5 dias (essas duas últimas
+// desde o ÚLTIMO ENVIO, não desde a criação — mesmo padrão de
+// processarFilaReengajamentoWhatsApp). Isso importa porque, se a fila ficar
+// parada por um tempo (deploy, instabilidade), ancorar na criação faria os 3
+// marcos já estarem todos vencidos de uma vez e as 3 mensagens saírem em
+// sequência rápida (uma por rodada de hora em hora) assim que a fila
+// voltasse — ancorar no último envio garante o espaçamento real entre elas
+// mesmo depois de qualquer período parado. Para sozinha a qualquer momento
+// em que o pedido deixar de estar "pending" (foi aprovado, cancelado,
+// recusado etc.) — por isso o WHERE abaixo filtra por status a cada rodada,
+// em vez de decidir isso só na primeira vez. Processa só 1 pedido por
+// rodada (igual às outras filas de WhatsApp) de propósito: é o throttle que
+// evita qualquer rajada de mensagens saindo de uma vez — o mesmo tipo de
+// comportamento que já derrubou o número antigo por "spam-like bulk
+// messaging" uma vez. Com vários pedidos elegíveis na mesma hora, o mais
+// antigo sai primeiro e os outros esperam a próxima rodada.
+async function processarFilaCobrancaPagamentoPendente() {
+  if (!pool || getStatusWhatsApp() !== 'conectado') return;
+  if (automacoesWhatsAppPausadas()) return;
+  if (!dentroDoHorarioComercial()) return;
+  const LIMITE_MENSAGENS = 3;
+  try {
+    // Descarta (sem enviar) pedido pending muito antigo que nunca começou
+    // esse fluxo — sem isso, no primeiro deploy (ou depois de qualquer
+    // período parado) a fila ia processar carrinhos abandonados de meses
+    // atrás na ordem, mandando cobrança do nada pra gente que já esqueceu
+    // esse pedido há muito tempo. Mesmo cuidado que processarFilaReengajamentoWhatsApp
+    // já faz pros leads. 10 dias = o dobro do último marco (5 dias). Não
+    // mexe em whatsapp_cobranca_enviado_em (fica NULL) — isso é um descarte
+    // silencioso, não um envio de verdade, e a tela /admin/whatsapp/enviados
+    // só lista quem tem enviado_em preenchido, pra nunca mostrar "3/3
+    // enviadas" pra um pedido que na real nunca recebeu nenhuma mensagem.
+    await pool.query(
+      `UPDATE orders SET whatsapp_cobranca_contagem = $1
+       WHERE status = 'pending'
+         AND COALESCE(whatsapp_cobranca_contagem, 0) = 0
+         AND created_at < now() - interval '10 days'`,
+      [LIMITE_MENSAGENS]
+    );
+
+    const { rows } = await pool.query(
+      `SELECT o.id, o.customer_name, o.customer_phone FROM orders o
+       WHERE o.status = 'pending'
+         AND o.customer_phone IS NOT NULL AND o.customer_phone <> ''
+         AND COALESCE(o.whatsapp_cobranca_contagem, 0) < $1
+         AND (
+           (COALESCE(o.whatsapp_cobranca_contagem, 0) = 0 AND o.created_at <= now() - interval '24 hours')
+           OR (COALESCE(o.whatsapp_cobranca_contagem, 0) = 1 AND o.whatsapp_cobranca_enviado_em <= now() - interval '2 days')
+           OR (COALESCE(o.whatsapp_cobranca_contagem, 0) = 2 AND o.whatsapp_cobranca_enviado_em <= now() - interval '5 days')
+         )
+         -- Cliente pode ter pedido um link novo e pago por um pedido
+         -- DIFERENTE (ex.: pediu de novo pela IA depois de ignorar o
+         -- primeiro) — nesse caso o pedido original nunca sai de "pending",
+         -- mas cobrar dele seria cobrar um pagamento que já aconteceu por
+         -- outra via. Só conta um pedido aprovado CRIADO DEPOIS deste (não
+         -- qualquer compra aprovada no passado) — senão todo cliente
+         -- recorrente ficaria permanentemente fora dessa fila, mesmo pra um
+         -- pedido pending novo sem nenhuma relação com a compra antiga.
+         AND NOT EXISTS (
+           SELECT 1 FROM orders o2
+           WHERE o2.status = 'approved'
+             AND o2.created_at >= o.created_at
+             AND RIGHT(regexp_replace(o2.customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace(o.customer_phone, '\\D', '', 'g'), 11)
+         )
+       ORDER BY o.created_at ASC LIMIT 1`,
+      [LIMITE_MENSAGENS]
+    );
+    for (const pedido of rows) {
+      const telefone = telefoneParaE164(pedido.customer_phone);
+      if (telefone) {
+        const primeiroNome = (pedido.customer_name ? String(pedido.customer_name).trim().split(' ')[0] : '') || 'cliente';
+        try {
+          await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.cobranca_pendente, { nome_cliente: primeiroNome });
+          console.log(`WhatsApp de cobrança de pagamento pendente enviado pro pedido #${pedido.id}.`);
+        } catch (err) {
+          console.error(`Falha ao enviar WhatsApp de cobrança pro pedido #${pedido.id}:`, err.message);
+        }
+      }
+      // Avança a contagem mesmo em falha de envio, igual aos outros fluxos —
+      // evita ficar tentando pro mesmo pedido a cada rodada pra sempre.
+      await pool.query(
+        `UPDATE orders SET whatsapp_cobranca_contagem = COALESCE(whatsapp_cobranca_contagem, 0) + 1, whatsapp_cobranca_enviado_em = now() WHERE id = $1`,
+        [pedido.id]
+      );
+    }
+  } catch (err) {
+    console.error('Erro ao processar fila de cobrança de pagamento pendente:', err);
   }
 }
 
@@ -4002,19 +4114,52 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   }
   console.log(`[whatsapp-ia] gerando resposta pra ${telefone}...`);
   try {
-    const { texto: resposta, esperaMs } = await responderMensagem(telefone, texto, {
+    const { texto: resposta, partes, esperaMs } = await responderMensagem(telefone, texto, {
       pool, PRODUCTS, criarPedidoViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento
     });
-    console.log(`[whatsapp-ia] resposta gerada pra ${telefone} (espera ${Math.round(esperaMs / 1000)}s): "${(resposta || '').slice(0, 80)}"`);
+    console.log(`[whatsapp-ia] resposta gerada pra ${telefone} (espera ${Math.round(esperaMs / 1000)}s, ${partes.length} msg(s)): "${(resposta || '').slice(0, 80)}"`);
     if (resposta) {
       // Espera no ritmo da conversa (ver calcularEsperaMs em whatsapp-ia.js)
       // antes de enviar, pra não parecer resposta instantânea de robô.
       await new Promise((resolve) => setTimeout(resolve, esperaMs));
       // Responde pro JID exato que mandou a mensagem (pode ser "@lid", não
       // necessariamente "@s.whatsapp.net") — ver nota em enviarMensagemWhatsApp.
-      await enviarMensagemWhatsApp(jidOriginal || telefone, resposta);
+      // Quando o modelo divide a resposta (ver "MENSAGENS MÚLTIPLAS" no
+      // prompt), manda uma de cada vez com uma pausa curta entre elas, pra
+      // imitar alguém digitando mensagens em sequência em vez de despejar
+      // tudo de uma vez. `partes` nunca vem vazio aqui (responderMensagem já
+      // garante isso, com um fallback que bate com o que foi salvo). Cada
+      // envio é isolado (try/catch por parte, sem abortar o laço) justamente
+      // pra poder salvar o histórico com segurança logo depois: se uma falha
+      // aqui propagasse, a resposta nunca seria salva e a IA "esqueceria" de
+      // uma ação já tomada (ex.: achar que nunca gerou o link de pagamento
+      // e gerar um segundo).
+      let sucessos = 0;
+      for (let i = 0; i < partes.length; i++) {
+        if (i > 0) await new Promise((resolve) => setTimeout(resolve, 1500 + Math.floor(Math.random() * 1500)));
+        try {
+          await enviarMensagemWhatsApp(jidOriginal || telefone, partes[i]);
+          sucessos++;
+        } catch (err) {
+          console.error(`[whatsapp-ia] falha ao enviar parte ${i + 1}/${partes.length} pra ${telefone}:`, err.message);
+        }
+      }
+      if (sucessos < partes.length) {
+        // Uma ou mais partes não saíram — sem esse alerta, isso só
+        // apareceria como console.error perdido no meio do log, e ninguém
+        // notaria que o cliente recebeu uma resposta incompleta (ou nada).
+        Sentry.captureMessage(
+          `[whatsapp-ia] ${partes.length - sucessos}/${partes.length} parte(s) da resposta falharam ao enviar pro telefone ${telefone}.`,
+          { level: sucessos === 0 ? 'error' : 'warning' }
+        );
+      }
+      // Salva no histórico depois de tentar enviar (não importa se alguma
+      // parte falhou — ver comentário acima sobre por que cada envio é
+      // isolado): calcularEsperaMs usa o created_at desta linha como "quando
+      // a resposta anterior foi enviada" pra calcular o ritmo da próxima, e
+      // salvar antes da espera/envio inflaria esse tempo artificialmente.
       await salvarRespostaAssistente(pool, telefone, resposta);
-      console.log(`[whatsapp-ia] resposta enviada pra ${jidOriginal || telefone}.`);
+      console.log(`[whatsapp-ia] ${sucessos}/${partes.length} parte(s) da resposta enviada(s) pra ${jidOriginal || telefone}.`);
     }
   } catch (err) {
     console.error(`[whatsapp-ia] falha ao responder ${telefone}:`, err.message);
@@ -4046,6 +4191,7 @@ initDb().catch((err) => {
     setInterval(processarFilaRecompraWhatsApp, 60 * 60 * 1000);
     setInterval(processarFilaReengajamentoWhatsApp, 60 * 60 * 1000);
     setInterval(processarFilaFollowUpInteresse, 60 * 60 * 1000);
+    setInterval(processarFilaCobrancaPagamentoPendente, 60 * 60 * 1000);
     // A cada 10 min — só age mesmo dentro da hora das 8h, mas checa mais
     // vezes nela pra não ficar quase 1h sem agir caso o processo suba já
     // dentro dessa janela.

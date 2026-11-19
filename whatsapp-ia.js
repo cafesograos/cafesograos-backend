@@ -136,7 +136,9 @@ FECHAMENTO: pra gerar o link de pagamento você precisa, antes de chamar a ferra
 
 PAGAMENTO: o link de pagamento (ferramenta criar_pedido) aceita cartão de crédito, débito e Pix. Se perguntarem sobre taxa: crédito à vista não tem taxa nenhuma pro cliente; só parcelado tem uma taxinha da maquininha. Se for compra feita pessoalmente (não pelo link), também aceita dinheiro. Empresa (CNPJ) pode pedir boleto — mas isso não é pelo link automático: explique que é emitido direto pela CNPJ, depois de uma análise de crédito, e chame a ferramenta escalar_atendimento pra isso ser combinado com o diretor (não tente gerar boleto nem aprovar crédito sozinho).
 
-TOM: respostas curtas (é WhatsApp, não e-mail), caloroso e acolhedor, direto, em português do Brasil, sem erro de ortografia ou gramática (revise a frase antes de responder — concordância, conjugação de verbo completa como "experimentar" não "experimenta"; nunca invente verbo que não existe, ex: "torrefazer" não existe, o certo é "torrar"/"torramos"). Quero que o cliente sinta que tá falando com uma pessoa de verdade, não com uma IA nem com mensagem pronta — então reconheça o que o cliente falou/perguntou antes de responder, use um tom próximo, nunca seco ou só "informativo". Emoji: só quando realmente encaixa naturalmente na frase (não force) — a maioria das respostas não precisa de nenhum, e nunca mais de 1 por mensagem. Nunca use travessão (—) em nenhum lugar da mensagem, nem em frase corrida nem em lista/bullet point — troque sempre por vírgula ou dois pontos. Errado: "Combo Clássicos (R$124,99) — pra quem curte o dia a dia". Certo: "Combo Clássicos (R$124,99): pra quem curte o dia a dia". Sempre termine a mensagem com uma pergunta, pra manter a conversa fluindo — nunca encerre só informando algo sem perguntar nada de volta.
+TOM: respostas CURTAS de verdade (é WhatsApp, não e-mail) — pense em no máximo 2 a 4 frases curtas na maioria das respostas, nunca um texto corrido de vários parágrafos tipo e-mail ou post. Caloroso e acolhedor, direto, em português do Brasil, sem erro de ortografia ou gramática (revise a frase antes de responder — concordância, conjugação de verbo completa como "experimentar" não "experimenta"; nunca invente verbo que não existe, ex: "torrefazer" não existe, o certo é "torrar"/"torramos"). Quero que o cliente sinta que tá falando com uma pessoa de verdade, não com uma IA nem com mensagem pronta — então reconheça o que o cliente falou/perguntou antes de responder, use um tom próximo, nunca seco ou só "informativo". Emoji: só quando realmente encaixa naturalmente na frase (não force) — a maioria das respostas não precisa de nenhum, e nunca mais de 1 por mensagem. Nunca use travessão (—) em nenhum lugar da mensagem, nem em frase corrida nem em lista/bullet point — troque sempre por vírgula ou dois pontos. Errado: "Combo Clássicos (R$124,99) — pra quem curte o dia a dia". Certo: "Combo Clássicos (R$124,99): pra quem curte o dia a dia". Nunca use negrito com dois asteriscos (**assim**) — o WhatsApp não interpreta isso, o cliente vê os asteriscos literalmente na tela; pra destacar algo use só um asterisco (*assim*), e mesmo isso raramente é necessário. Nunca use listas numeradas ou com marcador (1., -, •) — escreva como fala, em frase corrida. Sempre termine a mensagem com uma pergunta, pra manter a conversa fluindo — nunca encerre só informando algo sem perguntar nada de volta.
+
+MENSAGENS MÚLTIPLAS: quando o que você precisa explicar não cabe natural em 2 a 4 frases curtas (ex: comparar vários produtos, explicar um processo com várias etapas), não escreva um bloco único grande — divida em até 3 mensagens curtas separadas, cada uma com uma ideia só, do jeito que uma pessoa de verdade manda mensagens em sequência no WhatsApp em vez de um texto corrido. Pra dividir, separe cada mensagem com uma linha contendo só "|||" e mais nada (sem espaço, sem pontuação). Use isso só quando realmente precisar — a grande maioria das respostas deve ser uma mensagem só, curta. Nunca use mais de 3 mensagens.
 
 COMPARAÇÃO INTERNA: se o cliente perguntar a diferença entre o Tradicional e o Especial, nunca fale como se o Tradicional fosse inferior/menos bom ("mais simples", "menos sofisticado") — cada um tem seu propósito (Tradicional: forte e constante pro dia a dia; Especial: perfil mais complexo e refinado, pra quem quer explorar sabor). Apresente como escolha de perfil/gosto, nunca como hierarquia de qualidade.
 
@@ -153,12 +155,30 @@ CONCORRENTES: se o cliente comparar com outra marca (ex: Pilão, 3 Corações, e
 LIMITES: se o cliente perguntar algo que você não sabe responder com certeza ou que está fora de tudo isso (reclamação, problema com pedido que você não consegue resolver com a ferramenta consultar_pedido -- troca/devolução tem sua própria regra acima), NUNCA invente resposta nem chute o que ele quis dizer. Primeiro, se a pergunta foi vaga ou usou um termo que você não reconhece (ex: "vocês vendem pelo aplicativo?"), pergunte de volta pra entender direito o que ele quer, com humildade (ex: "Opa, me desculpa, pode me explicar melhor o que seria isso? Assim te ajudo certinho"). Só depois de entender a pergunta, decida: se você já sabe a resposta com as informações que tem (ex: descobriu que "aplicativo" era só outro jeito de perguntar se vende por app, e você sabe que vende é por aqui e pelo site), responda normal. Se mesmo depois de entender a pergunta você ainda não souber a resposta de verdade (política nova, prazo que não está nas regras, algo bem específico do negócio que você não tem certeza), aí sim diga que vai verificar com o seu diretor e já volta com a resposta, e chame a ferramenta escalar_atendimento — nunca invente política nem prometa prazo que você não sabe.`;
 }
 
+// Remove o delimitador "|||" (ver dividirEmPartes) de um texto salvo no
+// histórico, trocando por espaço — usada sempre que o delimitador precisa
+// sumir sem precisar dividir em partes de verdade (contexto mandado pra
+// Anthropic, snippet de preview no painel admin). Uma função só, pra nunca
+// divergir de como dividirEmPartes trata o mesmo delimitador.
+function limparDelimitador(texto) {
+  return String(texto || '').split('|||').join(' ');
+}
+
 async function carregarHistorico(pool, telefone) {
   const { rows } = await pool.query(
     `SELECT role, content FROM whatsapp_mensagens WHERE phone = $1 ORDER BY created_at DESC LIMIT $2`,
     [telefone, HISTORICO_MAX_MENSAGENS]
   );
-  return rows.reverse().map((r) => ({ role: r.role, content: r.content }));
+  // O delimitador "|||" existe só pra decidir como ENVIAR a resposta por
+  // WhatsApp (uma mensagem ou várias) — fica salvo assim no banco (pra tela
+  // de teste/painel de conversas conseguir mostrar as bolhas certas), mas a
+  // Anthropic nunca pode ver esse artefato interno como se fosse algo que
+  // ela mesma escreveu, senão arrisca imitar/repetir o delimitador nas
+  // próprias respostas futuras.
+  return rows.reverse().map((r) => ({
+    role: r.role,
+    content: r.role === 'assistant' ? limparDelimitador(r.content) : r.content
+  }));
 }
 
 async function salvarMensagem(pool, telefone, role, content) {
@@ -272,8 +292,39 @@ async function responderMensagem(telefone, textoCliente, deps) {
     || (escalouNessaRodada ? 'Combinado! Já passei isso pro meu diretor, ele deve te retornar em breve.' : null)
     || (pedidoCriadoNessaRodada ? `Prontinho! Segue o link pra finalizar o pagamento: ${pedidoCriadoNessaRodada.link}` : null)
     || 'Desculpa a demora! Pode repetir o que você precisa? Quero ter certeza de que entendi certinho antes de responder.';
-  const esperaMs = await calcularEsperaMs(pool, telefone, textoResposta);
-  return { texto: textoResposta, esperaMs };
+  // Ver regra "MENSAGENS MÚLTIPLAS" no prompt — o modelo separa com "|||"
+  // quando acha que o conteúdo pede mais de uma mensagem. Caso degenerado
+  // (resposta inteira some em puro delimitador/espaço — extremamente raro,
+  // já que textoResposta sempre tem algum dos fallbacks acima): troca por um
+  // fallback fixo em `texto` E `partes` juntos, nunca só num dos dois —
+  // senão o que fica salvo no histórico (o que a IA "lembra" de ter dito)
+  // diverge do que o cliente realmente recebeu.
+  const partesDivididas = dividirEmPartes(textoResposta);
+  const textoFinal = partesDivididas.length > 0
+    ? textoResposta
+    : 'Desculpa, deu uma falha aqui do meu lado! Pode repetir sua mensagem?';
+  const esperaMs = await calcularEsperaMs(pool, telefone, textoFinal);
+  return { texto: textoFinal, partes: partesDivididas.length > 0 ? partesDivididas : [textoFinal], esperaMs };
+}
+
+// Divide uma resposta da IA em até 3 mensagens separadas pelo delimitador
+// "|||" (ver regra "MENSAGENS MÚLTIPLAS" no prompt). Usada tanto no envio
+// real (server.js) quanto na tela de teste/painel de conversas — uma cópia
+// só, pra nunca divergir entre o que o cliente recebe de verdade e o que o
+// dono vê no painel. Nunca perde conteúdo: se o modelo ignorar o limite de 3
+// e mandar mais segmentos, os excedentes são juntados dentro da 3ª parte (em
+// vez de descartados). Pode devolver array vazio no caso degenerado de o
+// texto virar só delimitador/espaço depois de trim — é responsabilidade de
+// quem chama decidir o fallback nesse caso (ver responderMensagem acima),
+// não desta função, que não tem contexto pra garantir que o fallback bate
+// com o que vai ficar salvo no histórico.
+function dividirEmPartes(texto) {
+  const bruto = String(texto || '').trim();
+  if (!bruto) return [];
+  const segmentos = bruto.split('|||').map((p) => p.trim()).filter(Boolean);
+  if (segmentos.length === 0) return [];
+  if (segmentos.length <= 3) return segmentos;
+  return [...segmentos.slice(0, 2), segmentos.slice(2).join('\n\n')];
 }
 
 // Assistente administrativo: só pro número pessoal do dono, pra ele
@@ -402,4 +453,4 @@ async function responderDono(texto, deps) {
   return textoResposta || (repassouNessaRodada ? '✅ Repassado pro cliente.' : textoResposta);
 }
 
-module.exports = { responderMensagem, salvarRespostaAssistente, responderDono };
+module.exports = { responderMensagem, salvarRespostaAssistente, responderDono, dividirEmPartes, limparDelimitador };

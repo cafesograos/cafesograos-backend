@@ -66,6 +66,13 @@ async function initDb() {
   // vezes pro mesmo pedido (ver server.js).
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS whatsapp_feedback_enviado_em TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS whatsapp_recompra_enviado_em TIMESTAMPTZ;`);
+  // Cobrança de pagamento pendente (link de pagamento gerado mas pedido
+  // nunca foi aprovado) — contagem vai até 3 (24h depois da criação, depois
+  // 2 e 5 dias desde o ÚLTIMO ENVIO, ver processarFilaCobrancaPagamentoPendente
+  // em server.js) e para sozinha se o pedido deixar de estar "pending" (foi
+  // aprovado, cancelado etc.) antes da próxima rodada.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS whatsapp_cobranca_contagem INTEGER DEFAULT 0;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS whatsapp_cobranca_enviado_em TIMESTAMPTZ;`);
   // Qual transportadora/modalidade a Melhor Envio escolheu como mais barata
   // pra esse pedido — sem isso, na hora de gerar a etiqueta de verdade era
   // preciso recalcular o frete manualmente só pra descobrir qual usar.
