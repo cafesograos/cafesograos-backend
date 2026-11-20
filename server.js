@@ -4168,7 +4168,7 @@ async function contatosProativosHoje() {
 // Liga a IA só pra quem manda mensagem primeiro (reativo) — nunca inicia
 // conversa sozinha. Sem ANTHROPIC_API_KEY, só ignora e fica em silêncio (as
 // mensagens automáticas de boas-vindas/confirmação continuam funcionando).
-definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
+definirHandlerMensagem(async (telefone, texto, jidOriginal, imagens) => {
   // Mensagem do próprio dono pro número da loja: pode ser (a) a resposta
   // dele pra uma escalação pendente — repassa pro cliente esperando — ou
   // (b) uma pergunta administrativa sobre o negócio ("teve venda hoje?",
@@ -4181,6 +4181,17 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   // administrativa pro cliente errado por engano — não pode repetir.
   if (pool && telefone.replace(/\D/g, '') === OWNER_WHATSAPP_NUMBER.replace(/\D/g, '')) {
     if (!process.env.ANTHROPIC_API_KEY) return;
+    // responderDono não tem suporte a imagem (só a conversa com cliente
+    // tem, ver FOTOS no prompt) — se o dono mandar só uma foto sem nenhum
+    // texto junto, "texto" chega vazio aqui e a API da Anthropic recusa
+    // content vazio. Avisa o próprio dono de volta (não só no log do
+    // servidor, que ele nunca vê) pra ele saber que precisa escrever
+    // alguma coisa junto da foto da próxima vez.
+    if (!texto) {
+      console.log('[whatsapp-ia] mensagem do dono sem texto (provável foto sem legenda) — assistente administrativo não lê imagem ainda.');
+      await enviarMensagemWhatsApp(OWNER_WHATSAPP_NUMBER, 'Recebi sua foto, mas ainda não consigo ler imagem nessa conversa com você — escreve o que precisa em texto, por favor.');
+      return;
+    }
     try {
       // Pega TODAS as escalações pendentes, não só a mais antiga — com só
       // uma, o sistema assumia "só pode ser essa" sem checar; se dois
@@ -4222,7 +4233,7 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal) => {
   try {
     const { texto: resposta, partes, esperaMs } = await responderMensagem(telefone, texto, {
       pool, PRODUCTS, criarPedidoViaAtendimento, calcularFretePreviewViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento
-    });
+    }, imagens);
     console.log(`[whatsapp-ia] resposta gerada pra ${telefone} (espera ${Math.round(esperaMs / 1000)}s, ${partes.length} msg(s)): "${(resposta || '').slice(0, 80)}"`);
     if (resposta) {
       // Espera no ritmo da conversa (ver calcularEsperaMs em whatsapp-ia.js)

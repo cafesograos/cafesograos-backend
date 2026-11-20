@@ -28,22 +28,63 @@ function definirHandlerMensagem(callback) {
 // duas bolhas da mesma pessoa; 20s dá margem confortável sem fazer o
 // cliente esperar tempo absurdo pela primeira resposta.
 const JANELA_AGRUPAMENTO_MS = 20000;
-const buffersMensagem = new Map(); // telefone -> { textos, jid, timer }
+const buffersMensagem = new Map(); // telefone -> { textos, imagens, jid, timer }
 
-function enfileirarMensagemRecebida(telefone, texto, jidOriginal) {
-  if (!handlerMensagem || !texto) return;
+// "imagens" é opcional: array de { base64, mediaType }, pra quando a
+// mensagem é uma foto (com ou sem legenda — ver processarImagemRecebida).
+// Sem isso, uma foto SEM legenda nenhuma (texto vazio) nunca entrava na
+// fila, porque a checagem original (!texto) descartava mensagem sem texto
+// — mas uma foto sozinha é uma mensagem válida mesmo sem nenhuma legenda.
+//
+// Limite de 4 imagens por rodada de agrupamento: cada uma pode chegar a 5MB
+// (TAMANHO_MAX_IMAGEM_BYTES), e a API da Anthropic tem limite de tamanho
+// total de request — sem esse teto, um cliente mandando várias fotos
+// seguidas (ex.: registrando um produto com defeito pra troca/devolução,
+// exatamente o caso que a regra FOTOS do prompt incentiva) podia estourar
+// esse limite e derrubar a chamada inteira, deixando o cliente sem resposta
+// nenhuma em vez de só não ver as fotos excedentes.
+const MAX_IMAGENS_POR_RODADA = 4;
+// Reserva a vaga de forma SÍNCRONA, antes de qualquer await — essencial
+// porque, se a Meta mandar várias fotos no mesmo payload de webhook (ela
+// agrupa mensagens quase simultâneas num só POST), processarWebhookRecebido
+// chama processarImagemRecebida várias vezes em sequência SEM esperar o
+// download de cada uma terminar. Checar "quantas imagens já tem no buffer"
+// só depois do download (como uma versão anterior fazia) deixava passar as
+// 5+ chamadas, porque nenhum download tinha terminado ainda pra atualizar a
+// contagem — todas viam "0 imagens ainda" e baixavam em paralelo à toa.
+// Reservando antes (incrementando um contador que nunca é lido por await
+// nenhum no meio), a 5ª chamada já vê a reserva das 4 anteriores e nem
+// começa o download.
+function reservarVagaImagem(telefone, jidOriginal) {
   let buffer = buffersMensagem.get(telefone);
   if (!buffer) {
-    buffer = { textos: [], jid: jidOriginal };
+    buffer = { textos: [], imagens: [], imagensReservadas: 0, jid: jidOriginal };
     buffersMensagem.set(telefone, buffer);
   }
-  buffer.textos.push(texto);
+  buffer.jid = jidOriginal || buffer.jid;
+  if (buffer.imagensReservadas >= MAX_IMAGENS_POR_RODADA) return false;
+  buffer.imagensReservadas++;
+  return true;
+}
+function enfileirarMensagemRecebida(telefone, texto, jidOriginal, imagemReservada) {
+  if (!handlerMensagem) return;
+  if (!texto && !imagemReservada) return;
+  let buffer = buffersMensagem.get(telefone);
+  if (!buffer) {
+    buffer = { textos: [], imagens: [], imagensReservadas: 0, jid: jidOriginal };
+    buffersMensagem.set(telefone, buffer);
+  }
+  if (texto) buffer.textos.push(texto);
+  // A vaga já foi reservada antes do download (ver reservarVagaImagem) —
+  // aqui é só confirmar a imagem de verdade no lugar já contado, nunca
+  // checar limite de novo.
+  if (imagemReservada) buffer.imagens.push(imagemReservada);
   buffer.jid = jidOriginal || buffer.jid;
   clearTimeout(buffer.timer);
   buffer.timer = setTimeout(() => {
     buffersMensagem.delete(telefone);
     const textoCombinado = buffer.textos.join('\n');
-    Promise.resolve(handlerMensagem(telefone, textoCombinado, buffer.jid)).catch((err) => {
+    Promise.resolve(handlerMensagem(telefone, textoCombinado, buffer.jid, buffer.imagens)).catch((err) => {
       console.error('[whatsapp-oficial] erro ao processar mensagem recebida:', err.message);
     });
   }, JANELA_AGRUPAMENTO_MS);
@@ -188,6 +229,92 @@ async function processarAudioRecebido(telefone, mediaId) {
   }
 }
 
+// A API da Anthropic só aceita esses 4 formatos de imagem, como valor EXATO
+// de "media_type" (não aceita parâmetro extra tipo "; charset=..."). A Meta
+// às vezes devolve o mime type com esse tipo de parâmetro a mais (mesmo
+// motivo pelo qual transcreverAudio, um pouco acima, usa .includes('ogg')
+// em vez de igualdade estrita) — por isso essa função não só CONFERE o
+// tipo, como devolve a forma NORMALIZADA (só "image/jpeg", sem o resto),
+// que é o valor de verdade mandado pra API lá em whatsapp-ia.js. Nunca usar
+// o mimeType bruto da Meta direto no campo media_type da Anthropic.
+const TIPOS_IMAGEM_SUPORTADOS = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+function normalizarTipoImagem(mimeType) {
+  const tipoMinusculo = mimeType?.toLowerCase();
+  return TIPOS_IMAGEM_SUPORTADOS.find((tipo) => tipoMinusculo?.startsWith(tipo)) || null;
+}
+// Mesmo limite documentado pela Anthropic pra imagem em base64 — mas o
+// limite é sobre o tamanho JÁ CODIFICADO em base64, que fica exatamente
+// 4/3 maior que o arquivo bruto (3 bytes brutos viram 4 caracteres base64).
+// Checar o buffer bruto direto contra 5MB deixaria passar arquivo que vira
+// maior que 5MB depois de codificado — por isso o limite aqui já é abaixo
+// do real, calculado de trás pra frente a partir do tamanho que o base64
+// vai dar.
+const TAMANHO_MAX_IMAGEM_BYTES = Math.floor((5 * 1024 * 1024) / (4 / 3));
+
+// Baixa a foto e repassa pro mesmo handler do texto, como um bloco de
+// imagem (base64) — a IA (Claude) interpreta imagem nativamente, sem
+// precisar de nenhum serviço de transcrição como no áudio. "legenda" é o
+// texto que o cliente escreveu junto da foto (pode não ter nenhuma).
+// Quando a imagem falha (download, tipo não suportado, tamanho), sempre
+// inclui uma nota factual avisando que uma foto foi tentada e não abriu —
+// tanto quando não há legenda nenhuma (senão a IA nunca saberia que uma
+// mensagem chegou, e o cliente ficaria sem resposta) quanto quando há
+// legenda (senão a IA responderia só o texto, sem noção nenhuma de que uma
+// foto também foi enviada e falhou). A nota é só uma frase factual, sem
+// instrução imperativa pro modelo — a regra FOTOS no prompt já ensina como
+// reagir, e isso também evita que o painel admin (que mostra esse texto
+// como se fosse o cliente escrevendo) fique com instrução de sistema
+// aparecendo como fala do cliente.
+function enfileirarAposFalhaDeImagem(telefone, legenda, motivo) {
+  const nota = `[o cliente tentou enviar uma foto, mas não foi possível abrir: ${motivo}]`;
+  const texto = legenda ? `${legenda}\n${nota}` : nota;
+  enfileirarMensagemRecebida(telefone, texto, telefone);
+}
+
+async function processarImagemRecebida(telefone, mediaId, legenda) {
+  // Reserva a vaga de forma SÍNCRONA, antes de qualquer await (ver
+  // reservarVagaImagem) — garante que, mesmo que a Meta mande várias fotos
+  // no mesmo payload de webhook (processadas em sequência sem esperar o
+  // download de cada uma), a 5ª chamada já vê as 4 reservas anteriores e
+  // nem começa a baixar.
+  if (!reservarVagaImagem(telefone, telefone)) {
+    console.warn(`[whatsapp-oficial] imagem de ${telefone} ignorada sem baixar — limite de ${MAX_IMAGENS_POR_RODADA} por rodada já atingido.`);
+    enfileirarAposFalhaDeImagem(telefone, legenda, 'limite de fotos por mensagem atingido');
+    return;
+  }
+  // Imagem inválida ou com falha de download não pode derrubar a legenda
+  // junto — se o cliente escreveu uma pergunta real junto da foto (ex.:
+  // "isso veio errado, dá pra trocar?"), ela ainda precisa chegar na IA
+  // mesmo sem a imagem, senão o cliente manda uma mensagem de verdade e não
+  // recebe resposta nenhuma. Por isso o try/catch envolve só o download —
+  // qualquer caminho de saída (sucesso, validação falhou, exceção) sempre
+  // passa por enfileirarAposFalhaDeImagem antes de retornar (a vaga já
+  // reservada simplesmente fica sem uso nesses casos, não é devolvida —
+  // tentar devolver depois de um await reabriria a mesma corrida que essa
+  // reserva existe pra evitar).
+  let buffer, mimeType;
+  try {
+    ({ buffer, mimeType } = await baixarMidiaWhatsApp(mediaId));
+  } catch (err) {
+    console.error(`[whatsapp-oficial] falha ao baixar imagem de ${telefone}:`, err.message, '— imagem ignorada.');
+    enfileirarAposFalhaDeImagem(telefone, legenda, 'falha ao baixar do WhatsApp');
+    return;
+  }
+  const tipoNormalizado = normalizarTipoImagem(mimeType);
+  if (!tipoNormalizado) {
+    console.warn(`[whatsapp-oficial] imagem de ${telefone} com tipo não suportado (${mimeType}) — imagem ignorada.`);
+    enfileirarAposFalhaDeImagem(telefone, legenda, 'formato de imagem não suportado');
+    return;
+  }
+  if (buffer.length > TAMANHO_MAX_IMAGEM_BYTES) {
+    console.warn(`[whatsapp-oficial] imagem de ${telefone} grande demais (${buffer.length} bytes) — imagem ignorada.`);
+    enfileirarAposFalhaDeImagem(telefone, legenda, 'arquivo grande demais');
+    return;
+  }
+  console.log(`[whatsapp-oficial] imagem de ${telefone} recebida (${mimeType}, ${buffer.length} bytes)${legenda ? ` com legenda: "${legenda}"` : ' sem legenda'}.`);
+  enfileirarMensagemRecebida(telefone, legenda || '', telefone, { base64: buffer.toString('base64'), mediaType: tipoNormalizado });
+}
+
 // A Meta garante entrega "pelo menos uma vez" — o mesmo evento pode chegar
 // duplicado nesse webhook (reenvio por timeout, retry de rede etc.). Sem
 // filtrar pelo id da mensagem, uma reentrega faria a IA responder de novo
@@ -207,9 +334,9 @@ function jaProcessada(msgId) {
 }
 
 // Chamado pelo POST /webhook-whatsapp (ver server.js) a cada evento que a
-// Meta entrega pro número configurado. Processa mensagem de texto e de
-// áudio recebida de cliente (ignora reação, imagem, documento etc. por
-// enquanto) e também loga status de entrega (sent/delivered/read/failed) —
+// Meta entrega pro número configurado. Processa mensagem de texto, áudio e
+// imagem recebida de cliente (ignora reação, documento etc. por enquanto)
+// e também loga status de entrega (sent/delivered/read/failed) —
 // sem isso a gente nunca saberia se um envio que a API aceitou ("accepted")
 // de fato chegou no celular do cliente ou falhou silenciosamente depois.
 function processarWebhookRecebido(body) {
@@ -240,6 +367,10 @@ function processarWebhookRecebido(body) {
         } else if (msg.type === 'audio' && msg.audio?.id) {
           processarAudioRecebido(telefone, msg.audio.id).catch((err) => {
             console.error('[whatsapp-oficial] erro ao processar áudio recebido:', err.message);
+          });
+        } else if (msg.type === 'image' && msg.image?.id) {
+          processarImagemRecebida(telefone, msg.image.id, msg.image.caption).catch((err) => {
+            console.error('[whatsapp-oficial] erro ao processar imagem recebida:', err.message);
           });
         }
       }
