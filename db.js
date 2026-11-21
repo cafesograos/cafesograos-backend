@@ -239,6 +239,27 @@ async function initDb() {
     );
   `);
 
+  // Pedido de troca/devolução que o cliente fez pela IA (ver
+  // notificarTrocaDevolucao em server.js) — tabela separada da fila de
+  // escalações de cima de propósito: aqui o João (financeiro) contata o
+  // cliente por fora, a IA não repassa resposta nenhuma de volta, então não
+  // faz sentido misturar com a fila que a IA administrativa usa pra saber
+  // "pra quem repassar". Guarda a linha ANTES de tentar mandar o WhatsApp
+  // pro João — se o envio falhar (template não aprovado, token expirado,
+  // Meta fora do ar), o pedido de troca fica registrado aqui em vez de se
+  // perder sem nenhum rastro (a IA já tinha dito "fique tranquilo" pro
+  // cliente, então perder isso silenciosamente era o pior cenário).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_trocas_devolucoes (
+      id SERIAL PRIMARY KEY,
+      telefone_cliente TEXT NOT NULL,
+      motivo TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      notificado_em TIMESTAMPTZ,
+      resolvido_em TIMESTAMPTZ
+    );
+  `);
+
   // Contatos conhecidos (ex: cliente empresa recorrente, como o Helder da
   // Panobianco) — cadastrado uma vez pelo dono em /admin/whatsapp/contatos,
   // pra IA já reconhecer quem é na próxima conversa (nome, empresa,

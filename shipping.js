@@ -114,10 +114,23 @@ async function renovarToken(row) {
   return data.access_token;
 }
 
-async function calcularFrete(cepDestino, pesoKg) {
+// "valorSegurado" precisa bater com o valor real usado depois na hora de
+// comprar a etiqueta de verdade (ver inserirNoCarrinho/valorSeguro em
+// server.js, sempre total - frete) — a cotação já usava um valor fixo de
+// R$ 50 de seguro aqui, só que a compra real da etiqueta segura o valor
+// verdadeiro do pedido (quase todo item do catálogo custa mais que isso).
+// A Melhor Envio pode cobrar um adicional de seguro proporcional ao valor
+// declarado, então cotar com R$ 50 e comprar com o valor real fazia o custo
+// de verdade sair maior que o que a cotação levou em conta, comendo margem
+// sem nenhum jeito de perceber isso olhando só pro valor mostrado no
+// checkout. Mantém o fallback de 50 só pra quando quem chama não tiver
+// como informar o valor (não deveria acontecer em nenhum call site atual).
+async function calcularFrete(cepDestino, pesoKg, valorSegurado) {
   const destino = limparCep(cepDestino);
   if (destino.length !== 8) throw new Error('CEP inválido.');
   const peso = Math.max(0.3, pesoKg || 0.3);
+  const valorSeguradoNumerico = Number(valorSegurado);
+  const seguro = Number.isFinite(valorSeguradoNumerico) ? valorSeguradoNumerico : 50;
 
   try {
     const token = await getValidToken();
@@ -134,7 +147,7 @@ async function calcularFrete(cepDestino, pesoKg) {
         from: { postal_code: ORIGEM_CEP },
         to: { postal_code: destino },
         products: [
-          { id: 'carrinho', width: 15, height: 10, length: 20, weight: peso, insurance_value: 50, quantity: 1 }
+          { id: 'carrinho', width: 15, height: 10, length: 20, weight: peso, insurance_value: seguro, quantity: 1 }
         ],
         options: { receipt: false, own_hand: false },
         services

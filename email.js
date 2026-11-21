@@ -9,11 +9,14 @@ function escapeHtml(value) {
   }[c]));
 }
 
-async function enviarEmail({ to, subject, html }) {
+async function enviarEmail({ to, subject, html, attachments }) {
   if (!RESEND_API_KEY) {
     console.warn('AVISO: RESEND_API_KEY não definido. E-mail não enviado:', subject);
     return { ok: false, motivo: 'RESEND_API_KEY não definido' };
   }
+
+  const body = { from: FROM_EMAIL, to: [to], subject, html };
+  if (attachments) body.attachments = attachments;
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -21,13 +24,13 @@ async function enviarEmail({ to, subject, html }) {
       Authorization: `Bearer ${RESEND_API_KEY}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ from: FROM_EMAIL, to: [to], subject, html })
+    body: JSON.stringify(body)
   });
 
   if (!res.ok) {
-    const body = await res.text();
-    console.error('Erro ao enviar e-mail via Resend:', res.status, body);
-    return { ok: false, status: res.status, body };
+    const corpoResposta = await res.text();
+    console.error('Erro ao enviar e-mail via Resend:', res.status, corpoResposta);
+    return { ok: false, status: res.status, body: corpoResposta };
   }
   console.log('E-mail enviado para', to, '—', subject);
   return { ok: true };
@@ -212,4 +215,4 @@ async function enviarEmailBoasVindasLead(lead) {
   });
 }
 
-module.exports = { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio, enviarEmailBoasVindasLead };
+module.exports = { enviarEmail, enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio, enviarEmailBoasVindasLead };

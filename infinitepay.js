@@ -60,7 +60,21 @@ async function consultarStatusPagamento({ orderNsu, transactionNsu, slug }) {
       slug
     })
   });
-  return res.json();
+  const data = await res.json();
+  // Sem isso, uma falha de verdade da API (chave inválida, API fora do ar,
+  // 500) voltava um corpo sem "success"/"paid", e os dois chamadores (o
+  // webhook e a reconciliação automática) só checam esses dois campos —
+  // tratavam silenciosamente como "ainda não pago" em vez de um erro real,
+  // sem nenhum alerta. Os dois já têm try/catch com Sentry em volta da
+  // chamada, então lançar aqui já basta pra isso aparecer de verdade.
+  if (!res.ok) throw new Error(`InfinitePay retornou erro ao consultar pagamento (${res.status}): ${JSON.stringify(data)}`);
+  // NÃO dá pra também exigir que "data.success" seja booleano aqui: a
+  // reconciliação automática chama isso sem transaction_nsu/slug pra pedidos
+  // "pending" que podem nunca ter sido pagos de verdade, e nesse caso um
+  // corpo sem "success"/"paid" é uma resposta válida de "nada encontrado
+  // ainda", não um erro — tratar isso como erro geraria alerta repetido pra
+  // todo pedido abandonado (o que esse código já evita no outro ponto).
+  return data;
 }
 
 module.exports = { criarLinkPagamento, consultarStatusPagamento };

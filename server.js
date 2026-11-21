@@ -152,6 +152,16 @@ function freteGratisParaCep(cep, subtotal) {
   return Number(subtotal) >= limiteFreteGratisParaCep(cep);
 }
 
+// Subtotal de catálogo já com o desconto aplicado — usado como valor
+// segurado na cotação de frete, pra bater com o que a etiqueta real vai
+// segurar depois (order.total - shipping_cost, que já reflete o cupom ou o
+// desconto manual do vendedor). Extraído aqui porque o checkout do site e o
+// painel do vendedor calculavam isso cada um do seu jeito, com risco de
+// divergir se um dos dois mudasse sozinho.
+function subtotalComDescontoAplicado(subtotalCatalogo, descontoPercent) {
+  return subtotalCatalogo * (1 - (descontoPercent || 0) / 100);
+}
+
 // Limita a rota que cria pagamento de verdade (InfinitePay) — mais apertado
 // porque cada chamada gera um pedido real no banco, pra um IP não conseguir
 // poluir o painel de pedidos nem abusar da criação de links de pagamento.
@@ -329,7 +339,7 @@ function bloquearScript(req, res, next) {
 app.post('/api/calcular-frete', bloquearScript, freteLimiter, async (req, res) => {
   try {
     const { cep, pesoKg, subtotal } = req.body;
-    const frete = await calcularFrete(cep, Number(pesoKg));
+    const frete = await calcularFrete(cep, Number(pesoKg), subtotal != null ? Number(subtotal) : undefined);
     frete.limiteFreteGratis = limiteFreteGratisParaCep(cep);
     if (freteGratisParaCep(cep, subtotal)) {
       frete.valor = 0;
@@ -680,7 +690,12 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     // de verdade, e sem cotar aqui não sobrava id de serviço nenhum pra
     // comprar a etiqueta desses pedidos depois.
     const freteGratis = freteGratisParaCep(entrega.cep, subtotalCatalogo);
-    const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
+    // Seguro cotado aqui precisa bater com o que a etiqueta de verdade vai
+    // usar depois (order.total - shipping_cost, já com cupom aplicado) —
+    // diferente do subtotalCatalogo de cima, que é de propósito SEM
+    // desconto (decide só a faixa de frete grátis).
+    const subtotalComDesconto = subtotalComDescontoAplicado(subtotalCatalogo, descontoPercent);
+    const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg, subtotalComDesconto);
     const shippingCost = freteGratis ? 0 : freteCalculado.valor;
     // Guarda qual transportadora/modalidade foi a mais barata pra esse pedido
     // — sem isso, na hora de gerar a etiqueta de verdade era preciso
@@ -985,6 +1000,17 @@ async function reconciliarPedidosPendentes() {
   if (rows.length === 0) return;
 
   let aprovados = 0;
+  // Conta falhas em vez de mandar um Sentry.captureException por pedido —
+  // se a InfinitePay cair (chave inválida, API fora do ar), consultarStatusPagamento
+  // agora lança erro pra CADA pedido pending da rodada (antes, a falha
+  // passava silenciosa — o bug que motivou essa checagem), e sem esse
+  // agrupamento isso viraria uma dezena de alertas idênticos floodando o
+  // Sentry a cada 15 min em vez de 1 só avisando a causa raiz.
+  let falhasNaConsulta = 0;
+  // Agrupado por mensagem de erro (não só "o último"), porque uma rodada pode
+  // ter mais de uma causa raiz diferente (ex: chave inválida numa consulta e
+  // timeout noutra) — reportar só a última mascararia as outras.
+  const falhasPorMensagem = new Map();
   for (const pedido of rows) {
     try {
       const status = await consultarStatusPagamento({ orderNsu: pedido.preference_id });
@@ -1007,10 +1033,27 @@ async function reconciliarPedidosPendentes() {
       }
     } catch (err) {
       console.error(`[reconciliação] Erro ao checar pedido ${pedido.preference_id}:`, err.message);
-      Sentry.captureException(err, { extra: { origem: 'reconciliacao-pendentes-item', preferenceId: pedido.preference_id } });
+      falhasNaConsulta++;
+      // Agrupa só pelo texto antes do corpo da resposta (que é só JSON
+      // variável por pedido — order_nsu, etc.) pra não cair de volta na
+      // mesma falha de agrupamento que motivou esse comentário.
+      const chaveAgrupamento = String(err?.message ?? err).replace(/:\s*[{[].*$/s, '');
+      const existente = falhasPorMensagem.get(chaveAgrupamento);
+      if (existente) {
+        existente.ocorrencias++;
+      } else {
+        falhasPorMensagem.set(chaveAgrupamento, { err, ocorrencias: 1, primeiroPedido: pedido.preference_id });
+      }
     }
   }
-  console.log(`[reconciliação] Rodou: ${rows.length} pedido(s) pending checado(s), ${aprovados} aprovado(s) automaticamente.`);
+  if (falhasNaConsulta > 0) {
+    for (const { err, ocorrencias, primeiroPedido } of falhasPorMensagem.values()) {
+      Sentry.captureException(err, {
+        extra: { origem: 'reconciliacao-pendentes-item', ocorrenciasDessaFalha: ocorrencias, falhas: falhasNaConsulta, totalPedidos: rows.length, primeiroPedido }
+      });
+    }
+  }
+  console.log(`[reconciliação] Rodou: ${rows.length} pedido(s) pending checado(s), ${aprovados} aprovado(s) automaticamente${falhasNaConsulta > 0 ? `, ${falhasNaConsulta} falha(s) ao consultar` : ''}.`);
 }
 
 // Dados mínimos e públicos de um pedido (sem nome/e-mail/endereço do cliente),
@@ -1817,6 +1860,10 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
   const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
 
   const subtotalCatalogo = itensValidados.reduce((sum, { produto, quantity }) => sum + produto.preco * quantity, 0);
+  // Mesmo cuidado do checkout do site: o seguro cotado aqui precisa bater
+  // com order.total - shipping_cost (já com o desconto manual do vendedor
+  // aplicado), não com o subtotal de catálogo puro.
+  const subtotalComDesconto = subtotalComDescontoAplicado(subtotalCatalogo, descontoPercent);
   const pesoTotalKg = itensValidados.reduce(
     (sum, { produto, quantity }) => sum + ((produto.pesoGramas || 300) * quantity) / 1000,
     0
@@ -1824,7 +1871,7 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
 
   let freteCalculado;
   try {
-    freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg);
+    freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg, subtotalComDesconto);
   } catch (err) {
     console.error('Erro ao calcular frete (vendedor):', err.message);
     return res.status(400).send(novoPedidoForm({ erro: 'Não foi possível calcular o frete. Confira o CEP.' }));
@@ -2020,7 +2067,7 @@ async function calcularFretePreviewViaAtendimento({ cep, telefone, itens }) {
   const brindeQuantidade = await brindeQuantidadeViaAtendimento(telefone);
   const { pesoTotalKg, subtotalCatalogo } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
 
-  const freteCalculado = await calcularFrete(cep, pesoTotalKg);
+  const freteCalculado = await calcularFrete(cep, pesoTotalKg, subtotalCatalogo);
   const freteGratis = freteGratisParaCep(cep, subtotalCatalogo);
 
   return { valor: freteGratis ? 0 : freteCalculado.valor, gratis: freteGratis, prazoDias: freteCalculado.prazoDias };
@@ -2060,7 +2107,7 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
 
   const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
 
-  const freteCalculado = await calcularFrete(cep, pesoTotalKg);
+  const freteCalculado = await calcularFrete(cep, pesoTotalKg, subtotalCatalogo);
   // Mesma regra do checkout do site agora: decidida pelo CEP real do pedido
   // (não mais só pela confirmação da conversa) — araraquaraConfirmado
   // continua existindo pra IA citar a condição certa antes de fechar, mas
@@ -3505,7 +3552,7 @@ app.get('/admin/whatsapp/conversas', requireAdmin, asyncHandler(async (req, res)
       SELECT content, role FROM whatsapp_mensagens w2 WHERE w2.phone = g.phone ORDER BY created_at DESC LIMIT 1
     ) lm ON true
     LEFT JOIN LATERAL (
-      SELECT name FROM leads l2 WHERE l2.phone <> '' AND l2.phone = RIGHT(g.phone, LENGTH(l2.phone)) ORDER BY l2.created_at DESC LIMIT 1
+      SELECT name FROM leads l2 WHERE l2.phone <> '' AND RIGHT(regexp_replace(l2.phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace(g.phone, '\\D', '', 'g'), 11) ORDER BY l2.created_at DESC LIMIT 1
     ) l ON true
     ORDER BY g.ultima_em DESC
     LIMIT 100
@@ -3544,7 +3591,7 @@ app.get('/admin/whatsapp/conversas/:phone', requireAdmin, asyncHandler(async (re
 
   const [{ rows: mensagens }, { rows: leadRows }] = await Promise.all([
     pool.query(`SELECT role, content, created_at FROM whatsapp_mensagens WHERE phone = $1 ORDER BY created_at ASC`, [phone]),
-    pool.query(`SELECT name FROM leads WHERE phone <> '' AND phone = RIGHT($1, LENGTH(phone)) ORDER BY created_at DESC LIMIT 1`, [phone])
+    pool.query(`SELECT name FROM leads WHERE phone <> '' AND RIGHT(regexp_replace(phone, '\\D', '', 'g'), 11) = RIGHT($1, 11) ORDER BY created_at DESC LIMIT 1`, [phone])
   ]);
   const nomeLead = leadRows[0]?.name;
 
@@ -4034,10 +4081,47 @@ async function escalarAtendimento(telefoneCliente, motivo) {
 // deu a resposta final pro cliente ("fique tranquilo..."); o João é quem
 // entra em contato por fora, não tem repasse pela IA depois.
 async function notificarTrocaDevolucao(telefoneCliente, motivo) {
+  // Grava ANTES de tentar mandar o WhatsApp — a IA já disse "fique
+  // tranquilo" pro cliente nesse ponto, então se o envio falhar (template
+  // não aprovado, token expirado, Meta fora do ar) o pedido de troca não
+  // pode simplesmente desaparecer sem nenhum rastro; fica registrado aqui
+  // mesmo que ninguém seja avisado automaticamente.
+  let registroId = null;
+  if (pool) {
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO whatsapp_trocas_devolucoes (telefone_cliente, motivo) VALUES ($1, $2) RETURNING id`,
+        [telefoneCliente, motivo || 'não especificado']
+      );
+      registroId = rows[0]?.id || null;
+    } catch (err) {
+      console.error('[whatsapp-ia] falha ao gravar registro de troca/devolução:', err.message);
+      Sentry.captureException(err, { extra: { telefoneCliente, motivo, etapa: 'gravar_troca_devolucao' } });
+    }
+  }
   try {
     await enviarTemplateWhatsApp(JOAO_FINANCEIRO_WHATSAPP_NUMBER, WHATSAPP_TEMPLATES.escalacao, { telefone_cliente: telefoneCliente, motivo: motivo || 'não especificado' });
   } catch (err) {
     console.error('[whatsapp-ia] falha ao avisar o João sobre troca/devolução:', err.message);
+    // Sem alerta visível, uma falha aqui só aparecia como console.error
+    // perdido no log — e diferente de outras falhas de envio no sistema,
+    // essa é a ÚNICA notificação de um cliente com produto com defeito ou
+    // pedido de devolução: se ninguém souber que falhou, ninguém nunca
+    // entra em contato com esse cliente.
+    Sentry.captureException(err, { extra: { telefoneCliente, motivo, registroId, etapa: 'notificar_troca_devolucao' } });
+    return;
+  }
+  // Separado do try/catch do envio de propósito: se o WhatsApp pro João já
+  // saiu com sucesso, uma falha só nesse UPDATE (ex.: soluço de conexão com
+  // o banco) não pode ser reportada como "falha ao avisar o João" — ele FOI
+  // avisado, só a marcação de "quando" não gravou.
+  if (pool && registroId) {
+    try {
+      await pool.query(`UPDATE whatsapp_trocas_devolucoes SET notificado_em = now() WHERE id = $1`, [registroId]);
+    } catch (err) {
+      console.error('[whatsapp-ia] falha ao marcar troca/devolução como notificada (o João já foi avisado):', err.message);
+      Sentry.captureException(err, { extra: { telefoneCliente, motivo, registroId, etapa: 'marcar_notificado_troca_devolucao' } });
+    }
   }
 }
 

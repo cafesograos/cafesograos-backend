@@ -1,15 +1,16 @@
 const zlib = require('zlib');
 const crypto = require('crypto');
+const { enviarEmail } = require('./email');
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL || 'alberto.adm@cafesograos.com';
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'Café Só Grãos <onboarding@resend.dev>';
 const BACKUP_ENCRYPTION_KEY = process.env.BACKUP_ENCRYPTION_KEY;
 
-// Tabelas com dado de negócio (pedidos, avaliações, cupons, leads). Fora
-// melhorenvio_tokens de propósito: é credencial, não dado — se precisar,
-// se reobtém reautorizando o OAuth, e não faz sentido mandar por e-mail.
-const TABELAS_BACKUP = ['orders', 'reviews', 'discounts', 'leads'];
+// Tabelas com dado de negócio (pedidos, avaliações, cupons, leads, contatos
+// já identificados pelo WhatsApp). Fora melhorenvio_tokens de propósito: é
+// credencial, não dado — se precisar, se reobtém reautorizando o OAuth, e
+// não faz sentido mandar por e-mail.
+const TABELAS_BACKUP = ['orders', 'reviews', 'discounts', 'leads', 'clientes_conhecidos'];
 
 async function gerarBackupJson(pool) {
   const tabelas = {};
@@ -53,23 +54,18 @@ async function enviarBackupPorEmail(pool) {
     const dataArquivo = backup.geradoEm.slice(0, 10);
     const totalLinhas = Object.values(backup.tabelas).reduce((soma, linhas) => soma + linhas.length, 0);
 
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: FROM_EMAIL,
-        to: [NOTIFY_EMAIL],
-        subject: `Backup diário do banco — ${dataArquivo}`,
-        html: `<p>Backup automático do banco de dados (${TABELAS_BACKUP.join(', ')}), ${totalLinhas} linhas no total.</p><p>Anexo criptografado (AES-256-GCM) — a chave está só na variável <code>BACKUP_ENCRYPTION_KEY</code> do Railway, nunca neste e-mail. Pra abrir, use <code>decrypt-backup.js</code> no repositório do backend.</p>`,
-        attachments: [{
-          filename: `backup-cafesograos-${dataArquivo}.json.gz.enc`,
-          content: conteudoCifrado.toString('base64')
-        }]
-      })
+    const resultado = await enviarEmail({
+      to: NOTIFY_EMAIL,
+      subject: `Backup diário do banco — ${dataArquivo}`,
+      html: `<p>Backup automático do banco de dados (${TABELAS_BACKUP.join(', ')}), ${totalLinhas} linhas no total.</p><p>Anexo criptografado (AES-256-GCM) — a chave está só na variável <code>BACKUP_ENCRYPTION_KEY</code> do Railway, nunca neste e-mail. Pra abrir, use <code>decrypt-backup.js</code> no repositório do backend.</p>`,
+      attachments: [{
+        filename: `backup-cafesograos-${dataArquivo}.json.gz.enc`,
+        content: conteudoCifrado.toString('base64')
+      }]
     });
 
-    if (!res.ok) {
-      console.error('Erro ao enviar backup diário por e-mail:', res.status, await res.text());
+    if (!resultado.ok) {
+      console.error('Erro ao enviar backup diário por e-mail:', resultado.status ?? '(sem status)', resultado.body ?? resultado.motivo ?? '(sem detalhe)');
       return;
     }
     console.log(`Backup diário enviado por e-mail, criptografado (${totalLinhas} linhas, ${dataArquivo}).`);
