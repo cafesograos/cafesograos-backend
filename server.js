@@ -13,7 +13,8 @@ const { agendarBackupDiario } = require('./backup');
 const {
   iniciarWhatsApp, enviarMensagemWhatsApp, enviarTemplateWhatsApp,
   definirHandlerMensagem, processarWebhookRecebido,
-  getStatusConexao: getStatusWhatsApp
+  getStatusConexao: getStatusWhatsApp,
+  executarEmFilaPorTelefone
 } = require('./whatsapp-oficial');
 const { responderMensagem, salvarRespostaAssistente, responderDono, dividirEmPartes, limparDelimitador } = require('./whatsapp-ia');
 const crypto = require('crypto');
@@ -3351,34 +3352,42 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
   let motivoTrocaDevolucao = null;
   let produtoInteresseMarcado = null;
   try {
-    const { texto: resposta } = await responderMensagem(TELEFONE_TESTE_IA, mensagem, {
-      pool,
-      PRODUCTS,
-      consultarPedidoPorTelefone,
-      criarPedidoViaAtendimento: async () => ({
-        aviso: 'TESTE: nenhum pedido real foi criado nem link de pagamento gerado — isso é só uma simulação pro dono treinar a IA.',
-        link: 'https://exemplo.invalido/pagamento-de-teste'
-      }),
-      // calcular_frete não cria nada, só consulta o cálculo (igual à
-      // calculadora de frete do site) — sem risco nenhum usar a função real
-      // aqui também, igual já acontece com buscarClienteConhecido abaixo.
-      calcularFretePreviewViaAtendimento,
-      escalarAtendimento: async (_telefoneCliente, motivo) => {
-        motivoEscalado = motivo || 'não especificado';
-      },
-      notificarTrocaDevolucao: async (_telefoneCliente, motivo) => {
-        motivoTrocaDevolucao = motivo || 'não especificado';
-      },
-      marcarInteresseSemFechamento: async (_telefone, produtoInteresse) => {
-        produtoInteresseMarcado = produtoInteresse || 'não especificado';
-      },
-      // Usa a função real (só leitura, sem risco nenhum na simulação): sem
-      // isso, o teste sempre tratava o número de teste como desconhecido,
-      // então nunca reproduzia como a IA trata um contato cadastrado (ex:
-      // cliente de empresa recorrente, já reconhecido pelo nome).
-      buscarClienteConhecido
+    // Mesma fila por telefone da conversa de verdade (ver
+    // executarEmFilaPorTelefone em whatsapp-oficial.js) — sem isso, um
+    // duplo clique ou duas abas nesse formulário rodam dois
+    // responderMensagem(TELEFONE_TESTE_IA, ...) ao mesmo tempo e corrompem
+    // a alternância do histórico de teste do mesmo jeito que corrompia na
+    // conversa real antes dessa correção.
+    await executarEmFilaPorTelefone(TELEFONE_TESTE_IA, async () => {
+      const { texto } = await responderMensagem(TELEFONE_TESTE_IA, mensagem, {
+        pool,
+        PRODUCTS,
+        consultarPedidoPorTelefone,
+        criarPedidoViaAtendimento: async () => ({
+          aviso: 'TESTE: nenhum pedido real foi criado nem link de pagamento gerado — isso é só uma simulação pro dono treinar a IA.',
+          link: 'https://exemplo.invalido/pagamento-de-teste'
+        }),
+        // calcular_frete não cria nada, só consulta o cálculo (igual à
+        // calculadora de frete do site) — sem risco nenhum usar a função real
+        // aqui também, igual já acontece com buscarClienteConhecido abaixo.
+        calcularFretePreviewViaAtendimento,
+        escalarAtendimento: async (_telefoneCliente, motivo) => {
+          motivoEscalado = motivo || 'não especificado';
+        },
+        notificarTrocaDevolucao: async (_telefoneCliente, motivo) => {
+          motivoTrocaDevolucao = motivo || 'não especificado';
+        },
+        marcarInteresseSemFechamento: async (_telefone, produtoInteresse) => {
+          produtoInteresseMarcado = produtoInteresse || 'não especificado';
+        },
+        // Usa a função real (só leitura, sem risco nenhum na simulação): sem
+        // isso, o teste sempre tratava o número de teste como desconhecido,
+        // então nunca reproduzia como a IA trata um contato cadastrado (ex:
+        // cliente de empresa recorrente, já reconhecido pelo nome).
+        buscarClienteConhecido
+      });
+      if (texto) await salvarRespostaAssistente(pool, TELEFONE_TESTE_IA, texto);
     });
-    if (resposta) await salvarRespostaAssistente(pool, TELEFONE_TESTE_IA, resposta);
   } catch (err) {
     console.error('[admin/testar-ia] falha ao gerar resposta de teste:', err.message);
     return res.status(500).send(`Erro ao gerar resposta: ${escapeHtml(err.message)}`);
@@ -4034,8 +4043,13 @@ async function processarFilaRetomarConversaWhatsApp() {
     );
     for (const { phone } of rows) {
       try {
-        await enviarMensagemWhatsApp(phone, 'Oi! Tudo bem? 😊 Fico à disposição se quiser continuar nosso papo de ontem.');
-        await salvarRespostaAssistente(pool, phone, 'Oi! Tudo bem? 😊 Fico à disposição se quiser continuar nosso papo de ontem.');
+        // Na fila do telefone do cliente — ele está quieto desde ontem, mas
+        // nada impede que mande mensagem bem na hora que esse envio roda
+        // (ver executarEmFilaPorTelefone em whatsapp-oficial.js).
+        await executarEmFilaPorTelefone(phone, async () => {
+          await enviarMensagemWhatsApp(phone, 'Oi! Tudo bem? 😊 Fico à disposição se quiser continuar nosso papo de ontem.');
+          await salvarRespostaAssistente(pool, phone, 'Oi! Tudo bem? 😊 Fico à disposição se quiser continuar nosso papo de ontem.');
+        });
         console.log(`WhatsApp de retomada de conversa enviado pra ${phone}.`);
       } catch (err) {
         console.error(`Falha ao retomar conversa com ${phone}:`, err.message);
@@ -4296,8 +4310,14 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal, imagens) => {
         responderClientePendente: async (escalacaoId, textoParaCliente) => {
           const alvo = escalacoesPendentes.find((e) => e.id === escalacaoId);
           if (!alvo) throw new Error(`Escalação #${escalacaoId} não encontrada ou já respondida.`);
-          await enviarMensagemWhatsApp(alvo.telefone_cliente, textoParaCliente);
-          await salvarRespostaAssistente(pool, alvo.telefone_cliente, textoParaCliente);
+          // Na fila do telefone do CLIENTE (não do dono) — essa escrita
+          // toca o histórico dele, então não pode rodar ao mesmo tempo que
+          // uma rodada da IA em andamento pra esse mesmo número (ver
+          // executarEmFilaPorTelefone em whatsapp-oficial.js).
+          await executarEmFilaPorTelefone(alvo.telefone_cliente, async () => {
+            await enviarMensagemWhatsApp(alvo.telefone_cliente, textoParaCliente);
+            await salvarRespostaAssistente(pool, alvo.telefone_cliente, textoParaCliente);
+          });
           await pool.query(`UPDATE whatsapp_escalacoes SET respondido_em = now() WHERE id = $1`, [alvo.id]);
           console.log(`[whatsapp-ia] resposta do dono repassada pra ${alvo.telefone_cliente} (escalação #${alvo.id}).`);
         }

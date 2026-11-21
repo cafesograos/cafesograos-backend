@@ -30,6 +30,35 @@ function definirHandlerMensagem(callback) {
 const JANELA_AGRUPAMENTO_MS = 20000;
 const buffersMensagem = new Map(); // telefone -> { textos, imagens, jid, timer }
 
+// Serializa as rodadas do handler por telefone — sem isso, se a IA demorar
+// mais que os 20s de janela pra responder a rodada A (ex: uma chamada de
+// ferramenta mais lenta), e o cliente mandar mais mensagens nesse meio
+// tempo, a rodada B dispara um SEGUNDO handlerMensagem(telefone, ...) pro
+// mesmo número enquanto A ainda está rodando: as duas carregam o histórico,
+// salvam a mensagem do cliente e salvam a resposta da IA ao mesmo tempo, o
+// que pode quebrar a alternância estrita user/assistant que a API da
+// Anthropic exige (ver carregarHistorico em whatsapp-ia.js) — e, uma vez
+// quebrada, o histórico fica permanentemente inválido pra aquele telefone.
+// Processo único (Node), então não precisa de lock de verdade: só encadear
+// a execução por telefone garante a ordem.
+const filaPorTelefone = new Map(); // telefone -> Promise da rodada em andamento
+
+function executarEmFilaPorTelefone(telefone, tarefa) {
+  const anterior = filaPorTelefone.get(telefone) || Promise.resolve();
+  const atual = anterior.catch(() => {}).then(tarefa);
+  filaPorTelefone.set(telefone, atual);
+  // NÃO usar .finally() aqui: ele devolve uma promise DERIVADA que também
+  // rejeita se "atual" rejeitar, e essa derivada não tem nenhum .catch() em
+  // lugar nenhum — vira unhandled rejection e pode derrubar o processo. Com
+  // .then(limpar, limpar) a limpeza roda nos dois casos (sucesso ou falha)
+  // mas sem relançar nada, então a promise derivada nunca rejeita.
+  const limpar = () => {
+    if (filaPorTelefone.get(telefone) === atual) filaPorTelefone.delete(telefone);
+  };
+  atual.then(limpar, limpar);
+  return atual;
+}
+
 // "imagens" é opcional: array de { base64, mediaType }, pra quando a
 // mensagem é uma foto (com ou sem legenda — ver processarImagemRecebida).
 // Sem isso, uma foto SEM legenda nenhuma (texto vazio) nunca entrava na
@@ -84,7 +113,7 @@ function enfileirarMensagemRecebida(telefone, texto, jidOriginal, imagemReservad
   buffer.timer = setTimeout(() => {
     buffersMensagem.delete(telefone);
     const textoCombinado = buffer.textos.join('\n');
-    Promise.resolve(handlerMensagem(telefone, textoCombinado, buffer.jid, buffer.imagens)).catch((err) => {
+    executarEmFilaPorTelefone(telefone, () => handlerMensagem(telefone, textoCombinado, buffer.jid, buffer.imagens)).catch((err) => {
       console.error('[whatsapp-oficial] erro ao processar mensagem recebida:', err.message);
     });
   }, JANELA_AGRUPAMENTO_MS);
@@ -388,6 +417,13 @@ module.exports = {
   definirHandlerMensagem,
   processarWebhookRecebido,
   getStatusConexao,
+  // Exportado pra server.js também serializar escritas que tocam o
+  // histórico de um cliente por fora da rodada normal da IA (ver o repasse
+  // da resposta do dono numa escalação, em responderClientePendente) — sem
+  // isso, essa escrita roda sob a fila do número do DONO, não a do cliente
+  // de verdade, e pode intercalar com uma rodada da IA pra esse mesmo
+  // cliente em andamento ao mesmo tempo.
+  executarEmFilaPorTelefone,
   // Compatibilidade com a interface antiga (da conexão via Baileys, já
   // removida) — a API oficial não tem QR code nem "conectar"/"desconectar"
   // de verdade, é tudo configuração por variável de ambiente, então essas
