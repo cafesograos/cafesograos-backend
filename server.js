@@ -153,14 +153,18 @@ function freteGratisParaCep(cep, subtotal) {
   return Number(subtotal) >= limiteFreteGratisParaCep(cep);
 }
 
-// Subtotal de catálogo já com o desconto aplicado — usado como valor
-// segurado na cotação de frete, pra bater com o que a etiqueta real vai
-// segurar depois (order.total - shipping_cost, que já reflete o cupom ou o
-// desconto manual do vendedor). Extraído aqui porque o checkout do site e o
-// painel do vendedor calculavam isso cada um do seu jeito, com risco de
-// divergir se um dos dois mudasse sozinho.
-function subtotalComDescontoAplicado(subtotalCatalogo, descontoPercent) {
-  return subtotalCatalogo * (1 - (descontoPercent || 0) / 100);
+// Subtotal de verdade dos itens do pedido (já com desconto, cada item
+// arredondado pro centavo) — usado como valor segurado na cotação de frete,
+// pra bater com o que a etiqueta real vai segurar depois (order.total -
+// shipping_cost). Recebe "itensParaPedido" (mesmo array que vira line_items)
+// em vez de um subtotal agregado + percentual: aplicar o desconto só na soma
+// agregada (ex. subtotalCatalogo * (1 - desconto/100)) divergia alguns
+// centavos do total real, porque o total real soma cada item já arredondado
+// individualmente pro centavo (ver "unit_price: Number((produto.preco *
+// (1 - descontoPercent/100)).toFixed(2))" acima) — somando os itens já
+// arredondados aqui, o resultado bate exatamente com "total" mais abaixo.
+function subtotalComDescontoAplicado(itensParaPedido) {
+  return Number(itensParaPedido.reduce((soma, i) => soma + i.unit_price * i.quantity, 0).toFixed(2));
 }
 
 // Limita a rota que cria pagamento de verdade (InfinitePay) — mais apertado
@@ -340,7 +344,15 @@ function bloquearScript(req, res, next) {
 app.post('/api/calcular-frete', bloquearScript, freteLimiter, async (req, res) => {
   try {
     const { cep, pesoKg, subtotal } = req.body;
-    const frete = await calcularFrete(cep, Number(pesoKg), subtotal != null ? Number(subtotal) : undefined);
+    // Esse endpoint é público (só prévia, não gera pedido nem cobra nada),
+    // então o "subtotal" vem direto do cliente sem nenhuma validação de
+    // servidor por trás — precisa ser um número finito e positivo pra valer
+    // como segurado; 0, negativo ou lixo (string vazia, texto) cai no
+    // fallback de calcularFrete (R$ 50) em vez de virar um valor absurdo
+    // mandado pra Melhor Envio.
+    const subtotalNumerico = Number(subtotal);
+    const subtotalValido = Number.isFinite(subtotalNumerico) && subtotalNumerico > 0 ? subtotalNumerico : undefined;
+    const frete = await calcularFrete(cep, Number(pesoKg), subtotalValido);
     frete.limiteFreteGratis = limiteFreteGratisParaCep(cep);
     if (freteGratisParaCep(cep, subtotal)) {
       frete.valor = 0;
@@ -695,7 +707,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     // usar depois (order.total - shipping_cost, já com cupom aplicado) —
     // diferente do subtotalCatalogo de cima, que é de propósito SEM
     // desconto (decide só a faixa de frete grátis).
-    const subtotalComDesconto = subtotalComDescontoAplicado(subtotalCatalogo, descontoPercent);
+    const subtotalComDesconto = subtotalComDescontoAplicado(itensParaPedido);
     const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg, subtotalComDesconto);
     const shippingCost = freteGratis ? 0 : freteCalculado.valor;
     // Guarda qual transportadora/modalidade foi a mais barata pra esse pedido
@@ -1864,7 +1876,7 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
   // Mesmo cuidado do checkout do site: o seguro cotado aqui precisa bater
   // com order.total - shipping_cost (já com o desconto manual do vendedor
   // aplicado), não com o subtotal de catálogo puro.
-  const subtotalComDesconto = subtotalComDescontoAplicado(subtotalCatalogo, descontoPercent);
+  const subtotalComDesconto = subtotalComDescontoAplicado(itensParaPedido);
   const pesoTotalKg = itensValidados.reduce(
     (sum, { produto, quantity }) => sum + ((produto.pesoGramas || 300) * quantity) / 1000,
     0
@@ -3398,7 +3410,14 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
 
 app.post('/admin/whatsapp/testar-ia/limpar', requireAdmin, asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).send('Banco de dados não configurado.');
-  await pool.query(`DELETE FROM whatsapp_mensagens WHERE phone = $1`, [TELEFONE_TESTE_IA]);
+  // Na mesma fila do telefone de teste (ver executarEmFilaPorTelefone em
+  // whatsapp-oficial.js) — sem isso, limpar numa aba enquanto uma rodada de
+  // teste ainda está rodando noutra apaga o histórico no meio da leitura/
+  // escrita dessa rodada, quebrando a alternância do mesmo jeito que a fila
+  // foi criada pra evitar.
+  await executarEmFilaPorTelefone(TELEFONE_TESTE_IA, () =>
+    pool.query(`DELETE FROM whatsapp_mensagens WHERE phone = $1`, [TELEFONE_TESTE_IA])
+  );
   res.redirect('/admin/whatsapp/testar-ia');
 }));
 
