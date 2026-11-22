@@ -768,11 +768,12 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
         total,
         freeGiftFinal,
         desconto ? desconto.id : null,
-        desconto ? desconto.percent : null
+        desconto ? desconto.percent : null,
+        freteCalculado.origem
       ];
       const sqlInsert = `INSERT INTO orders
-          (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent)
-         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`;
+          (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent, shipping_origem)
+         VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`;
       await pool.query(sqlInsert, valoresInsert(freeGift));
     }
 
@@ -1931,15 +1932,16 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
 
   await pool.query(
     `INSERT INTO orders
-      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent, canal_venda)
-     VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,false,NULL,$20,'vendedor')`,
+      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, customer_cnpj, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent, canal_venda, shipping_origem)
+     VALUES ($1,'pending',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,false,NULL,$20,'vendedor',$21)`,
     [
       orderNsu, cliente.nome, cliente.email, cliente.telefone || null, documentoNormalizado(cliente.cpf),
       cnpjDigitsVendedor || null,
       entrega.cep, entrega.endereco, entrega.numero, entrega.complemento || null,
       entrega.bairro, entrega.cidade, entrega.estado, JSON.stringify(itensParaPedido),
       shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
-      descontoPercent > 0 ? descontoPercent : null
+      descontoPercent > 0 ? descontoPercent : null,
+      freteCalculado.origem
     ]
   );
   logAdminAcao(req, 'pedido_manual_criado', `vendedor → pedido ${orderNsu} (${cliente.nome}, ${reais(total)})`);
@@ -2154,13 +2156,14 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
   });
 
   const sqlInsertIA = `INSERT INTO orders
-      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent, canal_venda)
-     VALUES ($1,'pending',$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULL,NULL,'whatsapp_ia')`;
+      (preference_id, status, customer_name, customer_email, customer_phone, customer_cpf, cep, address, address_number, address_complement, neighborhood, city, state, items, shipping_cost, shipping_carrier, shipping_service_id, shipping_weight_kg, total, free_gift, discount_id, discount_percent, canal_venda, shipping_origem)
+     VALUES ($1,'pending',$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULL,NULL,'whatsapp_ia',$19)`;
   const valoresInsertIA = (freeGiftFinal) => [
     orderNsu, nome, telefone || null, documentoNormalizado(cpf), cep, endereco, numero, complemento || null,
     bairro, cidade, estado, JSON.stringify(itensParaPedido),
     shippingCost, shippingCarrier, shippingServiceId, Number(pesoTotalKg.toFixed(3)), total,
-    freeGiftFinal
+    freeGiftFinal,
+    freteCalculado.origem
   ];
   await pool.query(sqlInsertIA, valoresInsertIA(brindeQuantidade > 0));
   console.log(`[whatsapp-ia] pedido criado — ${orderNsu} (${nome}, ${reais(total)})`);
@@ -3382,9 +3385,11 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
         criarPedidoViaAtendimento: async () => ({
           aviso: 'TESTE: nenhum pedido real foi criado nem link de pagamento gerado — isso é só uma simulação pro dono treinar a IA.',
           link: 'https://exemplo.invalido/pagamento-de-teste',
-          // Mesmo formato do retorno real (ver criarPedidoViaAtendimento) —
-          // sem isso, não dava pra testar a regra RECLAMAÇÃO DE FRETE no
-          // caminho "pedido já criado nessa conversa" aqui no painel.
+          // Mesmo formato do retorno real (ver criarPedidoViaAtendimento),
+          // mesmo que a IA não use esses dois campos pra decidir nada hoje
+          // (depois de criar_pedido, a regra RECLAMAÇÃO DE FRETE sempre
+          // escala em vez de reexplicar) — evita que o mock e a função real
+          // divirjam de forma e quebre silenciosamente se isso mudar.
           origem: 'melhorenvio',
           gratis: false
         }),

@@ -86,6 +86,20 @@ async function initDb() {
   // salvos não guardam o id do produto, só título/quantidade/preço, então não
   // dava pra recalcular o peso com segurança a partir do pedido já salvo).
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_weight_kg NUMERIC;`);
+  // De onde veio a COTAÇÃO usada pra decidir shipping_cost: 'melhorenvio'
+  // (cotação real da transportadora) ou 'estimativa' (fallback de R$/kg
+  // usado quando a Melhor Envio estava fora do ar na hora do pedido — ver
+  // calcularFrete em shipping.js). Em pedido com frete grátis, shipping_cost
+  // fica 0 mesmo assim (a regra de frete grátis zera o valor cobrado
+  // independente da origem da cotação) — não confundir "cotação veio do
+  // fallback" com "o cliente pagou um valor estimado". Guardado pra
+  // conferência manual (painel/suporte) de um pedido específico — a IA de
+  // atendimento não usa isso pra responder
+  // reclamação de frete de pedido já criado (ver RECLAMAÇÃO DE FRETE no
+  // prompt: sempre escala pro atendimento humano nesse caso, de propósito,
+  // porque não dá pra confirmar com segurança qual pedido o cliente quer
+  // dizer só pelo telefone).
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_origem TEXT;`);
   // CPF do cliente — passou a ser guardado (pedidos antigos ficam sem) só
   // porque a Melhor Envio exige o documento do destinatário pra emitir a
   // etiqueta. Não é mais descartado após a validação do checkout como antes;
