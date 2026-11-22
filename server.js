@@ -2083,7 +2083,11 @@ async function calcularFretePreviewViaAtendimento({ cep, telefone, itens }) {
   const freteCalculado = await calcularFrete(cep, pesoTotalKg, subtotalCatalogo);
   const freteGratis = freteGratisParaCep(cep, subtotalCatalogo);
 
-  return { valor: freteGratis ? 0 : freteCalculado.valor, gratis: freteGratis, prazoDias: freteCalculado.prazoDias };
+  // "origem" repassado pra IA de propósito: se o Melhor Envio cair e
+  // calcularFrete cair no fallback de estimativa (ver shipping.js), o valor
+  // NÃO veio de cotação real de transportadora nenhuma — a IA não pode falar
+  // como se tivesse vindo (ver regra RECLAMAÇÃO DE FRETE no prompt).
+  return { valor: freteGratis ? 0 : freteCalculado.valor, gratis: freteGratis, prazoDias: freteCalculado.prazoDias, origem: freteCalculado.origem };
 }
 
 // Cria um pedido de verdade (com link de pagamento InfinitePay) a partir da
@@ -2161,7 +2165,7 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
   await pool.query(sqlInsertIA, valoresInsertIA(brindeQuantidade > 0));
   console.log(`[whatsapp-ia] pedido criado — ${orderNsu} (${nome}, ${reais(total)})`);
 
-  return { link: initPoint, resumo: itensParaPedido, shippingCost, shippingCarrier, total };
+  return { link: initPoint, resumo: itensParaPedido, shippingCost, shippingCarrier, gratis: freteGratis, total, origem: freteCalculado.origem };
 }
 
 // Usado pela ferramenta "consultar_pedido" da IA do WhatsApp — pega o pedido
@@ -3377,7 +3381,12 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
         consultarPedidoPorTelefone,
         criarPedidoViaAtendimento: async () => ({
           aviso: 'TESTE: nenhum pedido real foi criado nem link de pagamento gerado — isso é só uma simulação pro dono treinar a IA.',
-          link: 'https://exemplo.invalido/pagamento-de-teste'
+          link: 'https://exemplo.invalido/pagamento-de-teste',
+          // Mesmo formato do retorno real (ver criarPedidoViaAtendimento) —
+          // sem isso, não dava pra testar a regra RECLAMAÇÃO DE FRETE no
+          // caminho "pedido já criado nessa conversa" aqui no painel.
+          origem: 'melhorenvio',
+          gratis: false
         }),
         // calcular_frete não cria nada, só consulta o cálculo (igual à
         // calculadora de frete do site) — sem risco nenhum usar a função real
