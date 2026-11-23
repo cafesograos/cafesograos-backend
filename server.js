@@ -3298,6 +3298,7 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
       ${status !== 'conectado' ? `<div class="pedido-detalhe" style="margin-top:4px;color:#8a5a3b;">Faltam variáveis de ambiente no Railway (WHATSAPP_TOKEN e/ou WHATSAPP_WABA_ID).</div>` : ''}
     </div>
     ${automacoesWhatsAppPausadas() ? `<div class="pedido-card" style="max-width:480px;margin-top:12px;background:#FBE2E2;"><div class="pedido-cliente" style="color:#C53030;">⏸️ Automações pausadas</div><div class="pedido-detalhe" style="margin-top:4px;">Boas-vindas, confirmação de compra, feedback, recompra e reengajamento não estão saindo pra clientes de verdade (variável WHATSAPP_AUTOMACOES_PAUSADAS=true no Railway). A IA ainda responde quem chamar a loja primeiro.</div></div>` : ''}
+    <div class="pedido-card" style="max-width:480px;margin-top:12px;background:#FBE2E2;"><div class="pedido-cliente" style="color:#C53030;">⏸️ Reengajamento de leads pausado no código</div><div class="pedido-detalhe" style="margin-top:4px;">Desligado em 23/11/2026, independente da variável acima — foi a rotina de maior volume mandando mensagem por iniciativa da loja pro número que foi banido pela Meta. Falta: confirmar a categoria do template no WhatsApp Manager e decidir sobre leads antigos sem consentimento de WhatsApp antes de reativar.</div></div>
 
     <h2 style="margin-top:28px;">Testar a IA</h2>
     <p class="pedido-detalhe" style="margin-bottom:14px;">Converse direto com a IA aqui, sem passar pelo WhatsApp de verdade e sem nenhum risco pra cliente real — nenhum pedido é criado e nenhuma escalação é enviada de verdade nessa conversa de teste.</p>
@@ -3539,8 +3540,10 @@ app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) 
     // "Sem nenhum contato": nunca recebeu boas-vindas de verdade (contatado)
     // nem entrou no reengajamento ainda — exclui quem já comprou (esses já
     // recebem confirmação/feedback/recompra pelo pedido, então não estão
-    // realmente esquecidos). A maioria aqui não é falha nenhuma: é gente
-    // ainda esperando a vez no reengajamento (1 por hora).
+    // realmente esquecidos). Em condições normais a maioria aqui não é falha
+    // nenhuma, só fila (1 por hora) — mas processarFilaReengajamentoWhatsApp
+    // está pausada desde 23/11/2026 (ver comentário na função), então por
+    // enquanto essa lista simplesmente não anda mais.
     pool.query(`
       SELECT l.id, l.name, l.phone, l.created_at FROM leads l
       WHERE COALESCE(l.contatado, false) = false
@@ -3550,7 +3553,7 @@ app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) 
           WHERE o.status = 'approved'
             AND RIGHT(regexp_replace(o.customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace(l.phone, '\\D', '', 'g'), 11)
         )
-      ORDER BY l.created_at ASC
+      ORDER BY l.created_at ASC LIMIT 100
     `)
   ]);
 
@@ -3580,13 +3583,14 @@ app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) 
 
     ${tabela('Lembrete de recompra', recompra.rows.length, ['Cliente', 'Telefone', 'Enviado em', 'Pedido'], recompra.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${linkPedido(r.id)}</td></tr>`))}
 
+    <p class="pedido-detalhe" style="color:#C53030;margin-top:4px;">⏸️ Reengajamento pausado desde 23/11/2026 — a tabela abaixo é só histórico, ninguém novo entra nela por enquanto.</p>
     ${tabela('Reengajamento', reengajamento.rows.length, ['Nome', 'Telefone', 'Última vez', 'Quantas vezes'], reengajamento.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${r.contagem}/4</td></tr>`))}
 
     ${tabela('Cobrança de pagamento pendente', cobranca.rows.length, ['Cliente', 'Telefone', 'Última vez', 'Quantas vezes', 'Pedido'], cobranca.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.enviado_em))}</td><td>${r.contagem}/3</td><td>${linkPedido(r.id)}</td></tr>`))}
 
     <section>
       <h2 style="margin-top:28px;">Ainda sem nenhum contato (${semContato.rows.length})</h2>
-      <p class="pedido-detalhe" style="margin-bottom:10px;">Cadastrados que nunca compraram e ainda não receberam boas-vindas nem entraram no reengajamento — a maioria é só fila (1 por hora), não falha.</p>
+      <p class="pedido-detalhe" style="margin-bottom:10px;">Cadastrados que nunca compraram e ainda não receberam boas-vindas nem entraram no reengajamento. Normalmente a maioria aqui é só fila (1 por hora) — mas o reengajamento está pausado desde 23/11/2026 (ver aviso acima), então essa lista só volta a andar quando ele for reativado.</p>
       <div style="overflow-x:auto;"><table class="mini">
         <tr><th>Nome</th><th>Telefone</th><th>Cadastrado em</th></tr>
         ${semContato.rows.length === 0 ? '<tr><td colspan="3">Nenhum — todo mundo já foi contatado.</td></tr>' : semContato.rows.map((r) => `<tr><td>${escapeHtml(r.name || '(sem nome)')}</td><td>${linkTelefone(r.phone)}</td><td>${escapeHtml(fmtData(r.created_at))}</td></tr>`).join('')}
@@ -3912,6 +3916,19 @@ async function processarFilaRecompraWhatsApp() {
 // "semanal sem limite" — um meio-termo pra não cansar quem nunca responde,
 // mas sem desistir cedo demais de quem só precisava de mais um empurrão.
 async function processarFilaReengajamentoWhatsApp() {
+  // PAUSADA em 23/11/2026: mesmo dia em que a conta do WhatsApp Business foi
+  // banida pela Meta por "spam ou outro tipo de comunicação não permitida".
+  // Esse fluxo é o de maior volume mandando mensagem de marketing (template)
+  // por iniciativa da loja pra quem NUNCA conversou com a gente no WhatsApp
+  // (só deu telefone no popup do site) — até 4 mensagens, pra cada lead que
+  // nunca comprou. O popup não pedia consentimento específico de WhatsApp
+  // até hoje (ver commit que adicionou esse texto), então todo lead de antes
+  // dessa data nunca deu opt-in de verdade pra receber isso. Antes de
+  // reativar: (1) confirmar no WhatsApp Manager que o template
+  // "reengajamento_interesse" está categorizado como Marketing (categoria
+  // errada também derruba conta), e (2) decidir se os leads antigos (sem o
+  // consentimento novo) devem ser excluídos desse fluxo quando ele voltar.
+  return;
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
   if (automacoesWhatsAppPausadas()) return;
   if (!dentroDoHorarioComercial()) return;
