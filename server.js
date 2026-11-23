@@ -4140,6 +4140,19 @@ async function processarFilaFollowUpInteresse() {
 // manhã (contra 6 antes), sem tirar o espaçamento entre envios que evita
 // parecer rajada de mensagem pro WhatsApp.
 async function processarFilaRetomarConversaWhatsApp() {
+  // DESATIVADA em 23/11/2026: a conta do WhatsApp Business (Café Oro
+  // Brasiliano) foi banida pela Meta nesse mesmo dia por "spam ou outro tipo
+  // de comunicação não permitida" — e esse é o único envio do sistema que
+  // manda mensagem de texto livre por iniciativa da loja (não é resposta a
+  // cliente nenhum) pra quem não interage mais. O cálculo de horário abaixo
+  // foi pensado pra ficar dentro da janela de 24h de atendimento (permite
+  // texto livre), mas mandar nota automática em massa pra conversa esfriada
+  // é exatamente o padrão que sistemas antispam da Meta costumam pegar,
+  // janela técnica à parte. Só reativar depois de reconstruir isso com um
+  // modelo de mensagem (template) aprovado pela Meta pra esse tipo de
+  // recontato, que é a forma seguro de verdade de fazer isso fora de uma
+  // conversa iniciada pelo cliente.
+  return;
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
   if (automacoesWhatsAppPausadas()) return;
   let horaBrasilia = Number(
