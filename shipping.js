@@ -313,6 +313,7 @@ async function rastrearEtiquetas(meOrderIds) {
 
 module.exports = {
   calcularFrete,
+  limparCep,
   inserirNoCarrinho,
   comprarEtiquetas,
   gerarEtiquetas,

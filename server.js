@@ -5,7 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const { pool, initDb } = require('./db');
-const { calcularFrete, inserirNoCarrinho, comprarEtiquetas, gerarEtiquetas, imprimirEtiquetas, rastrearEtiquetas } = require('./shipping');
+const { calcularFrete, limparCep, inserirNoCarrinho, comprarEtiquetas, gerarEtiquetas, imprimirEtiquetas, rastrearEtiquetas } = require('./shipping');
 const { criarLinkPagamento, consultarStatusPagamento } = require('./infinitepay');
 const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastreio, enviarEmailBoasVindasLead } = require('./email');
 const { CATEGORIES, PRODUCTS } = require('./products');
@@ -2410,6 +2410,10 @@ const STATUS_LABEL = { pending: 'Não pago', approved: 'Aprovado', rejected: 'Re
 const FRETE_ERRO_MSG = {
   ja_no_carrinho: 'Esse pedido já tem um item no carrinho da Melhor Envio. Pra recomeçar, remova antes no painel da Melhor Envio.',
   sem_servico: 'Esse pedido não tem um serviço de frete cotado (provavelmente a cotação caiu na estimativa de reserva na hora da compra) — não dá pra saber qual transportadora usar.',
+  ja_tem_servico: 'Esse pedido já tem um serviço de frete cotado — não precisa recotar, pode inserir no carrinho direto.',
+  ainda_sem_cotacao: 'A Melhor Envio ainda não conseguiu cotar esse CEP agora (pode estar fora do ar de novo, ou sem transportadora disponível) — tenta de novo daqui a pouco, ou compre a etiqueta direto no painel da Melhor Envio.',
+  cep_invalido: 'O CEP salvo nesse pedido não é válido (precisa ter 8 dígitos) — não dá pra recotar automaticamente. Confirme o CEP certo com o cliente e compre a etiqueta direto no painel da Melhor Envio.',
+  pedido_mudou: 'Esse pedido mudou de status (foi cancelado, reembolsado ou já tem rastreio) desde que a página carregou — atualize a página antes de continuar.',
   sem_cpf: 'Esse pedido não tem CPF salvo (feito antes dessa funcionalidade existir) — não dá pra automatizar, precisa comprar a etiqueta direto no painel da Melhor Envio.',
   sem_telefone: 'Esse pedido não tem telefone do cliente salvo — a Melhor Envio pode recusar sem um contato do destinatário. Confirme o telefone com o cliente antes, ou compre a etiqueta direto no painel da Melhor Envio.',
   nao_no_carrinho: 'Esse pedido ainda não foi inserido no carrinho da Melhor Envio.',
@@ -2617,11 +2621,17 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
       ` : ''}
       ${o.status === 'approved' && !o.tracking_code ? `
         <div class="pedido-acoes">
-          ${!o.melhorenvio_order_id ? `
-            <form method="POST" action="${urlBase}/${o.id}/frete/carrinho" onsubmit="this.querySelector('button').disabled=true;">
-              <button type="submit" class="btn-mini btn-mini-primary">1. Inserir no carrinho (Melhor Envio)</button>
-            </form>
-          ` : `
+          ${!o.melhorenvio_order_id ? (
+            !o.shipping_service_id ? `
+              <form method="POST" action="${urlBase}/${o.id}/frete/recotar" onsubmit="this.querySelector('button').disabled=true;">
+                <button type="submit" class="btn-mini btn-mini-primary">Recotar frete (Melhor Envio)</button>
+              </form>
+            ` : `
+              <form method="POST" action="${urlBase}/${o.id}/frete/carrinho" onsubmit="this.querySelector('button').disabled=true;">
+                <button type="submit" class="btn-mini btn-mini-primary">1. Inserir no carrinho (Melhor Envio)</button>
+              </form>
+            `
+          ) : `
             <span class="selo">📥 No carrinho da Melhor Envio (id ${escapeHtml(o.melhorenvio_order_id)})</span>
             <form method="POST" action="${urlBase}/${o.id}/frete/pagar" onsubmit="if (!confirm('Confirma que os dados batem? Isso vai debitar da carteira da Melhor Envio de verdade.')) return false; this.querySelector('button').disabled=true;">
               <button type="submit" class="btn-mini btn-mini-primary">2. Pagar e gerar etiqueta</button>
@@ -2654,6 +2664,11 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
   let avisoFrete = '';
   if (req.query.frete_ok === 'carrinho') {
     avisoFrete = `<p class="aviso-frete aviso-frete-ok">Inserido no carrinho da Melhor Envio. Confira os dados e clique em "Pagar e gerar etiqueta" pra confirmar — ainda não foi cobrado nada.</p>`;
+  } else if (req.query.frete_ok === 'recotado') {
+    const pedidoRecotado = rows.find((o) => String(o.id) === String(req.query.id));
+    // ocultarFrete também esconde transportadora/custo no corpo do card pro
+    // vendedor (ver linha do "Frete" acima) — não pode vazar aqui no aviso.
+    avisoFrete = `<p class="aviso-frete aviso-frete-ok">Frete recotado${(!ocultarFrete && pedidoRecotado?.shipping_carrier) ? ` — transportadora: ${escapeHtml(pedidoRecotado.shipping_carrier)}` : ''}! Já pode inserir no carrinho da Melhor Envio.</p>`;
   } else if (req.query.frete_ok === 'pago') {
     const pedidoPago = rows.find((o) => String(o.id) === String(req.query.id));
     avisoFrete = `<p class="aviso-frete aviso-frete-ok">Etiqueta paga e gerada${pedidoPago?.tracking_code ? `! Código de rastreio ${escapeHtml(pedidoPago.tracking_code)}` : ''} — e-mail de envio disparado pro cliente.</p>`;
@@ -2743,6 +2758,78 @@ function itensParaDeclaracao(order) {
     });
 }
 
+// Valor segurado de um pedido já salvo — total menos o que foi cobrado de
+// frete (em frete grátis o cliente não paga frete, mas o produto ainda vale
+// o mesmo pra fins de seguro). Extraído aqui porque handlerFreteCarrinho e
+// handlerFreteRecotar precisam do mesmo valor, pra cotação e inserção no
+// carrinho nunca divergirem sobre quanto o envio está segurando.
+function valorSeguroDoPedido(order) {
+  return Math.max(0, Number(order.total) - Number(order.shipping_cost));
+}
+
+// Recotação de pedido que ficou sem shipping_service_id (a Melhor Envio
+// estava fora do ar bem na hora da compra, então calcularFrete caiu no
+// fallback de estimativa — ver shipping.js — e nenhuma transportadora real
+// foi escolhida). Sem isso, o único jeito de destravar esses pedidos era
+// comprar a etiqueta manualmente direto no painel da Melhor Envio. Tenta
+// cotar de novo agora (pode já estar funcionando) e só atualiza carrier/
+// service_id/origem se vier uma cotação REAL — nunca mexe em shipping_cost
+// nem total, que é o que o cliente já pagou de verdade.
+function handlerFreteRecotar(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
+    const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+    const order = rows[0];
+    if (!order) return res.redirect(urlBase);
+
+    try {
+      // Mesma checagem que decide se o botão aparece na tela — a página pode
+      // estar aberta há um tempo e o pedido ter mudado nesse meio tempo
+      // (cancelado, reembolsado, já enviado por outra aba).
+      if (order.status !== 'approved' || order.tracking_code) {
+        throw new Error('pedido_mudou');
+      }
+      if (order.melhorenvio_order_id) {
+        throw new Error('ja_no_carrinho');
+      }
+      if (order.shipping_service_id) {
+        throw new Error('ja_tem_servico');
+      }
+      // Checa aqui (em vez de deixar calcularFrete lançar "CEP inválido.")
+      // porque esse texto tem espaço e acento — usado direto como valor de
+      // query string no redirect do catch, viraria um link quebrado.
+      if (limparCep(order.cep).length !== 8) {
+        throw new Error('cep_invalido');
+      }
+      const pesoKg = Number(order.shipping_weight_kg) || 0.3;
+      const freteCalculado = await calcularFrete(order.cep, pesoKg, valorSeguroDoPedido(order));
+      if (freteCalculado.origem !== 'melhorenvio') {
+        throw new Error('ainda_sem_cotacao');
+      }
+      // "AND shipping_service_id IS NULL" faz o UPDATE não fazer nada se
+      // outra aba/pessoa já recotou esse pedido entre o SELECT e aqui — sem
+      // isso, duas recotações quase simultâneas (admin e vendedor no mesmo
+      // pedido, ou duplo clique) podiam sobrescrever uma cotação válida pela
+      // outra sem nenhum aviso.
+      const { rowCount } = await pool.query(
+        'UPDATE orders SET shipping_carrier = $1, shipping_service_id = $2, shipping_origem = $3 WHERE id = $4 AND shipping_service_id IS NULL',
+        [freteCalculado.transportadora || null, freteCalculado.servicoId, freteCalculado.origem, order.id]
+      );
+      if (rowCount === 0) {
+        throw new Error('ja_tem_servico');
+      }
+      logAdminAcao(req, 'frete_recotado', `pedido #${order.id} → recotado, serviço ${freteCalculado.servicoId} (${freteCalculado.transportadora || 'transportadora desconhecida'})`);
+      res.redirect(`${urlBase}?frete_ok=recotado&id=${order.id}`);
+    } catch (err) {
+      console.error(`Erro ao recotar frete do pedido #${order.id}:`, err.message);
+      const codigo = FRETE_ERRO_MSG[err.message] ? err.message : 'api_recusou';
+      res.redirect(`${urlBase}?frete_erro=${codigo}`);
+    }
+  });
+}
+app.post('/admin/pedidos/:id/frete/recotar', requireAdmin, handlerFreteRecotar('/admin/pedidos'));
+app.post('/vendedor/pedidos/:id/frete/recotar', requireVendedor, handlerFreteRecotar('/vendedor/pedidos'));
+
 function handlerFreteCarrinho(urlBase) {
   return asyncHandler(async (req, res) => {
     if (!pool) return res.status(500).send('Banco de dados não configurado.');
@@ -2772,7 +2859,7 @@ function handlerFreteCarrinho(urlBase) {
         orderNsu: order.preference_id,
         servicoId: order.shipping_service_id,
         pesoKg: Number(order.shipping_weight_kg) || 0.3,
-        valorSeguro: Math.max(0, Number(order.total) - Number(order.shipping_cost)),
+        valorSeguro: valorSeguroDoPedido(order),
         destinatario: {
           name: order.customer_name,
           phone: String(order.customer_phone || '').replace(/\D/g, ''),
