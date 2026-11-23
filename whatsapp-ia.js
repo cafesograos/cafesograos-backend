@@ -364,13 +364,22 @@ async function responderMensagem(telefone, textoCliente, deps, imagens) {
   // link de pagamento já tinham sido gerados de verdade, só que o cliente
   // nunca recebia o link porque o texto saiu vazio. Último fallback genérico
   // garante que NUNCA sai uma resposta vazia pro cliente, seja qual for a
-  // ferramenta chamada.
+  // ferramenta chamada. O texto precisa ser neutro de verdade, porque não dá
+  // pra saber qual situação causou o texto vazio — pode ser uma despedida
+  // (visto em produção: cliente só mandou "abração" de volta, e "pode
+  // repetir o que você precisa?" saiu sem sentido nenhum, porque não tinha
+  // pergunta nenhuma pra repetir) OU uma pergunta de verdade que ficou sem
+  // resposta (ex: calcular_frete ou consultar_pedido, cujo resultado nunca
+  // virou texto). Por isso NÃO pode presumir nem que "algo foi combinado"
+  // (falso se era uma pergunta sem resposta) nem que havia uma pergunta pra
+  // repetir (sem sentido numa despedida) — só convida o cliente a continuar,
+  // o que funciona nos dois casos.
   const textoModelo = resposta.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
   const textoResposta = textoModelo
     || (escalouTrocaNessaRodada ? 'Pode ficar tranquilo! Já avisei nossa equipe, alguém vai entrar em contato com você em breve.' : null)
     || (escalouNessaRodada ? 'Combinado! Já passei isso pro meu diretor, ele deve te retornar em breve.' : null)
     || (pedidoCriadoNessaRodada ? `Prontinho! Segue o link pra finalizar o pagamento: ${pedidoCriadoNessaRodada.link}` : null)
-    || 'Desculpa a demora! Pode repetir o que você precisa? Quero ter certeza de que entendi certinho antes de responder.';
+    || 'Tô por aqui! Qualquer coisa, só chamar 😊';
   // Ver regra "MENSAGENS MÚLTIPLAS" no prompt — o modelo separa com "|||"
   // quando acha que o conteúdo pede mais de uma mensagem. Caso degenerado
   // (resposta inteira some em puro delimitador/espaço — extremamente raro,
