@@ -2205,6 +2205,17 @@ async function buscarMensagemConfig(chave) {
   return rows[0]?.texto || '';
 }
 
+// Upsert genérico de uma chave em mensagens_config — usado por quem só
+// precisa gravar um valor (destaque, toggles), diferente da rota de
+// mensagens automáticas, que grava as 5 de uma vez numa query só.
+async function upsertMensagemConfig(chave, texto) {
+  await pool.query(
+    `INSERT INTO mensagens_config (chave, texto) VALUES ($1, $2)
+     ON CONFLICT (chave) DO UPDATE SET texto = EXCLUDED.texto`,
+    [chave, texto]
+  );
+}
+
 // Trava manual pro dono pausar os 4 fluxos automáticos (boas-vindas,
 // feedback, recompra, reengajamento) sem precisar mexer no código — ex:
 // enquanto ele ainda está testando/treinando a IA e não quer que clientes
@@ -2213,6 +2224,25 @@ async function buscarMensagemConfig(chave) {
 // WHATSAPP_AUTOMACOES_PAUSADAS=true no Railway (sem precisar de deploy).
 function automacoesWhatsAppPausadas() {
   return process.env.WHATSAPP_AUTOMACOES_PAUSADAS === 'true';
+}
+
+// Trava específica pro reengajamento e pro retomar-conversa (ver comentário
+// em cada função) — diferente de automacoesWhatsAppPausadas() acima, que
+// pausa todo mundo junto. Guardada no banco (mensagens_config) em vez de só
+// no código, pra dar pra pausar nesses dois sem precisar editar código e
+// esperar deploy (nem sempre automático, ver nota do dono sobre o Railway).
+// Lida como pausado por padrão se a chave não existir ou vier qualquer coisa
+// diferente de 'false' — erro de leitura nunca deixa passar sem querer.
+async function fluxoPausado(chave) {
+  try {
+    return (await buscarMensagemConfig(chave)) !== 'false';
+  } catch (err) {
+    // As duas chamadoras rodam soltas em setInterval, sem .catch — uma falha
+    // aqui não pode virar unhandled rejection e derrubar o processo. Erro de
+    // leitura trata como pausado (mesmo default de quando a chave não existe).
+    console.error(`Erro ao ler flag "${chave}" — tratando como pausado:`, err.message);
+    return true;
+  }
 }
 
 // Nome exato de cada template aprovado no WhatsApp Manager da Meta — as 4
@@ -2237,7 +2267,11 @@ const WHATSAPP_TEMPLATES = {
   // diferente do reengajamento acima, que é por cadastro a cada 7 dias.
   followup_interesse: 'followup_interesse_cliente',
   // Cobrança de pagamento pendente (ver processarFilaCobrancaPagamentoPendente).
-  cobranca_pendente: 'cobranca_pagamento_pendente'
+  cobranca_pendente: 'cobranca_pagamento_pendente',
+  // Retomar conversa esfriada (ver processarFilaRetomarConversaWhatsApp) —
+  // trocado de texto livre pra template em 25/11/2026, pra não depender só
+  // da janela de 24h pra ser seguro. Submetido à Meta, aguardando aprovação.
+  retomar_conversa: 'retomar_conversa_atendimento'
 };
 
 // Layout compartilhado pelos painéis: mesma barra de navegação em todos,
@@ -3281,14 +3315,41 @@ app.post('/vendedor/contatos/:id/contato', requireVendedor, handlerLeadContato('
 // code: a conexão é só variável de ambiente (WHATSAPP_TOKEN/WHATSAPP_WABA_ID).
 app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
   const status = getStatusWhatsApp();
-  const msgBoasVindas = await buscarMensagemConfig('boas_vindas');
-  const msgConfirmacao = await buscarMensagemConfig('confirmacao_compra');
-  const msgFeedback = await buscarMensagemConfig('feedback_pedido');
-  const msgRecompra = await buscarMensagemConfig('lembrete_recompra');
-  const msgReengajamento = await buscarMensagemConfig('reengajamento');
-  const destaqueReengajamento = await buscarMensagemConfig('destaque_reengajamento');
+  const [
+    msgBoasVindas, msgConfirmacao, msgFeedback, msgRecompra, msgReengajamento, destaqueReengajamento,
+    reengajamentoPausado, retomarConversaPausado
+  ] = await Promise.all([
+    buscarMensagemConfig('boas_vindas'),
+    buscarMensagemConfig('confirmacao_compra'),
+    buscarMensagemConfig('feedback_pedido'),
+    buscarMensagemConfig('lembrete_recompra'),
+    buscarMensagemConfig('reengajamento'),
+    buscarMensagemConfig('destaque_reengajamento'),
+    fluxoPausado('reengajamento_pausado'),
+    fluxoPausado('retomar_conversa_pausado')
+  ]);
 
   const statusLabel = status === 'conectado' ? '🟢 Conectado' : '🔴 Não configurado';
+  // Trava mais ampla do que a do próprio fluxo — mesmo com o toggle em
+  // "ativo", nenhuma das duas filas manda nada de verdade sem WhatsApp
+  // conectado e com automacoesWhatsAppPausadas() desligada.
+  const bloqueadoPorOutraCausa = automacoesWhatsAppPausadas() || status !== 'conectado';
+
+  const cardFluxoPausavel = (titulo, explicacao, fluxoKey, pausado) => {
+    const efetivamentePausado = pausado || bloqueadoPorOutraCausa;
+    const avisoBloqueio = !pausado && bloqueadoPorOutraCausa
+      ? `<div class="pedido-detalhe" style="margin-top:6px;color:#8a5a3b;">Ativado aqui, mas ainda não manda nada de verdade porque ${automacoesWhatsAppPausadas() ? 'as automações gerais estão pausadas' : 'o WhatsApp não está conectado'} (ver acima).</div>`
+      : '';
+    return `
+    <div class="pedido-card" style="max-width:480px;margin-top:12px;background:${efetivamentePausado ? '#FBE2E2' : '#E3F4E1'};">
+      <div class="pedido-cliente" style="color:${efetivamentePausado ? '#C53030' : '#2F7A3A'};">${efetivamentePausado ? '⏸️' : '▶️'} ${escapeHtml(titulo)} ${efetivamentePausado ? 'pausado' : 'ativo'}</div>
+      <div class="pedido-detalhe" style="margin-top:4px;">${explicacao}</div>
+      ${avisoBloqueio}
+      <form method="POST" action="/admin/whatsapp/toggle/${fluxoKey}" style="margin-top:10px;">
+        <button type="submit" class="btn-mini ${pausado ? 'btn-mini-primary' : ''}">${pausado ? 'Reativar' : 'Pausar'}</button>
+      </form>
+    </div>`;
+  };
 
   const body = `
     <h1>WhatsApp — Café Só Grãos</h1>
@@ -3298,7 +3359,18 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
       ${status !== 'conectado' ? `<div class="pedido-detalhe" style="margin-top:4px;color:#8a5a3b;">Faltam variáveis de ambiente no Railway (WHATSAPP_TOKEN e/ou WHATSAPP_WABA_ID).</div>` : ''}
     </div>
     ${automacoesWhatsAppPausadas() ? `<div class="pedido-card" style="max-width:480px;margin-top:12px;background:#FBE2E2;"><div class="pedido-cliente" style="color:#C53030;">⏸️ Automações pausadas</div><div class="pedido-detalhe" style="margin-top:4px;">Boas-vindas, confirmação de compra, feedback, recompra e reengajamento não estão saindo pra clientes de verdade (variável WHATSAPP_AUTOMACOES_PAUSADAS=true no Railway). A IA ainda responde quem chamar a loja primeiro.</div></div>` : ''}
-    <div class="pedido-card" style="max-width:480px;margin-top:12px;background:#FBE2E2;"><div class="pedido-cliente" style="color:#C53030;">⏸️ Reengajamento de leads pausado no código</div><div class="pedido-detalhe" style="margin-top:4px;">Desligado em 23/11/2026, independente da variável acima — foi a rotina de maior volume mandando mensagem por iniciativa da loja pro número que foi banido pela Meta. Falta: confirmar a categoria do template no WhatsApp Manager e decidir sobre leads antigos sem consentimento de WhatsApp antes de reativar.</div></div>
+    ${cardFluxoPausavel(
+      'Reengajamento de leads',
+      'Mensagem de marketing por iniciativa da loja pra quem só deu telefone no popup e nunca comprou (até 4x), excluindo quem se cadastrou antes do popup pedir consentimento de WhatsApp (23/11/2026). Foi a rotina de maior volume mandando mensagem pro número que foi banido pela Meta. Antes de reativar: confirme no WhatsApp Manager que o template "reengajamento_interesse" está aprovado como Marketing.',
+      'reengajamento',
+      reengajamentoPausado
+    )}
+    ${cardFluxoPausavel(
+      'Retomar conversa esfriada',
+      'Mensagem casual de madrugada pra puxar de novo quem conversou com a IA ontem e não respondeu mais. Manda pelo template "retomar_conversa_atendimento" (não mais texto livre) — enquanto a Meta não aprovar esse template, reativar aqui só gera tentativa de envio com erro, sem mandar nada de verdade pro cliente.',
+      'retomar-conversa',
+      retomarConversaPausado
+    )}
 
     <h2 style="margin-top:28px;">Testar a IA</h2>
     <p class="pedido-detalhe" style="margin-bottom:14px;">Converse direto com a IA aqui, sem passar pelo WhatsApp de verdade e sem nenhum risco pra cliente real — nenhum pedido é criado e nenhuma escalação é enviada de verdade nessa conversa de teste.</p>
@@ -3373,12 +3445,33 @@ app.post('/admin/whatsapp/destaque', requireAdmin, express.urlencoded({ extended
   const destaque = String(req.body?.destaque_reengajamento || '').trim().slice(0, 200);
   if (!destaque) return res.status(400).send('Preencha o destaque.');
 
-  await pool.query(
-    `INSERT INTO mensagens_config (chave, texto) VALUES ('destaque_reengajamento', $1)
-     ON CONFLICT (chave) DO UPDATE SET texto = EXCLUDED.texto`,
-    [destaque]
-  );
+  await upsertMensagemConfig('destaque_reengajamento', destaque);
   logAdminAcao(req, 'destaque_reengajamento_atualizado', '');
+  res.redirect('/admin/whatsapp');
+}));
+
+// Liga/desliga reengajamento e retomar-conversa direto pelo painel (ver
+// fluxoPausado) — sem precisar editar código nem esperar deploy do Railway
+// pra pausar de novo se algo der errado. Lista de fluxos pausáveis por essa
+// rota: adicionar um novo é só adicionar uma entrada aqui.
+const FLUXOS_PAUSAVEIS = {
+  'reengajamento': { chave: 'reengajamento_pausado', nomeAcao: 'reengajamento_toggle' },
+  'retomar-conversa': { chave: 'retomar_conversa_pausado', nomeAcao: 'retomar_conversa_toggle' }
+};
+
+app.post('/admin/whatsapp/toggle/:fluxo', requireAdmin, asyncHandler(async (req, res) => {
+  if (!pool) return res.status(500).send('Banco de dados não configurado.');
+  const fluxo = FLUXOS_PAUSAVEIS[req.params.fluxo];
+  if (!fluxo) return res.status(404).send('Fluxo desconhecido.');
+  // UPDATE...CASE atômico em vez de ler-depois-escrever — dois cliques quase
+  // juntos (duplo clique, duas abas) não perdem um ao outro na corrida.
+  const { rows } = await pool.query(
+    `UPDATE mensagens_config SET texto = CASE texto WHEN 'false' THEN 'true' ELSE 'false' END
+     WHERE chave = $1 RETURNING texto`,
+    [fluxo.chave]
+  );
+  const novoPausado = rows[0]?.texto !== 'false';
+  logAdminAcao(req, fluxo.nomeAcao, novoPausado ? 'pausado' : 'reativado');
   res.redirect('/admin/whatsapp');
 }));
 
@@ -3913,25 +4006,34 @@ async function processarFilaRecompraWhatsApp() {
   }
 }
 
+// Antes dessa data/hora (commit 0719722), o popup de cadastro não pedia
+// consentimento específico de WhatsApp — lead cadastrado antes disso nunca
+// deu opt-in de verdade pra receber mensagem de marketing por iniciativa da
+// loja. Horário local de Brasília, com o offset explícito na própria string
+// (compara certo contra created_at timestamptz independente de fuso).
+const DATA_CONSENTIMENTO_WHATSAPP_POPUP = '2026-11-23 17:33:00-03';
+
 // Reengajamento de quem deu telefone mas nunca comprou — até 4 mensagens,
 // 1 por semana, parando na hora se a pessoa comprar (checado toda rodada) ou
 // ao bater o limite. Pedido do dono (2026-11-08): nem "só 1 vez" nem
 // "semanal sem limite" — um meio-termo pra não cansar quem nunca responde,
 // mas sem desistir cedo demais de quem só precisava de mais um empurrão.
 async function processarFilaReengajamentoWhatsApp() {
-  // PAUSADA em 23/11/2026: mesmo dia em que a conta do WhatsApp Business foi
-  // banida pela Meta por "spam ou outro tipo de comunicação não permitida".
-  // Esse fluxo é o de maior volume mandando mensagem de marketing (template)
-  // por iniciativa da loja pra quem NUNCA conversou com a gente no WhatsApp
-  // (só deu telefone no popup do site) — até 4 mensagens, pra cada lead que
-  // nunca comprou. O popup não pedia consentimento específico de WhatsApp
-  // até hoje (ver commit que adicionou esse texto), então todo lead de antes
-  // dessa data nunca deu opt-in de verdade pra receber isso. Antes de
-  // reativar: (1) confirmar no WhatsApp Manager que o template
+  // PAUSADA em 23/11/2026 (toggle em /admin/whatsapp, chave
+  // "reengajamento_pausado" no banco — ver fluxoPausado): mesmo dia em que a
+  // conta do WhatsApp Business foi banida pela Meta por "spam ou outro tipo
+  // de comunicação não permitida". Esse fluxo é o de maior volume mandando
+  // mensagem de marketing (template) por iniciativa da loja pra quem NUNCA
+  // conversou com a gente no WhatsApp (só deu telefone no popup do site) —
+  // até 4 mensagens, pra cada lead que nunca comprou. O popup não pedia
+  // consentimento específico de WhatsApp até hoje (ver commit que adicionou
+  // esse texto), então todo lead de antes dessa data nunca deu opt-in de
+  // verdade pra receber isso — por isso a consulta abaixo já exclui lead
+  // cadastrado antes de DATA_CONSENTIMENTO_WHATSAPP_POPUP. Antes de reativar
+  // pelo painel, falta só confirmar no WhatsApp Manager que o template
   // "reengajamento_interesse" está categorizado como Marketing (categoria
-  // errada também derruba conta), e (2) decidir se os leads antigos (sem o
-  // consentimento novo) devem ser excluídos desse fluxo quando ele voltar.
-  return;
+  // errada também derruba conta).
+  if (await fluxoPausado('reengajamento_pausado')) return;
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
   if (automacoesWhatsAppPausadas()) return;
   if (!dentroDoHorarioComercial()) return;
@@ -3949,6 +4051,7 @@ async function processarFilaReengajamentoWhatsApp() {
     const { rows } = await pool.query(
       `SELECT l.id, l.name, l.phone FROM leads l
        WHERE l.phone IS NOT NULL AND l.phone <> ''
+         AND l.created_at >= $2
          AND COALESCE(l.whatsapp_reengajamento_contagem, 0) < $1
          AND (
            (COALESCE(l.whatsapp_reengajamento_contagem, 0) = 0 AND l.created_at <= now() - interval '7 days')
@@ -3960,7 +4063,7 @@ async function processarFilaReengajamentoWhatsApp() {
              AND RIGHT(regexp_replace(o.customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace(l.phone, '\\D', '', 'g'), 11)
          )
        ORDER BY l.created_at ASC LIMIT 1`,
-      [LIMITE_MENSAGENS]
+      [LIMITE_MENSAGENS, DATA_CONSENTIMENTO_WHATSAPP_POPUP]
     );
     for (const lead of rows) {
       const telefone = telefoneParaE164(lead.phone);
@@ -4160,19 +4263,18 @@ async function processarFilaFollowUpInteresse() {
 // manhã (contra 6 antes), sem tirar o espaçamento entre envios que evita
 // parecer rajada de mensagem pro WhatsApp.
 async function processarFilaRetomarConversaWhatsApp() {
-  // DESATIVADA em 23/11/2026: a conta do WhatsApp Business (Café Oro
-  // Brasiliano) foi banida pela Meta nesse mesmo dia por "spam ou outro tipo
-  // de comunicação não permitida" — e esse é o único envio do sistema que
-  // manda mensagem de texto livre por iniciativa da loja (não é resposta a
-  // cliente nenhum) pra quem não interage mais. O cálculo de horário abaixo
-  // foi pensado pra ficar dentro da janela de 24h de atendimento (permite
-  // texto livre), mas mandar nota automática em massa pra conversa esfriada
-  // é exatamente o padrão que sistemas antispam da Meta costumam pegar,
-  // janela técnica à parte. Só reativar depois de reconstruir isso com um
-  // modelo de mensagem (template) aprovado pela Meta pra esse tipo de
-  // recontato, que é a forma seguro de verdade de fazer isso fora de uma
-  // conversa iniciada pelo cliente.
-  return;
+  // DESATIVADA em 23/11/2026 (toggle em /admin/whatsapp, chave
+  // "retomar_conversa_pausado" no banco — ver fluxoPausado): a conta do
+  // WhatsApp Business (Café Oro Brasiliano) foi banida pela Meta nesse mesmo
+  // dia por "spam ou outro tipo de comunicação não permitida" — mandava
+  // texto livre por iniciativa da loja (não é resposta a cliente nenhum) pra
+  // quem não interage mais, o padrão que sistemas antispam da Meta mais
+  // pegam, janela de 24h técnica à parte. Em 25/11/2026 trocou pra enviar
+  // via template aprovado ("retomar_conversa_atendimento", submetido à Meta
+  // e ainda aguardando aprovação) — enquanto não aprovar, reativar pelo
+  // painel só gera tentativa de envio com erro (cai no catch, não manda
+  // nada), nunca volta a mandar texto livre.
+  if (await fluxoPausado('retomar_conversa_pausado')) return;
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
   if (automacoesWhatsAppPausadas()) return;
   let horaBrasilia = Number(
@@ -4196,12 +4298,22 @@ async function processarFilaRetomarConversaWhatsApp() {
     );
     for (const { phone } of rows) {
       try {
+        const { rows: leadRows } = await pool.query(
+          `SELECT name FROM leads WHERE regexp_replace(phone, '\\D', '', 'g') = regexp_replace($1, '\\D', '', 'g') LIMIT 1`,
+          [phone]
+        );
+        const primeiroNome = String(leadRows[0]?.name || '').trim().split(' ')[0];
+        const nomeFormatado = primeiroNome || 'cliente';
         // Na fila do telefone do cliente — ele está quieto desde ontem, mas
         // nada impede que mande mensagem bem na hora que esse envio roda
-        // (ver executarEmFilaPorTelefone em whatsapp-oficial.js).
+        // (ver executarEmFilaPorTelefone em whatsapp-oficial.js). Template,
+        // não texto livre (ver comentário da função) — se a Meta ainda não
+        // aprovou "retomar_conversa_atendimento", a chamada abaixo só falha
+        // (cai no catch, nada é enviado) em vez de arriscar texto livre.
+        const textoRetomada = `Oi ${nomeFormatado}! Vi que nossa conversa ficou parada — ainda posso te ajudar com alguma coisa?`;
         await executarEmFilaPorTelefone(phone, async () => {
-          await enviarMensagemWhatsApp(phone, 'Oi! Tudo bem? 😊 Fico à disposição se quiser continuar nosso papo de ontem.');
-          await salvarRespostaAssistente(pool, phone, 'Oi! Tudo bem? 😊 Fico à disposição se quiser continuar nosso papo de ontem.');
+          await enviarTemplateWhatsApp(phone, WHATSAPP_TEMPLATES.retomar_conversa, { nome_cliente: nomeFormatado });
+          await salvarRespostaAssistente(pool, phone, textoRetomada);
         });
         console.log(`WhatsApp de retomada de conversa enviado pra ${phone}.`);
       } catch (err) {

@@ -307,7 +307,9 @@ async function initDb() {
       ('feedback_pedido', 'Oi{nome}, tudo bem? Aqui é o Alberto, do Café Só Grãos ☕\n\nGostou do café que você comprou? O que achou? Pode me dar um feedback?'),
       ('lembrete_recompra', 'Oi{nome}, tudo bem? Você comprou com a gente faz 30 dias — pelas nossas contas, seu café deve estar acabando! ☕\n\nQuer aproveitar e fazer um novo pedido?'),
       ('reengajamento', 'Oi{nome}, lembrei de você! 👋 Tô com uma torra fresquinha aqui: {destaque}. Topa dar uma olhada?'),
-      ('destaque_reengajamento', 'acabamos de chegar de Minas, uma torra bem gostosa')
+      ('destaque_reengajamento', 'acabamos de chegar de Minas, uma torra bem gostosa'),
+      ('reengajamento_pausado', 'true'),
+      ('retomar_conversa_pausado', 'true')
     ON CONFLICT (chave) DO NOTHING`
   );
 
