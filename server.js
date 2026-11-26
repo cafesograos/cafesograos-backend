@@ -3542,8 +3542,11 @@ app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) 
     // recebem confirmação/feedback/recompra pelo pedido, então não estão
     // realmente esquecidos). Em condições normais a maioria aqui não é falha
     // nenhuma, só fila (1 por hora) — mas processarFilaReengajamentoWhatsApp
-    // está pausada desde 23/11/2026 (ver comentário na função), então por
-    // enquanto essa lista simplesmente não anda mais.
+    // está pausada desde 23/11/2026 (ver comentário na função), então
+    // ninguém mais sai dessa lista. DESC (cadastro mais recente primeiro),
+    // igual às outras tabelas acima — com a automação parada, ASC prendia
+    // esse LIMIT 100 pra sempre nos leads mais antigos e escondia qualquer
+    // lead novo sem contato assim que a lista passasse de 100.
     pool.query(`
       SELECT l.id, l.name, l.phone, l.created_at FROM leads l
       WHERE COALESCE(l.contatado, false) = false
@@ -3553,7 +3556,7 @@ app.get('/admin/whatsapp/enviados', requireAdmin, asyncHandler(async (req, res) 
           WHERE o.status = 'approved'
             AND RIGHT(regexp_replace(o.customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace(l.phone, '\\D', '', 'g'), 11)
         )
-      ORDER BY l.created_at ASC LIMIT 100
+      ORDER BY l.created_at DESC LIMIT 100
     `)
   ]);
 
