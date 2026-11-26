@@ -2245,6 +2245,25 @@ async function fluxoPausado(chave) {
   }
 }
 
+// Confere se o cliente mandou mensagem de verdade nas últimas 24h — é essa
+// janela (não o horário da escalação) que decide se ainda dá pra mandar
+// texto livre pra ele, pela regra da Meta. Usada antes de repassar a
+// resposta do dono numa escalação pendente (ver responderClientePendente):
+// se o dono demorar mais de 24h pra responder, a escalação continua
+// "pendente" no banco, mas mandar texto livre nesse momento já seria fora da
+// janela — exatamente o padrão de mensagem fora de hora que ajudou a derrubar
+// a conta em 23/11/2026.
+async function clienteDentroDaJanela24h(telefone) {
+  if (!pool) return false;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM whatsapp_mensagens
+     WHERE phone = $1 AND role = 'user' AND created_at >= now() - interval '24 hours'
+     LIMIT 1`,
+    [telefone]
+  );
+  return rows.length > 0;
+}
+
 // Nome exato de cada template aprovado no WhatsApp Manager da Meta — as 4
 // mensagens que A LOJA inicia (cliente não mandou nada antes) só podem sair
 // como template, nunca como texto livre. O texto salvo em mensagens_config
@@ -4575,6 +4594,12 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal, imagens) => {
         responderClientePendente: async (escalacaoId, textoParaCliente) => {
           const alvo = escalacoesPendentes.find((e) => e.id === escalacaoId);
           if (!alvo) throw new Error(`Escalação #${escalacaoId} não encontrada ou já respondida.`);
+          // Escalação pendente há mais de 24h não significa cliente ainda
+          // dentro da janela — se ele não mandou nenhuma mensagem nova nesse
+          // meio tempo, texto livre aqui seria fora da janela de 24h da Meta.
+          if (!(await clienteDentroDaJanela24h(alvo.telefone_cliente))) {
+            throw new Error(`Já se passaram mais de 24h desde a última mensagem desse cliente — não dá pra mandar texto livre sem arriscar a conta (regra da Meta). Espere ele escrever de novo ou fale por outro canal.`);
+          }
           // Na fila do telefone do CLIENTE (não do dono) — essa escrita
           // toca o histórico dele, então não pode rodar ao mesmo tempo que
           // uma rodada da IA em andamento pra esse mesmo número (ver
