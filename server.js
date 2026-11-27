@@ -4108,22 +4108,31 @@ async function processarFilaBoasVindasWhatsApp() {
   if (automacoesWhatsAppPausadas()) return;
   if (!dentroDoHorarioComercial()) return;
   try {
-    // Descarta (sem enviar) cadastros represados há mais de 30 dias — evita
-    // rajada de mensagens muito antigas quando a conexão volta depois de um
-    // tempo. 30 dias (e não 24h, como era antes) porque o próprio envio já é
-    // devagar (1 a cada 30s) e enfileirado um por vez, então mesmo um
-    // represamento grande nunca vira rajada de verdade.
+    // Descarta (sem enviar), num único UPDATE: (1) cadastros represados há mais
+    // de 30 dias — evita rajada de mensagens muito antigas quando a conexão
+    // volta depois de um tempo (30 dias, e não 24h como era antes, porque o
+    // próprio envio já é devagar e enfileirado um por vez, então mesmo um
+    // represamento grande nunca vira rajada de verdade); e (2) cadastro de
+    // antes de DATA_CONSENTIMENTO_WHATSAPP_POPUP — mesmo motivo do
+    // processarFilaReengajamentoWhatsApp: o popup só passou a pedir
+    // consentimento específico de WhatsApp a partir dessa data/hora, e
+    // boas_vindas_cadastro é template de categoria Marketing (ver opt-out
+    // acima). Lead cadastrado antes nunca deu esse opt-in e nunca vai poder
+    // receber isso.
     await pool.query(
       `UPDATE leads SET whatsapp_enviado = true
        WHERE cadastro_popup = true AND COALESCE(whatsapp_enviado, false) = false
-         AND created_at < now() - interval '30 days'`
+         AND (created_at < now() - interval '30 days' OR created_at < $1)`,
+      [DATA_CONSENTIMENTO_WHATSAPP_POPUP]
     );
 
     const { rows } = await pool.query(
       `SELECT id, name, phone FROM leads
        WHERE cadastro_popup = true AND COALESCE(whatsapp_enviado, false) = false
+         AND created_at >= $1
          AND created_at <= now() - interval '3 minutes'
-       ORDER BY created_at ASC LIMIT 1`
+       ORDER BY created_at ASC LIMIT 1`,
+      [DATA_CONSENTIMENTO_WHATSAPP_POPUP]
     );
     for (const lead of rows) {
       const telefone = telefoneParaE164(lead.phone);
