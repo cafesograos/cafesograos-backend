@@ -323,7 +323,8 @@ async function initDb() {
       ('reengajamento', 'Oi{nome}, lembrei de você! 👋 Tô com uma torra fresquinha aqui: {destaque}. Topa dar uma olhada?'),
       ('destaque_reengajamento', 'acabamos de chegar de Minas, uma torra bem gostosa'),
       ('reengajamento_pausado', 'true'),
-      ('retomar_conversa_pausado', 'true')
+      ('retomar_conversa_pausado', 'true'),
+      ('recompra_pausado', 'true')
     ON CONFLICT (chave) DO NOTHING`
   );
 

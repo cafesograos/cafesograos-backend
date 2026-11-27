@@ -3540,7 +3540,7 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
   const status = getStatusWhatsApp();
   const [
     msgBoasVindas, msgConfirmacao, msgFeedback, msgRecompra, msgReengajamento, destaqueReengajamento,
-    reengajamentoPausado, retomarConversaPausado
+    reengajamentoPausado, retomarConversaPausado, recompraPausado
   ] = await Promise.all([
     buscarMensagemConfig('boas_vindas'),
     buscarMensagemConfig('confirmacao_compra'),
@@ -3549,7 +3549,8 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
     buscarMensagemConfig('reengajamento'),
     buscarMensagemConfig('destaque_reengajamento'),
     fluxoPausado('reengajamento_pausado'),
-    fluxoPausado('retomar_conversa_pausado')
+    fluxoPausado('retomar_conversa_pausado'),
+    fluxoPausado('recompra_pausado')
   ]);
 
   const statusLabel = status === 'conectado' ? '🟢 Conectado' : '🔴 Não configurado';
@@ -3593,6 +3594,12 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
       'Mensagem casual de madrugada pra puxar de novo quem conversou com a IA ontem e não respondeu mais. Manda pelo template "retomar_conversa_atendimento" (não mais texto livre) — enquanto a Meta não aprovar esse template, reativar aqui só gera tentativa de envio com erro, sem mandar nada de verdade pro cliente.',
       'retomar-conversa',
       retomarConversaPausado
+    )}
+    ${cardFluxoPausavel(
+      'Lembrete de recompra',
+      'Mensagem de marketing por iniciativa da loja, 30 dias após a compra, pra quem já comprou antes. Diferente do reengajamento e do retomar-conversa, continua pausado mesmo depois de religar os outros dois: o telefone usado aqui vem do checkout do site, sem nenhum opt-in específico de marketing — ainda em aberto com o dono como tratar esse consentimento antes de voltar a mandar.',
+      'recompra',
+      recompraPausado
     )}
 
     <h2 style="margin-top:28px;">Testar a IA</h2>
@@ -3679,7 +3686,8 @@ app.post('/admin/whatsapp/destaque', requireAdmin, express.urlencoded({ extended
 // rota: adicionar um novo é só adicionar uma entrada aqui.
 const FLUXOS_PAUSAVEIS = {
   'reengajamento': { chave: 'reengajamento_pausado', nomeAcao: 'reengajamento_toggle' },
-  'retomar-conversa': { chave: 'retomar_conversa_pausado', nomeAcao: 'retomar_conversa_toggle' }
+  'retomar-conversa': { chave: 'retomar_conversa_pausado', nomeAcao: 'retomar_conversa_toggle' },
+  'recompra': { chave: 'recompra_pausado', nomeAcao: 'recompra_toggle' }
 };
 
 app.post('/admin/whatsapp/toggle/:fluxo', requireAdmin, asyncHandler(async (req, res) => {
@@ -4206,6 +4214,15 @@ async function processarFilaFeedbackWhatsApp() {
 // Mesma lógica do feedback, mas aos 30 dias e convidando pra uma nova compra
 // (o café de uma compra normal costuma acabar por essa época).
 async function processarFilaRecompraWhatsApp() {
+  // PAUSADA em 27/11/2026 (toggle em /admin/whatsapp, chave
+  // "recompra_pausado" no banco — ver fluxoPausado), separada da trava geral
+  // (WHATSAPP_AUTOMACOES_PAUSADAS) porque essa fica pausada por mais tempo:
+  // o telefone usado aqui vem do checkout do site, sem nenhum opt-in
+  // específico de marketing (diferente do popup, que já pede consentimento)
+  // — decisão de como tratar isso ainda está em aberto com o dono. Religar
+  // boas-vindas/reengajamento/retomar-conversa não pode reativar esse fluxo
+  // também, por isso a chave separada em vez de reusar a trava geral.
+  if (await fluxoPausado('recompra_pausado')) return;
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
   if (automacoesWhatsAppPausadas()) return;
   if (!dentroDoHorarioComercial()) return;
