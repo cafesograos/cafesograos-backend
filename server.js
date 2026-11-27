@@ -11,7 +11,7 @@ const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastrei
 const { CATEGORIES, PRODUCTS } = require('./products');
 const { agendarBackupDiario } = require('./backup');
 const {
-  iniciarWhatsApp, enviarMensagemWhatsApp, enviarTemplateWhatsApp,
+  iniciarWhatsApp, enviarMensagemWhatsApp, enviarImagemWhatsApp, enviarTemplateWhatsApp,
   definirHandlerMensagem, processarWebhookRecebido,
   getStatusConexao: getStatusWhatsApp,
   executarEmFilaPorTelefone
@@ -118,7 +118,8 @@ const BLACK_FRIDAY = {
   fimNormal: '2026-11-29T23:59:59-03:00',
   fimProrrogacao: '2026-11-30T02:00:00-03:00',
   minimoCopo: 150.00,
-  minimoFrete: 170.00
+  minimoFrete: 170.00,
+  minimoAmbos: 300.00
 };
 // 'antes' | 'ativo' | 'prorrogacao' | 'depois' — "ativo" e "prorrogacao" são
 // as duas fases em que a oferta vale de verdade (preço, frete, copo); as
@@ -144,9 +145,62 @@ function blackFridayBeneficios(subtotal) {
   // em cima da linha exata de um limite.
   const valor = Number((Number(subtotal) || 0).toFixed(2));
   return {
-    copo: (valor >= BLACK_FRIDAY.minimoCopo && valor < BLACK_FRIDAY.minimoFrete) || valor >= 300,
+    copo: (valor >= BLACK_FRIDAY.minimoCopo && valor < BLACK_FRIDAY.minimoFrete) || valor >= BLACK_FRIDAY.minimoAmbos,
     freteGratis: valor >= BLACK_FRIDAY.minimoFrete
   };
+}
+
+// Decide se o copo de brinde da Black entra pra esse subtotal (ver
+// blackFridayBeneficios) e já devolve o produto do catálogo + o peso extra
+// dele em kg — único lugar que decide isso, usado pelo checkout do site,
+// pela prévia de frete e pela criação real do pedido da IA do WhatsApp, pra
+// nunca divergirem sobre se o copo entra ou quanto peso ele soma (a prévia
+// de frete em especial precisa bater com o peso do pedido real, senão o
+// frete cotado na conversa diverge do cobrado depois).
+function copoBlackFridayParaSubtotal(subtotalCatalogo) {
+  if (!blackFridayAtiva() || !blackFridayBeneficios(subtotalCatalogo).copo) return { produto: null, pesoExtraKg: 0 };
+  const produto = PRODUCTS.find((p) => p.id === 'copo-termico-350');
+  if (!produto) {
+    // Mesmo cuidado do brinde de boas-vindas: se o id mudar no catálogo, o
+    // copo não pode sumir em silêncio.
+    console.warn('[blackFriday] Produto de brinde "copo-termico-350" não encontrado no catálogo — copo da Black não foi incluído.');
+    return { produto: null, pesoExtraKg: 0 };
+  }
+  return { produto, pesoExtraKg: (produto.pesoGramas || 30) / 1000 };
+}
+
+// Info da Black Friday pro prompt da IA do WhatsApp (ver montarSystemPrompt
+// em whatsapp-ia.js) — só o que ela precisa pra explicar a promoção certo.
+// Único lugar que monta esse objeto, repassado pelas duas chamadas de
+// responderMensagem (atendimento real e simulador de teste em
+// /admin/whatsapp/testar-ia) pra nunca os dois mostrarem textos diferentes
+// sobre a Black. Todo valor que pode mudar de config (incluindo o limite
+// pros dois benefícios juntos) vem do mesmo BLACK_FRIDAY que
+// blackFridayBeneficios usa — só a data pública (texto fixo no prompt, ver
+// blocoBlackFriday) não vem daqui, porque o texto pro cliente usa a data
+// divulgada, não a prorrogação técnica de BLACK_FRIDAY.fimProrrogacao.
+function blackFridayInfoParaPrompt() {
+  return {
+    ativa: blackFridayAtiva(),
+    minimoCopo: BLACK_FRIDAY.minimoCopo,
+    minimoFrete: BLACK_FRIDAY.minimoFrete,
+    minimoAmbos: BLACK_FRIDAY.minimoAmbos
+  };
+}
+
+// As 2 únicas imagens que a ferramenta enviar_imagem_promocional da IA pode
+// mandar (ver TOOL_IMAGEM_PROMOCIONAL em whatsapp-ia.js) — de propósito um
+// mapa fixo, nunca uma URL vinda do modelo. Arquivos publicados em
+// public/promo/ (servidos estático, ver express.static('public') acima).
+const IMAGENS_PROMOCIONAIS = {
+  copo: { url: `${BACKEND_URL}/promo/black-friday-copo.jpg`, legenda: 'Copo Café Só Grãos de brinde na Black Friday! 🎁' },
+  faixas: { url: `${BACKEND_URL}/promo/black-friday-faixas.jpg`, legenda: 'Nossa Black Friday: quanto mais você leva, mais benefício ganha!' }
+};
+
+async function enviarImagemPromocionalViaAtendimento(telefone, imagem) {
+  const escolhida = IMAGENS_PROMOCIONAIS[imagem];
+  if (!escolhida) throw new Error(`Imagem promocional desconhecida: ${imagem}`);
+  await enviarImagemWhatsApp(telefone, escolhida.url, escolhida.legenda);
 }
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
@@ -762,20 +816,14 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       }
     }
 
-    // Copo de brinde da Black Friday (ver blackFridayBeneficios) — regra
-    // separada do brinde de boas-vindas acima (pausado durante a Black):
-    // copo sozinho de R$150 a R$170, frete grátis sozinho de R$170 a R$300,
-    // os dois juntos só a partir de R$300 (de propósito, não é engano).
-    let copoBlackProduto = null;
-    if (blackFridayAtiva() && blackFridayBeneficios(subtotalCatalogo).copo) {
-      copoBlackProduto = PRODUCTS.find((p) => p.id === 'copo-termico-350');
-      if (copoBlackProduto) {
-        itensParaPedido.push({ title: `${copoBlackProduto.nome} — Brinde Black Friday`, quantity: 1, unit_price: 0 });
-      } else {
-        // Mesmo cuidado do brinde de boas-vindas acima: se o id mudar no
-        // catálogo, o copo não pode sumir em silêncio.
-        console.warn('[pedido] Produto de brinde "copo-termico-350" não encontrado no catálogo — copo da Black não foi incluído.');
-      }
+    // Copo de brinde da Black Friday — regra separada do brinde de
+    // boas-vindas acima (pausado durante a Black): copo sozinho de R$150 a
+    // R$170, frete grátis sozinho de R$170 a R$300, os dois juntos só a
+    // partir de R$300 (de propósito, não é engano). Decisão compartilhada
+    // com a IA do WhatsApp em copoBlackFridayParaSubtotal.
+    const { produto: copoBlackProduto, pesoExtraKg: pesoCopoBlackKg } = copoBlackFridayParaSubtotal(subtotalCatalogo);
+    if (copoBlackProduto) {
+      itensParaPedido.push({ title: `${copoBlackProduto.nome} — Brinde Black Friday`, quantity: 1, unit_price: 0 });
     }
 
     const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
@@ -785,7 +833,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       0
     );
     if (brindeProduto) pesoTotalKg += ((brindeProduto.pesoGramas || 400) * brindeQuantidade) / 1000;
-    if (copoBlackProduto) pesoTotalKg += (copoBlackProduto.pesoGramas || 30) / 1000;
+    pesoTotalKg += pesoCopoBlackKg;
 
     // Sempre cotamos, mesmo quando o frete grátis vai zerar o valor cobrado do
     // cliente — o pacote ainda precisa ser enviado por alguma transportadora
@@ -2174,8 +2222,9 @@ setInterval(() => {
 // cálculo que o site já expõe em "/api/calcular-frete" nas páginas de
 // produto, só que aqui a IA pode usar no meio da conversa, antes de pedir
 // os dados completos pro fechamento (ver ferramenta calcular_frete e a
-// regra FRETE no prompt). Inclui o peso do brinde de boas-vindas pra essa
-// prévia bater com o valor que o pedido real vai ter se ele fechar depois.
+// regra FRETE no prompt). Inclui o peso do brinde de boas-vindas e, durante
+// a Black, do copo de brinde — pra essa prévia bater com o valor que o
+// pedido real vai ter se ele fechar depois.
 async function calcularFretePreviewViaAtendimento({ cep, telefone, itens }) {
   // Falha explícita, igual criarPedidoViaAtendimento — sem isso,
   // brindeQuantidadeViaAtendimento sozinha trataria o pool ausente como "0
@@ -2194,7 +2243,13 @@ async function calcularFretePreviewViaAtendimento({ cep, telefone, itens }) {
   }
 
   const brindeQuantidade = await brindeQuantidadeViaAtendimento(telefone);
-  const { pesoTotalKg, subtotalCatalogo } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
+  const { pesoTotalKg: pesoTotalKgSemCopo, subtotalCatalogo } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
+  // Mesma decisão do checkout do site e da criação real do pedido da IA
+  // (copoBlackFridayParaSubtotal é compartilhada) — sem somar esse peso
+  // aqui, a prévia cotava um frete mais leve do que o pedido real vai pesar
+  // se o cliente fechar levando o copo de brinde.
+  const { produto: copoBlackProduto, pesoExtraKg: pesoCopoBlackKg } = copoBlackFridayParaSubtotal(subtotalCatalogo);
+  const pesoTotalKg = pesoTotalKgSemCopo + pesoCopoBlackKg;
 
   const freteCalculado = await calcularFrete(cep, pesoTotalKg, subtotalCatalogo);
   const freteGratis = freteGratisParaCep(cep, subtotalCatalogo);
@@ -2203,7 +2258,11 @@ async function calcularFretePreviewViaAtendimento({ cep, telefone, itens }) {
   // calcularFrete cair no fallback de estimativa (ver shipping.js), o valor
   // NÃO veio de cotação real de transportadora nenhuma — a IA não pode falar
   // como se tivesse vindo (ver regra RECLAMAÇÃO DE FRETE no prompt).
-  return { valor: freteGratis ? 0 : freteCalculado.valor, gratis: freteGratis, prazoDias: freteCalculado.prazoDias, origem: freteCalculado.origem };
+  // "copo": reflete se o copo de brinde vai mesmo entrar no pedido (já
+  // considera o produto existir no catálogo) — repassado pra IA poder
+  // confirmar o benefício puxando do resultado da ferramenta em vez de só
+  // recitar de memória o texto do prompt.
+  return { valor: freteGratis ? 0 : freteCalculado.valor, gratis: freteGratis, copo: !!copoBlackProduto, prazoDias: freteCalculado.prazoDias, origem: freteCalculado.origem };
 }
 
 // Cria um pedido de verdade (com link de pagamento InfinitePay) a partir da
@@ -2227,7 +2286,8 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
   // única dessa regra, compartilhada com a prévia de frete).
   const brindeQuantidade = await brindeQuantidadeViaAtendimento(telefone);
 
-  const { pesoTotalKg, subtotalCatalogo, brindeProduto } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
+  const { subtotalCatalogo, brindeProduto, pesoTotalKg: pesoTotalKgInicial } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
+  let pesoTotalKg = pesoTotalKgInicial;
 
   const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
     id: produto.id,
@@ -2237,6 +2297,16 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
     const sufixo = brindeQuantidade > 1 ? ' — Brinde de boas-vindas (cadastro antecipado)' : ' — Brinde de boas-vindas';
     itensParaPedido.push({ title: `${brindeProduto.nome}${sufixo}`, quantity: brindeQuantidade, unit_price: 0 });
   }
+
+  // Copo de brinde da Black Friday — mesma decisão do checkout do site
+  // (copoBlackFridayParaSubtotal é compartilhada entre os dois):
+  // subtotalCatalogo aqui já é só os itens reais (sem brinde de
+  // boas-vindas), igual ao site.
+  const { produto: copoBlackProduto, pesoExtraKg: pesoCopoBlackKg } = copoBlackFridayParaSubtotal(subtotalCatalogo);
+  if (copoBlackProduto) {
+    itensParaPedido.push({ title: `${copoBlackProduto.nome} — Brinde Black Friday`, quantity: 1, unit_price: 0 });
+  }
+  pesoTotalKg += pesoCopoBlackKg;
 
   const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
 
@@ -3801,6 +3871,14 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
         // calculadora de frete do site) — sem risco nenhum usar a função real
         // aqui também, igual já acontece com buscarClienteConhecido abaixo.
         calcularFretePreviewViaAtendimento,
+        // Mesma regra do item acima: calcular blackFridayInfo com a função
+        // real (não dá pra "simular" se a Black está ativa sem arriscar o
+        // teste mostrar um prompt diferente do que o atendimento real usa
+        // agora). Mandar a imagem de verdade pro número de teste também usa
+        // a função real -- não é criação de pedido nem cobrança nenhuma,
+        // então não precisa de mock como criarPedidoViaAtendimento acima.
+        blackFridayInfo: blackFridayInfoParaPrompt(),
+        enviarImagemPromocional: enviarImagemPromocionalViaAtendimento,
         escalarAtendimento: async (_telefoneCliente, motivo) => {
           motivoEscalado = motivo || 'não especificado';
         },
@@ -4882,7 +4960,9 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal, imagens) => {
   console.log(`[whatsapp-ia] gerando resposta pra ${telefone}...`);
   try {
     const { texto: resposta, partes, esperaMs } = await responderMensagem(telefone, texto, {
-      pool, PRODUCTS, criarPedidoViaAtendimento, calcularFretePreviewViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento
+      pool, PRODUCTS, criarPedidoViaAtendimento, calcularFretePreviewViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento,
+      blackFridayInfo: blackFridayInfoParaPrompt(),
+      enviarImagemPromocional: enviarImagemPromocionalViaAtendimento
     }, imagens);
     console.log(`[whatsapp-ia] resposta gerada pra ${telefone} (espera ${Math.round(esperaMs / 1000)}s, ${partes.length} msg(s)): "${(resposta || '').slice(0, 80)}"`);
     if (resposta) {

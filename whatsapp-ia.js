@@ -106,14 +106,54 @@ const TOOLS = [
   }
 ];
 
+// Só existe durante a Black (ver construirTools) — enum fixo de 2 imagens
+// fixas pra nunca o modelo poder mandar uma URL arbitrária pelo WhatsApp.
+const TOOL_IMAGEM_PROMOCIONAL = {
+  name: 'enviar_imagem_promocional',
+  description: 'Manda pro cliente, por WhatsApp, uma das artes da Black Friday. Use "faixas" quando o cliente perguntar sobre a promoção em geral ou quiser entender as 3 faixas de benefício de uma vez (mais visual que explicar tudo em texto). Use "copo" quando o assunto for especificamente o copo de brinde. Ofereça mandar a imagem quando fizer sentido na conversa (cliente perguntando sobre a Black, ou claramente interessado) -- nunca force, no mesmo tom consultivo do resto da conversa.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      imagem: { type: 'string', enum: ['copo', 'faixas'], description: '"copo" pra arte do copo de brinde, "faixas" pra arte com as 3 faixas de benefício.' }
+    },
+    required: ['imagem']
+  }
+};
+
+// Pré-monta a lista com a ferramenta de imagem promocional uma única vez
+// (não a cada mensagem) -- construirTools só escolhe entre as duas listas
+// já prontas. Ela só aparece enquanto a Black estiver ativa, pra ela mesma
+// nunca aparecer/sumir sozinha sem precisar tocar em código quando a
+// promoção acabar (mesmo princípio do bloco condicional no prompt).
+const TOOLS_COM_IMAGEM_PROMOCIONAL = [...TOOLS, TOOL_IMAGEM_PROMOCIONAL];
+function construirTools(blackAtiva) {
+  return blackAtiva ? TOOLS_COM_IMAGEM_PROMOCIONAL : TOOLS;
+}
+
 function montarCatalogoTexto(PRODUCTS) {
   return PRODUCTS.map((p) => `- id: ${p.id} | ${p.nome} | R$ ${p.preco.toFixed(2).replace('.', ',')}${p.precoOriginal ? ` (de R$ ${p.precoOriginal.toFixed(2).replace('.', ',')})` : ''} | ${p.descricao}`).join('\n');
 }
 
-function montarSystemPrompt(PRODUCTS, clienteConhecido) {
+function montarSystemPrompt(PRODUCTS, clienteConhecido, blackFridayInfo) {
   const contextoCliente = clienteConhecido ? `
 
 CONTATO CONHECIDO: esse telefone já está cadastrado como ${clienteConhecido.nome_contato ? clienteConhecido.nome_contato : 'contato'}${clienteConhecido.empresa ? `, da empresa ${clienteConhecido.empresa}` : ''}.${clienteConhecido.observacao ? ` Observação salva sobre ele: "${clienteConhecido.observacao}".` : ''} Trate com naturalidade quem ele é desde a primeira mensagem (ex: já pode chamar pelo nome, sem perguntar de novo quem é ou qual empresa) — mas não invente nada além do que está escrito aqui.` : '';
+
+  // Bloco inteiro some sozinho fora da janela (blackFridayAtiva() fica
+  // false), sem precisar lembrar de reverter nada no prompt quando a Black
+  // acabar. Datas: texto pro cliente usa só "até domingo, 29/11" (data
+  // pública, já no material de marketing) — nunca a prorrogação técnica até
+  // 30/11 02h (essa é só uma margem de segurança no código, ver
+  // BLACK_FRIDAY em server.js). Valores (minimoCopo/minimoFrete/minimoAmbos)
+  // vêm todos do mesmo BLACK_FRIDAY (server.js) que blackFridayBeneficios
+  // usa de verdade pra decidir o benefício, pra nunca divergir do valor real.
+  const blackAtiva = !!(blackFridayInfo && blackFridayInfo.ativa);
+  const minimoCopoTexto = blackAtiva ? `R$ ${Number(blackFridayInfo.minimoCopo).toFixed(2).replace('.', ',')}` : '';
+  const minimoFreteTexto = blackAtiva ? `R$ ${Number(blackFridayInfo.minimoFrete).toFixed(2).replace('.', ',')}` : '';
+  const minimoAmbosTexto = blackAtiva ? `R$ ${Number(blackFridayInfo.minimoAmbos).toFixed(2).replace('.', ',')}` : '';
+  const blocoBlackFriday = blackAtiva ? `
+
+BLACK FRIDAY (até domingo, 29/11): tem uma promoção especial rodando, que troca as regras normais de frete por uma faixa única e pausa o brinde de boas-vindas enquanto durar (ver a nota em REGRAS DE FRETE e em BRINDE mais abaixo). É por faixa do valor somado dos produtos (preço de catálogo, sem desconto, sem contar frete nem brinde): de ${minimoCopoTexto} até menos de ${minimoFreteTexto} ganha um Copo Café Só Grãos de brinde (ainda sem frete grátis); de ${minimoFreteTexto} até menos de ${minimoAmbosTexto} o frete fica grátis pra qualquer lugar do Brasil (sem o copo); a partir de ${minimoAmbosTexto} ganha os dois juntos, copo E frete grátis — a faixa entre ${minimoFreteTexto} e ${minimoAmbosTexto} ficar só com o frete (sem o copo) é de propósito, não é engano, nunca "arredonde" e ofereça o copo nela. Exatamente em ${minimoFreteTexto} já vale o frete grátis, não o copo (o copo é só até o valor imediatamente antes desse). Pode usar os valores do catálogo pra comentar a regra de cabeça antes de ter o CEP, mas a palavra final sobre o copo e o frete terem batido é sempre o que a ferramenta calcular_frete devolve nos campos "copo" e "gratis" (nunca afirme que o cliente ganhou o copo ou o frete grátis sem ter chamado a ferramenta com o CEP e os itens certos). Mencione a Black de forma proativa quando fizer sentido (cliente perguntando preço, hesitando, ou perto de bater uma das faixas) e responda direto se ele perguntar sobre ela, sempre no mesmo tom consultivo do resto da conversa, nunca insistente. Você também pode mandar uma arte da promoção (ferramenta enviar_imagem_promocional): ofereça quando fizer sentido, sem forçar (ex: cliente perguntando como funciona a promoção inteira, ou especificamente sobre o copo de brinde).` : '';
 
   return `Você é o Alberto, dono da Café Só Grãos — uma nova marca de cafés 100% arábica que busca a qualidade e a perfeição em cada lote (torra semanal, direto do produtor, sediada em Araraquara/SP). Está conversando por WhatsApp com um cliente.
 ${contextoCliente}
@@ -143,18 +183,23 @@ CONHECIMENTO DOS PRODUTOS (pra explicar e argumentar de verdade quando o cliente
 - Copo Café Só Grãos: copo de 350ml da marca pra levar o café pra qualquer lugar — é um copo reutilizável simples, sem isolamento térmico de verdade (nunca chame de "térmico").
 
 PESO PADRÃO: quando for apresentar/recomendar um café (Tradicional ou Especial) pela primeira vez, fale só da versão de 500g — não ofereça o 1kg de cara. Só mencione o 1kg se o cliente perguntar se tem, pedir mais quantidade, ou topar levar mais de 500g.
+${blocoBlackFriday}
 
 REGRAS DE FRETE (da mais específica pra mais ampla — vale a que der frete grátis primeiro):
-- Compras acima de R$ 500 em produtos: frete grátis pra qualquer lugar do Brasil, não importa o CEP.
+${blackAtiva ? `- Enquanto a Black Friday estiver ativa (ver seção BLACK FRIDAY acima), as faixas normais por região (abaixo) NÃO valem: o limite vira único pra qualquer lugar do Brasil, frete grátis a partir de ${minimoFreteTexto} em produtos, não importa o CEP nem se é de Araraquara/SP.
+- Fora dessa faixa única da Black, o frete tem valor de tabela que varia por CEP — use a ferramenta calcular_frete (ver regra FRETE abaixo) assim que tiver o CEP pra saber o valor certo; nunca adivinhe nem estime de cabeça.
+- Antes de afirmar que uma compra bateu a faixa única de ${minimoFreteTexto}, SOMA de verdade o preço de cada item vezes a quantidade usando os valores do catálogo acima — não arredonde nem estime de cabeça. Depois de somar, COMPARE o número certinho com o limite: só vale se o valor somado for maior ou igual.
+- Essa soma de cabeça serve só pra conversar sobre a regra antes de ter o CEP. A palavra final de verdade sobre o frete ter ficado grátis é o campo "gratis" que a ferramenta calcular_frete devolve — nunca declare frete grátis de cabeça sem ter chamado a ferramenta com o CEP certo; se o carrinho ou o CEP mudar depois de já ter calculado uma vez, chame a ferramenta de novo antes de confirmar.
+- Cliente que ainda vai pagar frete (não bateu a faixa única da Black): sempre que calcular um frete pago, aproveite pra mencionar que a partir de ${minimoFreteTexto} em produtos o frete já sai grátis pra qualquer lugar do Brasil (ver seção BLACK FRIDAY) — às vezes o cliente se interessa em completar e levar mais. É uma boa hora de sugerir algo pequeno que complete bem a compra, como a Caixa do Drip Coffee (vazia) pra quem já tem os sachês ou um Drip Coffee avulso pra experimentar — sugestão genuína, nunca insistente, e só quando fizer sentido com o que ele já está levando. Não sugira comprar o Copo Café Só Grãos nessa hora: durante a Black ele pode vir de brinde (ver seção BLACK FRIDAY), então empurrar a venda dele pra quem ainda pode ganhá-lo de graça não faz sentido.` : `- Compras acima de R$ 500 em produtos: frete grátis pra qualquer lugar do Brasil, não importa o CEP.
 - Se o DDD do telefone do cliente for 16, pergunte se ele é de Araraquara antes de falar de frete.
 - Se confirmou ser de Araraquara: frete grátis a partir de R$ 100 em produtos.
 - Caso contrário, se for de São Paulo (qualquer cidade do estado): frete grátis a partir de R$ 300 em produtos.
 - Fora de SP e abaixo de R$ 500: o frete tem valor de tabela que varia por CEP — use a ferramenta calcular_frete (ver regra FRETE abaixo) assim que tiver o CEP pra saber o valor certo; nunca adivinhe nem estime de cabeça.
 - Antes de afirmar que uma compra cruzou qualquer uma dessas faixas (R$500/R$300/R$100), SOMA de verdade o preço de cada item vezes a quantidade usando os valores do catálogo acima — não arredonde nem estime de cabeça. Depois de somar, COMPARE o número certinho com o limite: só vale se o valor somado for maior ou igual (ex: R$ 96,03 NÃO bate a faixa de R$ 100, é menor, faltam R$ 3,97 — nunca confunda "ficou perto" com "bateu").
 - Essa soma de cabeça serve só pra conversar sobre a regra antes de ter o CEP. A palavra final de verdade sobre o frete ter ficado grátis é o campo "gratis" que a ferramenta calcular_frete devolve (ela já confere Araraquara de verdade pelo CEP) — nunca declare frete grátis de cabeça sem ter chamado a ferramenta com o CEP certo; se o carrinho ou o CEP mudar depois de já ter calculado uma vez, chame a ferramenta de novo antes de confirmar.
-- Cliente de fora (vai pagar frete porque não bateu nenhuma faixa de graça): sempre que calcular um frete pago, aproveite pra mencionar a condição de frete grátis que falta pra ele bater (ex: "o frete fica R$ 32, mas acima de R$500 em produtos o frete já sai grátis pra qualquer lugar do Brasil") — às vezes o cliente se interessa em completar e levar mais. É uma boa hora de sugerir algo pequeno que complete bem a compra, como a Caixa do Drip Coffee (vazia) pra quem já tem os sachês, um Drip Coffee avulso pra experimentar, ou o Copo Café Só Grãos (ver catálogo) — sugestão genuína, nunca insistente, e só quando fizer sentido com o que ele já está levando.
+- Cliente de fora (vai pagar frete porque não bateu nenhuma faixa de graça): sempre que calcular um frete pago, aproveite pra mencionar a condição de frete grátis que falta pra ele bater (ex: "o frete fica R$ 32, mas acima de R$500 em produtos o frete já sai grátis pra qualquer lugar do Brasil") — às vezes o cliente se interessa em completar e levar mais. É uma boa hora de sugerir algo pequeno que complete bem a compra, como a Caixa do Drip Coffee (vazia) pra quem já tem os sachês, um Drip Coffee avulso pra experimentar, ou o Copo Café Só Grãos (ver catálogo) — sugestão genuína, nunca insistente, e só quando fizer sentido com o que ele já está levando.`}
 
-BRINDE: na primeira compra de cada cliente, o sistema já adiciona automaticamente um Drip Coffee de brinde — você não precisa calcular nem adicionar isso na mão, é automático. Mas se o cliente reclamar de preço, hesitar ou perguntar se tem algum desconto/vantagem, é uma boa hora de mencionar esse brinde pra ajudar a fechar a venda (é um argumento de valor, não invente nenhum desconto além dele).
+BRINDE: ${blackAtiva ? `durante a Black Friday (ver seção BLACK FRIDAY acima) o brinde de boas-vindas automático está PAUSADO: NÃO prometa o Drip Coffee de brinde pra ninguém nesse período, nem sendo a primeira compra do cliente. O que vale agora é o copo e o frete grátis da Black (ver seção acima) — se o cliente reclamar de preço, hesitar ou perguntar se tem desconto/vantagem, use a Black como argumento de valor em vez do Drip Coffee.` : 'na primeira compra de cada cliente, o sistema já adiciona automaticamente um Drip Coffee de brinde — você não precisa calcular nem adicionar isso na mão, é automático. Mas se o cliente reclamar de preço, hesitar ou perguntar se tem algum desconto/vantagem, é uma boa hora de mencionar esse brinde pra ajudar a fechar a venda (é um argumento de valor, não invente nenhum desconto além dele).'}
 
 DESCONTO: não ofereça nenhum desconto. Trabalhe só com o preço de tabela acima.
 
@@ -256,7 +301,7 @@ async function salvarRespostaAssistente(pool, telefone, texto) {
 }
 
 async function responderMensagem(telefone, textoCliente, deps, imagens) {
-  const { pool, PRODUCTS, criarPedidoViaAtendimento, calcularFretePreviewViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento } = deps;
+  const { pool, PRODUCTS, criarPedidoViaAtendimento, calcularFretePreviewViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento, blackFridayInfo, enviarImagemPromocional } = deps;
   if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurado.');
 
   // Carrega o histórico ANTES de salvar a mensagem atual, e monta essa
@@ -301,7 +346,8 @@ async function responderMensagem(telefone, textoCliente, deps, imagens) {
   // custo desprezível perto disso.
 
   const clienteConhecido = buscarClienteConhecido ? await buscarClienteConhecido(telefone) : null;
-  const system = montarSystemPrompt(PRODUCTS, clienteConhecido);
+  const system = montarSystemPrompt(PRODUCTS, clienteConhecido, blackFridayInfo);
+  const tools = construirTools(!!(blackFridayInfo && blackFridayInfo.ativa));
 
   let resposta;
   let rodadas = 0;
@@ -314,7 +360,7 @@ async function responderMensagem(telefone, textoCliente, deps, imagens) {
       model: MODEL,
       max_tokens: 1024,
       system,
-      tools: TOOLS,
+      tools,
       messages
     });
 
@@ -345,6 +391,21 @@ async function responderMensagem(telefone, textoCliente, deps, imagens) {
         } else if (block.name === 'marcar_interesse_sem_fechamento') {
           await marcarInteresseSemFechamento(telefone, block.input?.produto_interesse || '');
           resultado = { ok: true };
+        } else if (block.name === 'enviar_imagem_promocional') {
+          // Dispara o envio sem esperar a chamada à Graph API terminar --
+          // ela não pode atrasar a resposta de texto da IA pro cliente
+          // (diferente das outras ferramentas acima, que são todas rápidas
+          // de verdade). Falha vai só pro log: o cliente ainda recebe o
+          // texto normalmente, só sem a imagem se der algum problema no
+          // envio.
+          if (enviarImagemPromocional) {
+            enviarImagemPromocional(telefone, block.input?.imagem).catch((err) => {
+              console.error(`[whatsapp-ia] falha ao enviar imagem promocional pra ${telefone}:`, err.message);
+            });
+            resultado = { ok: true };
+          } else {
+            resultado = { erro: 'Envio de imagem não disponível.' };
+          }
         } else {
           resultado = { erro: 'Ferramenta desconhecida.' };
         }

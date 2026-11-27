@@ -161,6 +161,28 @@ async function enviarMensagemWhatsApp(telefoneOuJid, texto) {
   return data;
 }
 
+// Mensagem de imagem por link (a Meta busca a URL pública e envia ela
+// mesma, sem precisar fazer upload de mídia antes) -- mesmo padrão de
+// enviarMensagemWhatsApp acima, só troca o "type" e o corpo da mensagem.
+// Quem chama decide o link (ver enviar_imagem_promocional, que só aceita
+// um enum fixo de 2 imagens -- nunca passar aqui uma URL vinda direto do
+// modelo da IA).
+async function enviarImagemWhatsApp(telefoneOuJid, link, legenda) {
+  const token = process.env.WHATSAPP_TOKEN;
+  if (!token) throw new Error('WhatsApp não configurado (WHATSAPP_TOKEN ausente).');
+  const numero = String(telefoneOuJid || '').replace(/\D/g, '');
+  if (!numero) throw new Error('Telefone inválido.');
+  const phoneNumberId = await obterPhoneNumberId();
+  const res = await fetch(`${GRAPH_API_BASE}/${phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messaging_product: 'whatsapp', to: numero, type: 'image', image: { link, caption: legenda || undefined } })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || 'Falha ao enviar imagem pelo WhatsApp.');
+  return data;
+}
+
 // Mensagem de template aprovado — obrigatório pra qualquer mensagem que A
 // LOJA inicia (cliente não mandou nada antes, tipo boas-vindas ou lembrete
 // de recompra), porque a Meta só libera texto livre dentro da janela de 24h
@@ -413,6 +435,7 @@ function getStatusConexao() {
 
 module.exports = {
   enviarMensagemWhatsApp,
+  enviarImagemWhatsApp,
   enviarTemplateWhatsApp,
   definirHandlerMensagem,
   processarWebhookRecebido,
