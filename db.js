@@ -290,6 +290,20 @@ async function initDb() {
     );
   `);
 
+  // Opt-out de WhatsApp marketing: todo template de categoria Marketing
+  // (boas_vindas_cadastro, lembrete_recompra_cafe, reengajamento_interesse,
+  // followup_interesse_cliente) termina com "Responda SAIR pra não receber
+  // mais mensagens" — exigência da própria Meta. Até 27/11/2026 ninguém
+  // detectava essa resposta de verdade; telefone aqui guarda só os últimos
+  // 11 dígitos (mesmo padrão RIGHT(regexp_replace(...),11) usado no resto
+  // do arquivo pra comparar telefone, não importa o jeito que chegou).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_opt_out (
+      telefone TEXT PRIMARY KEY,
+      criado_em TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
   // Textos das mensagens automáticas do WhatsApp (boas-vindas, confirmação
   // de compra), editáveis pelo dono direto no painel admin — sem precisar
   // mexer em código pra ajustar uma palavra. Placeholders tipo {nome} são

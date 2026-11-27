@@ -541,4 +541,4 @@ async function responderDono(texto, deps) {
   return textoResposta || (repassouNessaRodada ? '✅ Repassado pro cliente.' : textoResposta);
 }
 
-module.exports = { responderMensagem, salvarRespostaAssistente, responderDono, dividirEmPartes, limparDelimitador };
+module.exports = { responderMensagem, salvarMensagem, salvarRespostaAssistente, responderDono, dividirEmPartes, limparDelimitador };
