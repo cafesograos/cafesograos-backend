@@ -2073,6 +2073,11 @@ app.post('/vendedor/novo-pedido', requireVendedor, express.urlencoded({ extended
 // original de criarPedidoViaAtendimento): nunca bate em "já comprou" nem em
 // "tel>=10 dígitos", então cai no caso simples de primeira compra.
 async function brindeQuantidadeViaAtendimento(telefone) {
+  // Mesma pausa do brinde de boas-vindas no site (ver freeGift em
+  // /api/create-preference) -- sem isso, quem comprasse pelo WhatsApp ou
+  // pelo vendedor durante a Black continuava ganhando o Drip Coffee antigo
+  // mesmo com essa promoção pausada no site, inconsistente entre os canais.
+  if (blackFridayAtiva()) return 0;
   if (!pool) return 0;
   const telefoneOuVazio = String(telefone || '');
   const { rows: jaComprou } = await pool.query(
