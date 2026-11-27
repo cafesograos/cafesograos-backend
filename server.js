@@ -1177,11 +1177,20 @@ async function reconciliarPedidosPendentes() {
 app.get('/api/pedido/:preferenceId', asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
   const { rows } = await pool.query(
-    'SELECT id, status, total, shipping_cost, items, tracking_code, created_at FROM orders WHERE preference_id = $1',
+    'SELECT id, status, total, shipping_cost, items, tracking_code, shipping_origem, created_at FROM orders WHERE preference_id = $1',
     [req.params.preferenceId]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Pedido não encontrado.' });
-  res.json(rows[0]);
+  const pedido = rows[0];
+  // RETIRADA_MARCADOR (definido mais abaixo no arquivo) não é um código de
+  // rastreio de verdade — nunca repassar ele pra página de rastreio do
+  // cliente como se fosse um. shipping_origem já diz pra página que é
+  // retirada; retirado_na_loja diz se já foi buscado.
+  if (pedido.tracking_code === RETIRADA_MARCADOR) {
+    pedido.tracking_code = null;
+    pedido.retirado_na_loja = true;
+  }
+  res.json(pedido);
 }));
 
 // Painéis administrativos, todos atrás de login (ver requireAdmin mais abaixo).
@@ -2284,20 +2293,28 @@ async function consultarPedidoPorTelefone(telefone) {
   // como a pessoa digitou (sem "55" na frente), mas o WhatsApp sempre manda
   // com "55"; comparação exata nunca bateria entre os dois canais.
   const { rows } = await pool.query(
-    `SELECT id, status, items, total, tracking_code FROM orders
+    `SELECT id, status, items, total, tracking_code, shipping_origem FROM orders
      WHERE RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace($1, '\\D', '', 'g'), 11)
      ORDER BY created_at DESC LIMIT 1`,
     [telefone]
   );
   if (!rows[0]) return { encontrado: false };
   const o = rows[0];
+  const retiradaNaLoja = o.shipping_origem === 'retirada';
+  const retiradoNaLoja = retiradaNaLoja && o.tracking_code === RETIRADA_MARCADOR;
   return {
     encontrado: true,
     numero: o.id,
     status: o.status,
     total: Number(o.total),
     itens: o.items,
-    codigo_rastreio: o.tracking_code || null
+    // Nunca o marcador RETIRADA_MARCADOR aqui — ele não é um código de
+    // rastreio de transportadora, e a IA leria literalmente o texto se
+    // devolvêssemos ele neste campo. Os dois campos abaixo é que dizem pra
+    // IA o que aconteceu com o pedido nesse caso.
+    codigo_rastreio: (o.tracking_code && o.tracking_code !== RETIRADA_MARCADOR) ? o.tracking_code : null,
+    retirada_na_loja: retiradaNaLoja,
+    retirado_na_loja: retiradoNaLoja
   };
 }
 
@@ -2562,6 +2579,12 @@ function adminLayout({ title, ativo, body }) {
 // deixa claro que o pedido não foi concluído do lado do cliente.
 const STATUS_LABEL = { pending: 'Não pago', approved: 'Aprovado', rejected: 'Recusado', in_process: 'Em análise', cancelled: 'Cancelado', refunded: 'Reembolsado' };
 
+// Marcador gravado em tracking_code pra pedido de retirada na loja (nunca
+// recebe um código de rastreio de verdade, já que não vai por transportadora)
+// — não confundir com "[RETIRADA NA LOJA]" que entra em entrega.complemento,
+// que é outro campo pra outro propósito (endereço/observação de entrega).
+const RETIRADA_MARCADOR = 'RETIRADO NA LOJA';
+
 // Textos fixos pro aviso de erro do fluxo de etiqueta — nunca texto vindo da
 // URL direto (ver comentário em /admin/pedidos), então cada rota só manda um
 // desses códigos, nunca a mensagem em si.
@@ -2750,8 +2773,8 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
         <div class="pedido-selos">
           ${o.free_gift_duplicado ? '<span class="selo" style="background:#c0392b;color:#fff;">⚠️ Este cliente tem outro pedido aprovado com brinde — confira antes de enviar de novo</span>' : (o.free_gift ? '<span class="selo">🎁 Brinde</span>' : '')}
           ${(o.discount_percent && mostrarTotal) ? `<span class="selo">-${escapeHtml(o.discount_percent)}% cupom</span>` : ''}
-          ${o.tracking_code ? `<span class="selo">📦 Enviado: ${escapeHtml(o.tracking_code)}</span>` : ''}
-          ${o.shipping_origem === 'retirada' ? '<span class="selo" style="background:#211714;color:#D66B3E;">🏠 Retirada na loja — não precisa de frete</span>' : ''}
+          ${(o.tracking_code && o.tracking_code !== RETIRADA_MARCADOR) ? `<span class="selo">📦 Enviado: ${escapeHtml(o.tracking_code)}</span>` : ''}
+          ${o.shipping_origem === 'retirada' ? (o.tracking_code === RETIRADA_MARCADOR ? '<span class="selo" style="background:#211714;color:#D66B3E;">✅ Retirado na loja</span>' : '<span class="selo" style="background:#211714;color:#D66B3E;">🏠 Retirada na loja — não precisa de frete</span>') : ''}
         </div>
         ${(o.free_gift_duplicado && !somenteLeitura) ? `
           <form method="POST" action="${urlBase}/${o.id}/resolver-brinde-duplicado" style="margin-top:4px;">
@@ -2801,11 +2824,20 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
       ` : ''}
       ${o.melhorenvio_order_id && o.tracking_code ? `<div class="pedido-acoes"><a href="${urlBase}/${o.id}/frete/etiqueta" target="_blank" rel="noopener noreferrer" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;text-align:center;">Baixar etiqueta (PDF)</a></div>` : ''}
       <div class="pedido-acoes">
-        <form method="POST" action="${urlBase}/${o.id}/rastreio">
-          <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
-          <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
-          <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
-        </form>
+        ${o.shipping_origem === 'retirada' ? (
+          o.tracking_code === RETIRADA_MARCADOR ? '' : `
+          <form method="POST" action="${urlBase}/${o.id}/retirada-confirmada">
+            <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
+            <button type="submit" class="btn-mini btn-mini-primary">Marcar como retirado</button>
+          </form>
+          `
+        ) : `
+          <form method="POST" action="${urlBase}/${o.id}/rastreio">
+            <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
+            <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
+            <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
+          </form>
+        `}
         ${mostrarExcluir ? `
           <form method="POST" action="${urlBase}/${o.id}/excluir" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
             <button type="submit" class="btn-mini btn-mini-danger">Excluir</button>
@@ -3184,6 +3216,32 @@ function handlerResolverBrindeDuplicado(urlBase) {
 }
 app.post('/admin/pedidos/:id/resolver-brinde-duplicado', requireAdmin, express.urlencoded({ extended: false }), handlerResolverBrindeDuplicado('/admin/pedidos'));
 app.post('/vendedor/pedidos/:id/resolver-brinde-duplicado', requireVendedor, express.urlencoded({ extended: false }), handlerResolverBrindeDuplicado('/vendedor/pedidos'));
+
+// Marca pedido de retirada na loja como retirado — esses pedidos nunca têm
+// transportadora/rastreio de verdade, então sem essa ação eles ficavam pra
+// sempre na fila "Novos" (a_enviar), que só sai de lá com tracking_code
+// preenchido. Grava um marcador em tracking_code em vez de criar uma coluna
+// nova, mas só quando o pedido É de retirada e ainda NÃO tem nada em
+// tracking_code — trava que evita sobrescrever um código de rastreio de
+// verdade (ex.: pedido editado manualmente) ou marcar um pedido que não é de
+// retirada. Não dispara enviarEmailRastreio: esse e-mail fala em
+// transportadora/rastreio, não faz sentido pra quem já retirou pessoalmente.
+function handlerRetiradaConfirmada(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+    await pool.query(
+      `UPDATE orders SET tracking_code = $1
+       WHERE id = $2 AND shipping_origem = 'retirada' AND (tracking_code IS NULL OR tracking_code = '')`,
+      [RETIRADA_MARCADOR, req.params.id]
+    );
+    logAdminAcao(req, 'retirada_confirmada', `pedido #${req.params.id}`);
+
+    res.redirect(voltarParaPedido(urlBase, req.body?.status, req.params.id));
+  });
+}
+app.post('/admin/pedidos/:id/retirada-confirmada', requireAdmin, express.urlencoded({ extended: false }), handlerRetiradaConfirmada('/admin/pedidos'));
+app.post('/vendedor/pedidos/:id/retirada-confirmada', requireVendedor, express.urlencoded({ extended: false }), handlerRetiradaConfirmada('/vendedor/pedidos'));
 
 // Exclui um pedido (ex.: pedidos de teste feitos durante o desenvolvimento).
 // Só no painel admin de propósito — ação destrutiva, não faz parte do que o
