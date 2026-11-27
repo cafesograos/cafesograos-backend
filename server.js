@@ -16,7 +16,7 @@ const {
   getStatusConexao: getStatusWhatsApp,
   executarEmFilaPorTelefone
 } = require('./whatsapp-oficial');
-const { responderMensagem, salvarRespostaAssistente, responderDono, dividirEmPartes, limparDelimitador } = require('./whatsapp-ia');
+const { responderMensagem, salvarMensagem, salvarRespostaAssistente, responderDono, dividirEmPartes, limparDelimitador } = require('./whatsapp-ia');
 const crypto = require('crypto');
 
 const app = express();
@@ -517,7 +517,7 @@ function telefoneParaE164(telefoneRaw) {
 // de gerar o cupom; por isso o cupom se verifica contra a própria tabela
 // discounts, escrita dentro do mesmo lock que o lê.
 async function gerarCupomBrindeSemDuplicar(pool, order) {
-  const telDigits = String(order.customer_phone || '').replace(/\D/g, '').slice(-11);
+  const telDigits = ultimosDigitosTelefone(order.customer_phone);
   const telValido = telDigits.length >= 10 ? telDigits : null;
   const emailNorm = order.customer_email ? order.customer_email.trim().toLowerCase() : null;
   if (!telValido && !emailNorm) {
@@ -2369,6 +2369,33 @@ async function clienteDentroDaJanela24h(telefone) {
   return rows.length > 0;
 }
 
+// Normaliza telefone pros últimos 11 dígitos -- mesmo critério usado em todo
+// o resto do arquivo (RIGHT(regexp_replace(...),11)) pra comparar telefone
+// não importa o formato (com/sem "55" na frente, com/sem formatação).
+function ultimosDigitosTelefone(telefone) {
+  return String(telefone || '').replace(/\D/g, '').slice(-11);
+}
+
+// Quem respondeu "SAIR" uma vez (ver interceptação no handler de mensagem
+// recebida, logo abaixo) nunca mais pode receber template de categoria
+// Marketing (boas_vindas_cadastro, lembrete_recompra_cafe,
+// reengajamento_interesse, followup_interesse_cliente) -- exigência da
+// própria Meta, e provável causa de pelo menos um dos banimentos anteriores
+// dessa conta. NÃO se aplica a template de categoria Utilidade
+// (confirmacao_pedido, feedback_pedido_cafe, cobranca_pagamento_pendente,
+// aviso_atendimento_humano, retomar_conversa_atendimento) -- nenhum desses
+// tem o texto "Responda SAIR" aprovado pela Meta (conferido no WhatsApp
+// Manager), porque são transacionais/sobre um atendimento real em
+// andamento, não divulgação -- aplicar o opt-out neles bloquearia
+// mensagem legítima sobre o próprio pedido/atendimento da pessoa.
+async function estaDescadastradoWhatsApp(telefone) {
+  if (!pool) return false;
+  const digits = ultimosDigitosTelefone(telefone);
+  if (!digits) return false;
+  const { rows } = await pool.query(`SELECT 1 FROM whatsapp_opt_out WHERE telefone = $1 LIMIT 1`, [digits]);
+  return rows.length > 0;
+}
+
 // Nome exato de cada template aprovado no WhatsApp Manager da Meta — as 4
 // mensagens que A LOJA inicia (cliente não mandou nada antes) só podem sair
 // como template, nunca como texto livre. O texto salvo em mensagens_config
@@ -4043,7 +4070,9 @@ async function processarFilaBoasVindasWhatsApp() {
     for (const lead of rows) {
       const telefone = telefoneParaE164(lead.phone);
       let enviouComSucesso = false;
-      if (telefone) {
+      if (telefone && await estaDescadastradoWhatsApp(telefone)) {
+        console.log(`Boas-vindas pulado pro lead #${lead.id} — telefone pediu "SAIR" antes.`);
+      } else if (telefone) {
         const primeiroNomeLead = String(lead.name || '').trim().split(' ')[0];
         const nomeFormatado = primeiroNomeLead || 'cliente';
         try {
@@ -4128,7 +4157,9 @@ async function processarFilaRecompraWhatsApp() {
     );
     for (const pedido of rows) {
       const telefone = telefoneParaE164(pedido.customer_phone);
-      if (telefone) {
+      if (telefone && await estaDescadastradoWhatsApp(telefone)) {
+        console.log(`Lembrete de recompra pulado pro pedido #${pedido.id} — telefone pediu "SAIR" antes.`);
+      } else if (telefone) {
         const primeiroNome = (pedido.customer_name ? String(pedido.customer_name).trim().split(' ')[0] : '') || 'cliente';
         try {
           await enviarTemplateWhatsApp(telefone, WHATSAPP_TEMPLATES.lembrete_recompra, { nome_cliente: primeiroNome });
@@ -4206,7 +4237,9 @@ async function processarFilaReengajamentoWhatsApp() {
     for (const lead of rows) {
       const telefone = telefoneParaE164(lead.phone);
       let enviouComSucesso = false;
-      if (telefone) {
+      if (telefone && await estaDescadastradoWhatsApp(telefone)) {
+        console.log(`Reengajamento pulado pro lead #${lead.id} — telefone pediu "SAIR" antes.`);
+      } else if (telefone) {
         const primeiroNome = String(lead.name || '').trim().split(' ')[0];
         const nomeFormatado = primeiroNome || 'cliente';
         const destaque = await buscarMensagemConfig('destaque_reengajamento');
@@ -4358,7 +4391,11 @@ async function processarFilaFollowUpInteresse() {
            LIMIT 1`,
           [telefone, followup.id]
         );
-        if (comprou.length === 0) {
+        if (comprou.length > 0) {
+          console.log(`Follow-up de interesse pulado pro telefone ${telefone} — já comprou desde então.`);
+        } else if (await estaDescadastradoWhatsApp(telefone)) {
+          console.log(`Follow-up de interesse pulado pro telefone ${telefone} — telefone pediu "SAIR" antes.`);
+        } else {
           const { rows: leadRows } = await pool.query(
             `SELECT name FROM leads WHERE regexp_replace(phone, '\\D', '', 'g') = regexp_replace($1, '\\D', '', 'g') LIMIT 1`,
             [telefone]
@@ -4370,8 +4407,6 @@ async function processarFilaFollowUpInteresse() {
             produto_interesse: followup.produto_interesse || 'o café que vocês conversaram'
           });
           console.log(`WhatsApp de follow-up de interesse enviado pro telefone ${telefone}.`);
-        } else {
-          console.log(`Follow-up de interesse pulado pro telefone ${telefone} — já comprou desde então.`);
         }
       } catch (err) {
         console.error(`Falha ao enviar follow-up de interesse pro telefone ${telefone}:`, err.message);
@@ -4670,6 +4705,41 @@ async function contatosProativosHoje() {
 // conversa sozinha. Sem ANTHROPIC_API_KEY, só ignora e fica em silêncio (as
 // mensagens automáticas de boas-vindas/confirmação continuam funcionando).
 definirHandlerMensagem(async (telefone, texto, jidOriginal, imagens) => {
+  // Opt-out de marketing ("Responda SAIR", texto obrigatório em todo
+  // template de categoria Marketing) -- intercepta ANTES da IA de
+  // atendimento, pra nunca deixar o fluxo normal continuar com alguém que
+  // acabou de pedir pra não receber mais divulgação. Confirma de volta em
+  // texto livre (dentro da janela de 24h de boa, já que a pessoa acabou de
+  // mandar mensagem agora mesmo). Nunca intercepta o número do DONO -- ele
+  // não é cliente, "sair" na mensagem dele é só language normal
+  // ("vou sair agora", etc.), não um pedido de opt-out.
+  //
+  // Exige "sair" como uma LINHA inteira (trim + ignora pontuação final),
+  // não qualquer uso da palavra -- o agrupador de mensagens (ver
+  // JANELA_AGRUPAMENTO_MS em whatsapp-oficial.js) junta várias bolhas
+  // mandadas em sequência com \n antes de chegar aqui, então "Obrigado" e
+  // "SAIR" em bolhas separadas viram "Obrigado\nSAIR" -- precisa achar a
+  // linha "SAIR" sozinha ali dentro. Isso também evita falso positivo em
+  // frases comuns tipo "posso sair pra buscar na loja?" ou "vou sair de
+  // viagem", que têm a palavra mas não são um pedido de opt-out.
+  const ehMensagemDoDono = telefone.replace(/\D/g, '') === OWNER_WHATSAPP_NUMBER.replace(/\D/g, '');
+  const pediuSair = !ehMensagemDoDono && String(texto || '').split('\n').some((linha) => /^\s*sair\s*[.!?,]*\s*$/i.test(linha));
+  if (pool && pediuSair) {
+    // Salva a mensagem recebida ANTES de interceptar -- sem isso,
+    // clienteDentroDaJanela24h() (que lê whatsapp_mensagens procurando a
+    // última mensagem do cliente) nunca saberia que essa pessoa acabou de
+    // mandar mensagem agora, e uma escalação pendente dela ficaria presa
+    // achando que já passou da janela de 24h mesmo ela tendo acabado de
+    // escrever "sair".
+    await salvarMensagem(pool, telefone, 'user', texto);
+    const digits = ultimosDigitosTelefone(telefone);
+    if (digits) {
+      await pool.query(`INSERT INTO whatsapp_opt_out (telefone) VALUES ($1) ON CONFLICT (telefone) DO NOTHING`, [digits]);
+    }
+    await enviarMensagemWhatsApp(telefone, 'Prontinho, você não vai mais receber mensagens de divulgação da Café Só Grãos por aqui. Se precisar de alguma coisa sobre um pedido, é só chamar normalmente.');
+    await salvarRespostaAssistente(pool, telefone, 'Prontinho, você não vai mais receber mensagens de divulgação da Café Só Grãos por aqui. Se precisar de alguma coisa sobre um pedido, é só chamar normalmente.');
+    return;
+  }
   // Mensagem do próprio dono pro número da loja: pode ser (a) a resposta
   // dele pra uma escalação pendente — repassa pro cliente esperando — ou
   // (b) uma pergunta administrativa sobre o negócio ("teve venda hoje?",
@@ -4680,7 +4750,7 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal, imagens) => {
   // adivinhar. Antes disso era uma regra fixa (qualquer mensagem = repasse
   // sempre que houvesse escalação pendente) e isso já mandou pergunta
   // administrativa pro cliente errado por engano — não pode repetir.
-  if (pool && telefone.replace(/\D/g, '') === OWNER_WHATSAPP_NUMBER.replace(/\D/g, '')) {
+  if (pool && ehMensagemDoDono) {
     if (!process.env.ANTHROPIC_API_KEY) return;
     // responderDono não tem suporte a imagem (só a conversa com cliente
     // tem, ver FOTOS no prompt) — se o dono mandar só uma foto sem nenhum
