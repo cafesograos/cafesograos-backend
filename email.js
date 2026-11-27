@@ -200,10 +200,18 @@ async function enviarEmailRastreio(order) {
 // sem ter comprado ainda — reforça a oferta de primeira compra já anunciada
 // no site, em vez de inventar um cupom novo e concorrente com ela.
 async function enviarEmailBoasVindasLead(lead) {
+  // Durante a Black Friday o brinde de boas-vindas (Drip Coffee + cupom de
+  // 5%) fica pausado em todos os canais -- sem o flag, esse e-mail prometia
+  // um brinde que não ia ser dado se a pessoa comprasse durante a promoção.
+  // `blackFridayAtiva` vem de server.js (único lugar que sabe a data/hora),
+  // email.js não duplica essa regra.
+  const ofertaPrimeiraCompra = lead.blackFridayAtiva
+    ? `E já que você está aqui: é Black Friday no site — acima de ${reais(lead.minimoCopo)}, copo de brinde; acima de ${reais(lead.minimoFrete)}, frete grátis; acima de ${reais(300)}, os dois juntos. Aproveite em <a href="https://www.cafesograos.com.br" style="color:#D66B3E;">cafesograos.com.br</a>.`
+    : 'E já que você está aqui: na sua primeira compra você ganha um Drip Coffee de brinde e um cupom de 5% de desconto pra próxima. É só finalizar o pedido normalmente em <a href="https://www.cafesograos.com.br" style="color:#D66B3E;">cafesograos.com.br</a>.';
   const conteudo = `
     <h2 style="font-size:22px;margin:0 0 12px;">Combinado! ☕</h2>
     <p>Oi${lead.name ? `, ${escapeHtml(lead.name)}` : ''}! Anotamos seu contato — assim que sair uma nova torra ou uma promoção, você fica sabendo antes de todo mundo.</p>
-    <p>E já que você está aqui: na sua primeira compra você ganha um Drip Coffee de brinde e um cupom de 5% de desconto pra próxima. É só finalizar o pedido normalmente em <a href="https://www.cafesograos.com.br" style="color:#D66B3E;">cafesograos.com.br</a>.</p>
+    <p>${ofertaPrimeiraCompra}</p>
     <p>Qualquer dúvida, é só responder este e-mail ou chamar no WhatsApp (16) 99791-6459.</p>
     <p>Até já!<br>Café Só Grãos</p>
   `;

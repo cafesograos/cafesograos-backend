@@ -2566,6 +2566,7 @@ const STATUS_LABEL = { pending: 'Não pago', approved: 'Aprovado', rejected: 'Re
 // URL direto (ver comentário em /admin/pedidos), então cada rota só manda um
 // desses códigos, nunca a mensagem em si.
 const FRETE_ERRO_MSG = {
+  eh_retirada: 'Esse pedido é de retirada na loja (sem frete) — não precisa cotar nem comprar etiqueta nenhuma.',
   ja_no_carrinho: 'Esse pedido já tem um item no carrinho da Melhor Envio. Pra recomeçar, remova antes no painel da Melhor Envio.',
   sem_servico: 'Esse pedido não tem um serviço de frete cotado (provavelmente a cotação caiu na estimativa de reserva na hora da compra) — não dá pra saber qual transportadora usar.',
   ja_tem_servico: 'Esse pedido já tem um serviço de frete cotado — não precisa recotar, pode inserir no carrinho direto.',
@@ -2745,11 +2746,12 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
         </div>
         ${mostrarTotal ? `<div class="pedido-total">${reais(o.total)}</div><div class="pedido-detalhe" style="text-align:right;margin-top:2px;">líquido (sem frete): ${reais(Number(o.total) - Number(o.melhorenvio_valor_real ?? o.shipping_cost ?? 0))}</div>` : ''}
       </div>
-      ${(o.free_gift || o.discount_percent || o.tracking_code) ? `
+      ${(o.free_gift || o.discount_percent || o.tracking_code || o.shipping_origem === 'retirada') ? `
         <div class="pedido-selos">
           ${o.free_gift_duplicado ? '<span class="selo" style="background:#c0392b;color:#fff;">⚠️ Este cliente tem outro pedido aprovado com brinde — confira antes de enviar de novo</span>' : (o.free_gift ? '<span class="selo">🎁 Brinde</span>' : '')}
           ${(o.discount_percent && mostrarTotal) ? `<span class="selo">-${escapeHtml(o.discount_percent)}% cupom</span>` : ''}
           ${o.tracking_code ? `<span class="selo">📦 Enviado: ${escapeHtml(o.tracking_code)}</span>` : ''}
+          ${o.shipping_origem === 'retirada' ? '<span class="selo" style="background:#211714;color:#D66B3E;">🏠 Retirada na loja — não precisa de frete</span>' : ''}
         </div>
         ${(o.free_gift_duplicado && !somenteLeitura) ? `
           <form method="POST" action="${urlBase}/${o.id}/resolver-brinde-duplicado" style="margin-top:4px;">
@@ -2777,7 +2779,7 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
           </label>
         </form>
       ` : ''}
-      ${o.status === 'approved' && !o.tracking_code ? `
+      ${o.status === 'approved' && !o.tracking_code && o.shipping_origem !== 'retirada' ? `
         <div class="pedido-acoes">
           ${!o.melhorenvio_order_id ? (
             !o.shipping_service_id ? `
@@ -2947,6 +2949,9 @@ function handlerFreteRecotar(urlBase) {
       if (order.status !== 'approved' || order.tracking_code) {
         throw new Error('pedido_mudou');
       }
+      if (order.shipping_origem === 'retirada') {
+        throw new Error('eh_retirada');
+      }
       if (order.melhorenvio_order_id) {
         throw new Error('ja_no_carrinho');
       }
@@ -2996,6 +3001,9 @@ function handlerFreteCarrinho(urlBase) {
     if (!order) return res.redirect(urlBase);
 
     try {
+      if (order.shipping_origem === 'retirada') {
+        throw new Error('eh_retirada');
+      }
       if (order.melhorenvio_order_id) {
         throw new Error('ja_no_carrinho');
       }
@@ -3322,7 +3330,13 @@ app.post('/api/newsletter', formularioLimiter, async (req, res) => {
     // que já teve o dado guardado com sucesso. Só loga pra investigar depois.
     if (rows.length > 0) {
       try {
-        await enviarEmailBoasVindasLead({ name: nome, email });
+        await enviarEmailBoasVindasLead({
+          name: nome,
+          email,
+          blackFridayAtiva: blackFridayAtiva(),
+          minimoCopo: BLACK_FRIDAY.minimoCopo,
+          minimoFrete: BLACK_FRIDAY.minimoFrete
+        });
       } catch (emailErr) {
         console.error('Contato salvo, mas falhou o e-mail de boas-vindas:', emailErr);
       }
