@@ -627,6 +627,20 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     if (!cliente.nome || !cliente.email || !entrega.cep) {
       return res.status(400).json({ error: 'Dados de entrega incompletos.' });
     }
+    // Retirada no endereço da loja (opção extra pra Araraquara, pedido do
+    // dono em 26/11/2026 — a entrega por transportadora continua normal, no
+    // próximo dia útil; isso só dá a quem prefere buscar o pedido um jeito de
+    // não pagar/esperar frete). Nunca confia no que o cliente manda sem
+    // confirmar o CEP de novo aqui — ver nota acima sobre preço/peso sempre
+    // vir do servidor, mesma lógica pra não deixar ninguém de fora de
+    // Araraquara "escolher" retirada e sumir com o frete.
+    const retiradaNaLoja = Boolean(req.body?.entrega?.retirada) && cepEhAraraquara(entrega.cep);
+    // Sem coluna própria pra "é retirada" na tabela orders, marca no próprio
+    // complemento — é o jeito mais simples de o dono ver isso no e-mail/painel
+    // do pedido sem precisar de migração de banco às pressas na véspera da Black.
+    if (retiradaNaLoja) {
+      entrega.complemento = `[RETIRADA NA LOJA] ${entrega.complemento}`.trim().slice(0, 100);
+    }
     // Sem essa checagem, um e-mail sem ponto no domínio (ex.: "nome@gmailcom",
     // digitado errado) passava batido — o pagamento era aprovado normalmente,
     // mas o Resend rejeitava o envio da confirmação/rastreio, e o cliente
@@ -783,14 +797,25 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
     // diferente do subtotalCatalogo de cima, que é de propósito SEM
     // desconto (decide só a faixa de frete grátis).
     const subtotalComDesconto = subtotalComDescontoAplicado(itensParaPedido);
-    const freteCalculado = await calcularFrete(entrega.cep, pesoTotalKg, subtotalComDesconto);
-    const shippingCost = freteGratis ? 0 : freteCalculado.valor;
+    // Pedido de retirada não precisa de cotação de transportadora nenhuma —
+    // cotar aqui só ia gerar um id de serviço que nunca vai virar etiqueta.
+    const freteCalculado = retiradaNaLoja
+      ? { valor: 0, transportadora: null, servicoId: null, origem: 'retirada' }
+      : await calcularFrete(entrega.cep, pesoTotalKg, subtotalComDesconto);
+    const shippingCost = (freteGratis || retiradaNaLoja) ? 0 : freteCalculado.valor;
     // Guarda qual transportadora/modalidade foi a mais barata pra esse pedido
     // — sem isso, na hora de gerar a etiqueta de verdade era preciso
     // recalcular o frete manualmente só pra descobrir qual usar.
     const shippingCarrier = freteCalculado.transportadora || null;
     const shippingServiceId = freteCalculado.servicoId || null;
-    if (shippingCost > 0) {
+    if (retiradaNaLoja) {
+      line_items.push({
+        title: 'Retirada no endereço da loja (sem frete)',
+        quantity: 1,
+        unit_price: 0,
+        currency_id: 'BRL'
+      });
+    } else if (shippingCost > 0) {
       line_items.push({
         title: 'Frete',
         quantity: 1,
