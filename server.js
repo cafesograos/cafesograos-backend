@@ -107,6 +107,48 @@ const FRETE_GRATIS = {
 function freteGratisMinimo(escopo) {
   return FRETE_GRATIS.faixas.find((f) => f.escopo === escopo).minimo;
 }
+
+// Regra da Black Friday 2026 (manual do Gustavo, 26/11/2026 — aprovado pelo
+// dono). Horários com o fuso -03:00 escrito na própria string: Date.parse
+// interpreta o offset certo não importa o fuso do servidor (Railway roda em
+// UTC) nem do navegador de quem acessa, então nunca precisa converter nada
+// na mão — ver nota do dono sobre não entender UTC.
+const BLACK_FRIDAY = {
+  inicio: '2026-11-27T00:00:00-03:00',
+  fimNormal: '2026-11-29T23:59:59-03:00',
+  fimProrrogacao: '2026-11-30T02:00:00-03:00',
+  minimoCopo: 150.00,
+  minimoFrete: 170.00
+};
+// 'antes' | 'ativo' | 'prorrogacao' | 'depois' — "ativo" e "prorrogacao" são
+// as duas fases em que a oferta vale de verdade (preço, frete, copo); as
+// outras duas não.
+function blackFridayFase() {
+  const agora = Date.now();
+  if (agora < Date.parse(BLACK_FRIDAY.inicio)) return 'antes';
+  if (agora <= Date.parse(BLACK_FRIDAY.fimNormal)) return 'ativo';
+  if (agora <= Date.parse(BLACK_FRIDAY.fimProrrogacao)) return 'prorrogacao';
+  return 'depois';
+}
+function blackFridayAtiva() {
+  const fase = blackFridayFase();
+  return fase === 'ativo' || fase === 'prorrogacao';
+}
+// Regra aprovada (não é engano): copo sozinho de R$150 a R$170, frete grátis
+// sozinho de R$170 a R$300, os dois juntos só a partir de R$300 — a faixa
+// R$170-R$300 fica só com o frete, sem o copo.
+function blackFridayBeneficios(subtotal) {
+  // Arredonda pro centavo antes de comparar com os limites — subtotal vem de
+  // soma de preços (reduce), que pode cair em algo tipo 149.99999999999997
+  // por erro de ponto flutuante mesmo quando o valor "de verdade" é R$150,00
+  // em cima da linha exata de um limite.
+  const valor = Number((Number(subtotal) || 0).toFixed(2));
+  return {
+    copo: (valor >= BLACK_FRIDAY.minimoCopo && valor < BLACK_FRIDAY.minimoFrete) || valor >= 300,
+    freteGratis: valor >= BLACK_FRIDAY.minimoFrete
+  };
+}
+
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 // Frete grátis acima do valor mínimo vale só pra São Paulo — a faixa de CEP
@@ -140,6 +182,7 @@ function cepEhAraraquara(cep) {
 // pra mostrar "faltam R$X" na barra de progresso do carrinho, sem duplicar
 // a regra em dois lugares.
 function limiteFreteGratisParaCep(cep) {
+  if (blackFridayAtiva()) return BLACK_FRIDAY.minimoFrete;
   if (cepEhAraraquara(cep)) return freteGratisMinimo('araraquara-regiao');
   if (cepEhSP(cep)) return freteGratisMinimo('SP');
   return freteGratisMinimo('BR');
@@ -150,6 +193,7 @@ function limiteFreteGratisParaCep(cep) {
 // fechamento de pedido pela IA do WhatsApp, pra nunca os quatro lugares
 // decidirem coisas diferentes pro mesmo CEP/subtotal.
 function freteGratisParaCep(cep, subtotal) {
+  if (blackFridayAtiva()) return blackFridayBeneficios(subtotal).freteGratis;
   return Number(subtotal) >= limiteFreteGratisParaCep(cep);
 }
 
@@ -310,7 +354,10 @@ app.get('/api/produtos', (req, res) => {
 // carrinho) pra nunca ter os valores de frete grátis digitados direto numa
 // página — só esse endpoint sabe os números de verdade (FRETE_GRATIS acima).
 app.get('/api/config', (req, res) => {
-  res.json({ freteGratis: FRETE_GRATIS });
+  res.json({
+    freteGratis: FRETE_GRATIS,
+    blackFriday: { ...BLACK_FRIDAY, fase: blackFridayFase() }
+  });
 });
 
 // Calcula o frete (Melhor Envio) a partir do CEP de destino e peso total do carrinho (kg).
@@ -624,8 +671,17 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
          ) LIMIT 1`,
         [cliente.email, cliente.telefone || '', entrega.endereco, entrega.numero]
       );
-      if (existentes.length === 0) {
+      // Durante a Black Friday o brinde de boas-vindas (Drip Coffee + cupom de
+      // 5%) fica pausado por decisão do dono (26/11/2026) — pra não confundir
+      // com o copo/frete grátis da Black. Quem comprar pela primeira vez
+      // durante a promoção simplesmente não aciona o freeGift aqui; nada mais
+      // precisa mudar, porque o cupom (mais abaixo) só é gerado quando o
+      // pedido tem free_gift=true.
+      if (existentes.length === 0 && !blackFridayAtiva()) {
         freeGift = true;
+      } else if (existentes.length === 0) {
+        // Primeira compra de verdade, mas durante a Black — não há cupom
+        // antigo pra buscar (nunca comprou), então segue sem desconto.
       } else {
         // O "NOT EXISTS" evita o cupom ser aplicado em dois pedidos ao mesmo
         // tempo (ex.: duas abas de checkout abertas antes de pagar qualquer
@@ -647,6 +703,12 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
         desconto = cupons[0] || null;
       }
     }
+
+    // Subtotal pelo preço de catálogo (sem desconto) — é o que decide se bateu
+    // o valor mínimo do frete grátis/copo da Black, não o valor já com cupom
+    // aplicado. Calculado aqui (antes do brinde/copo) porque o copo da Black
+    // logo abaixo também depende dele.
+    const subtotalCatalogo = itensValidados.reduce((sum, { produto, quantity }) => sum + produto.preco * quantity, 0);
 
     const descontoPercent = desconto ? Number(desconto.percent) : 0;
     const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
@@ -686,17 +748,30 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       }
     }
 
-    const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
+    // Copo de brinde da Black Friday (ver blackFridayBeneficios) — regra
+    // separada do brinde de boas-vindas acima (pausado durante a Black):
+    // copo sozinho de R$150 a R$170, frete grátis sozinho de R$170 a R$300,
+    // os dois juntos só a partir de R$300 (de propósito, não é engano).
+    let copoBlackProduto = null;
+    if (blackFridayAtiva() && blackFridayBeneficios(subtotalCatalogo).copo) {
+      copoBlackProduto = PRODUCTS.find((p) => p.id === 'copo-termico-350');
+      if (copoBlackProduto) {
+        itensParaPedido.push({ title: `${copoBlackProduto.nome} — Brinde Black Friday`, quantity: 1, unit_price: 0 });
+      } else {
+        // Mesmo cuidado do brinde de boas-vindas acima: se o id mudar no
+        // catálogo, o copo não pode sumir em silêncio.
+        console.warn('[pedido] Produto de brinde "copo-termico-350" não encontrado no catálogo — copo da Black não foi incluído.');
+      }
+    }
 
-    // Subtotal pelo preço de catálogo (sem desconto) — é o que decide se bateu
-    // o valor mínimo do frete grátis, não o valor já com cupom aplicado.
-    const subtotalCatalogo = itensValidados.reduce((sum, { produto, quantity }) => sum + produto.preco * quantity, 0);
+    const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
 
     let pesoTotalKg = itensValidados.reduce(
       (sum, { produto, quantity }) => sum + ((produto.pesoGramas || 300) * quantity) / 1000,
       0
     );
     if (brindeProduto) pesoTotalKg += ((brindeProduto.pesoGramas || 400) * brindeQuantidade) / 1000;
+    if (copoBlackProduto) pesoTotalKg += (copoBlackProduto.pesoGramas || 30) / 1000;
 
     // Sempre cotamos, mesmo quando o frete grátis vai zerar o valor cobrado do
     // cliente — o pacote ainda precisa ser enviado por alguma transportadora
