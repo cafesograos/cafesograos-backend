@@ -11,7 +11,7 @@ const { enviarEmailNovoPedido, enviarEmailConfirmacaoCliente, enviarEmailRastrei
 const { CATEGORIES, PRODUCTS } = require('./products');
 const { agendarBackupDiario } = require('./backup');
 const {
-  iniciarWhatsApp, enviarMensagemWhatsApp, enviarTemplateWhatsApp,
+  iniciarWhatsApp, enviarMensagemWhatsApp, enviarImagemWhatsApp, enviarTemplateWhatsApp,
   definirHandlerMensagem, processarWebhookRecebido,
   getStatusConexao: getStatusWhatsApp,
   executarEmFilaPorTelefone
@@ -118,7 +118,8 @@ const BLACK_FRIDAY = {
   fimNormal: '2026-11-29T23:59:59-03:00',
   fimProrrogacao: '2026-11-30T02:00:00-03:00',
   minimoCopo: 150.00,
-  minimoFrete: 170.00
+  minimoFrete: 170.00,
+  minimoAmbos: 300.00
 };
 // 'antes' | 'ativo' | 'prorrogacao' | 'depois' — "ativo" e "prorrogacao" são
 // as duas fases em que a oferta vale de verdade (preço, frete, copo); as
@@ -144,9 +145,62 @@ function blackFridayBeneficios(subtotal) {
   // em cima da linha exata de um limite.
   const valor = Number((Number(subtotal) || 0).toFixed(2));
   return {
-    copo: (valor >= BLACK_FRIDAY.minimoCopo && valor < BLACK_FRIDAY.minimoFrete) || valor >= 300,
+    copo: (valor >= BLACK_FRIDAY.minimoCopo && valor < BLACK_FRIDAY.minimoFrete) || valor >= BLACK_FRIDAY.minimoAmbos,
     freteGratis: valor >= BLACK_FRIDAY.minimoFrete
   };
+}
+
+// Decide se o copo de brinde da Black entra pra esse subtotal (ver
+// blackFridayBeneficios) e já devolve o produto do catálogo + o peso extra
+// dele em kg — único lugar que decide isso, usado pelo checkout do site,
+// pela prévia de frete e pela criação real do pedido da IA do WhatsApp, pra
+// nunca divergirem sobre se o copo entra ou quanto peso ele soma (a prévia
+// de frete em especial precisa bater com o peso do pedido real, senão o
+// frete cotado na conversa diverge do cobrado depois).
+function copoBlackFridayParaSubtotal(subtotalCatalogo) {
+  if (!blackFridayAtiva() || !blackFridayBeneficios(subtotalCatalogo).copo) return { produto: null, pesoExtraKg: 0 };
+  const produto = PRODUCTS.find((p) => p.id === 'copo-termico-350');
+  if (!produto) {
+    // Mesmo cuidado do brinde de boas-vindas: se o id mudar no catálogo, o
+    // copo não pode sumir em silêncio.
+    console.warn('[blackFriday] Produto de brinde "copo-termico-350" não encontrado no catálogo — copo da Black não foi incluído.');
+    return { produto: null, pesoExtraKg: 0 };
+  }
+  return { produto, pesoExtraKg: (produto.pesoGramas || 30) / 1000 };
+}
+
+// Info da Black Friday pro prompt da IA do WhatsApp (ver montarSystemPrompt
+// em whatsapp-ia.js) — só o que ela precisa pra explicar a promoção certo.
+// Único lugar que monta esse objeto, repassado pelas duas chamadas de
+// responderMensagem (atendimento real e simulador de teste em
+// /admin/whatsapp/testar-ia) pra nunca os dois mostrarem textos diferentes
+// sobre a Black. Todo valor que pode mudar de config (incluindo o limite
+// pros dois benefícios juntos) vem do mesmo BLACK_FRIDAY que
+// blackFridayBeneficios usa — só a data pública (texto fixo no prompt, ver
+// blocoBlackFriday) não vem daqui, porque o texto pro cliente usa a data
+// divulgada, não a prorrogação técnica de BLACK_FRIDAY.fimProrrogacao.
+function blackFridayInfoParaPrompt() {
+  return {
+    ativa: blackFridayAtiva(),
+    minimoCopo: BLACK_FRIDAY.minimoCopo,
+    minimoFrete: BLACK_FRIDAY.minimoFrete,
+    minimoAmbos: BLACK_FRIDAY.minimoAmbos
+  };
+}
+
+// As 2 únicas imagens que a ferramenta enviar_imagem_promocional da IA pode
+// mandar (ver TOOL_IMAGEM_PROMOCIONAL em whatsapp-ia.js) — de propósito um
+// mapa fixo, nunca uma URL vinda do modelo. Arquivos publicados em
+// public/promo/ (servidos estático, ver express.static('public') acima).
+const IMAGENS_PROMOCIONAIS = {
+  copo: { url: `${BACKEND_URL}/promo/black-friday-copo.jpg`, legenda: 'Copo Café Só Grãos de brinde na Black Friday! 🎁' },
+  faixas: { url: `${BACKEND_URL}/promo/black-friday-faixas.jpg`, legenda: 'Nossa Black Friday: quanto mais você leva, mais benefício ganha!' }
+};
+
+async function enviarImagemPromocionalViaAtendimento(telefone, imagem) {
+  const escolhida = IMAGENS_PROMOCIONAIS[imagem];
+  if (!escolhida) throw new Error(`Imagem promocional desconhecida: ${imagem}`);
+  await enviarImagemWhatsApp(telefone, escolhida.url, escolhida.legenda);
 }
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
@@ -762,20 +816,14 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       }
     }
 
-    // Copo de brinde da Black Friday (ver blackFridayBeneficios) — regra
-    // separada do brinde de boas-vindas acima (pausado durante a Black):
-    // copo sozinho de R$150 a R$170, frete grátis sozinho de R$170 a R$300,
-    // os dois juntos só a partir de R$300 (de propósito, não é engano).
-    let copoBlackProduto = null;
-    if (blackFridayAtiva() && blackFridayBeneficios(subtotalCatalogo).copo) {
-      copoBlackProduto = PRODUCTS.find((p) => p.id === 'copo-termico-350');
-      if (copoBlackProduto) {
-        itensParaPedido.push({ title: `${copoBlackProduto.nome} — Brinde Black Friday`, quantity: 1, unit_price: 0 });
-      } else {
-        // Mesmo cuidado do brinde de boas-vindas acima: se o id mudar no
-        // catálogo, o copo não pode sumir em silêncio.
-        console.warn('[pedido] Produto de brinde "copo-termico-350" não encontrado no catálogo — copo da Black não foi incluído.');
-      }
+    // Copo de brinde da Black Friday — regra separada do brinde de
+    // boas-vindas acima (pausado durante a Black): copo sozinho de R$150 a
+    // R$170, frete grátis sozinho de R$170 a R$300, os dois juntos só a
+    // partir de R$300 (de propósito, não é engano). Decisão compartilhada
+    // com a IA do WhatsApp em copoBlackFridayParaSubtotal.
+    const { produto: copoBlackProduto, pesoExtraKg: pesoCopoBlackKg } = copoBlackFridayParaSubtotal(subtotalCatalogo);
+    if (copoBlackProduto) {
+      itensParaPedido.push({ title: `${copoBlackProduto.nome} — Brinde Black Friday`, quantity: 1, unit_price: 0 });
     }
 
     const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
@@ -785,7 +833,7 @@ app.post('/api/create-preference', checkoutLimiter, async (req, res) => {
       0
     );
     if (brindeProduto) pesoTotalKg += ((brindeProduto.pesoGramas || 400) * brindeQuantidade) / 1000;
-    if (copoBlackProduto) pesoTotalKg += (copoBlackProduto.pesoGramas || 30) / 1000;
+    pesoTotalKg += pesoCopoBlackKg;
 
     // Sempre cotamos, mesmo quando o frete grátis vai zerar o valor cobrado do
     // cliente — o pacote ainda precisa ser enviado por alguma transportadora
@@ -1177,11 +1225,20 @@ async function reconciliarPedidosPendentes() {
 app.get('/api/pedido/:preferenceId', asyncHandler(async (req, res) => {
   if (!pool) return res.status(500).json({ error: 'Banco de dados não configurado.' });
   const { rows } = await pool.query(
-    'SELECT id, status, total, shipping_cost, items, tracking_code, created_at FROM orders WHERE preference_id = $1',
+    'SELECT id, status, total, shipping_cost, items, tracking_code, shipping_origem, created_at FROM orders WHERE preference_id = $1',
     [req.params.preferenceId]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Pedido não encontrado.' });
-  res.json(rows[0]);
+  const pedido = rows[0];
+  // RETIRADA_MARCADOR (definido mais abaixo no arquivo) não é um código de
+  // rastreio de verdade — nunca repassar ele pra página de rastreio do
+  // cliente como se fosse um. shipping_origem já diz pra página que é
+  // retirada; retirado_na_loja diz se já foi buscado.
+  if (pedido.tracking_code === RETIRADA_MARCADOR) {
+    pedido.tracking_code = null;
+    pedido.retirado_na_loja = true;
+  }
+  res.json(pedido);
 }));
 
 // Painéis administrativos, todos atrás de login (ver requireAdmin mais abaixo).
@@ -2165,8 +2222,9 @@ setInterval(() => {
 // cálculo que o site já expõe em "/api/calcular-frete" nas páginas de
 // produto, só que aqui a IA pode usar no meio da conversa, antes de pedir
 // os dados completos pro fechamento (ver ferramenta calcular_frete e a
-// regra FRETE no prompt). Inclui o peso do brinde de boas-vindas pra essa
-// prévia bater com o valor que o pedido real vai ter se ele fechar depois.
+// regra FRETE no prompt). Inclui o peso do brinde de boas-vindas e, durante
+// a Black, do copo de brinde — pra essa prévia bater com o valor que o
+// pedido real vai ter se ele fechar depois.
 async function calcularFretePreviewViaAtendimento({ cep, telefone, itens }) {
   // Falha explícita, igual criarPedidoViaAtendimento — sem isso,
   // brindeQuantidadeViaAtendimento sozinha trataria o pool ausente como "0
@@ -2185,7 +2243,13 @@ async function calcularFretePreviewViaAtendimento({ cep, telefone, itens }) {
   }
 
   const brindeQuantidade = await brindeQuantidadeViaAtendimento(telefone);
-  const { pesoTotalKg, subtotalCatalogo } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
+  const { pesoTotalKg: pesoTotalKgSemCopo, subtotalCatalogo } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
+  // Mesma decisão do checkout do site e da criação real do pedido da IA
+  // (copoBlackFridayParaSubtotal é compartilhada) — sem somar esse peso
+  // aqui, a prévia cotava um frete mais leve do que o pedido real vai pesar
+  // se o cliente fechar levando o copo de brinde.
+  const { produto: copoBlackProduto, pesoExtraKg: pesoCopoBlackKg } = copoBlackFridayParaSubtotal(subtotalCatalogo);
+  const pesoTotalKg = pesoTotalKgSemCopo + pesoCopoBlackKg;
 
   const freteCalculado = await calcularFrete(cep, pesoTotalKg, subtotalCatalogo);
   const freteGratis = freteGratisParaCep(cep, subtotalCatalogo);
@@ -2194,7 +2258,11 @@ async function calcularFretePreviewViaAtendimento({ cep, telefone, itens }) {
   // calcularFrete cair no fallback de estimativa (ver shipping.js), o valor
   // NÃO veio de cotação real de transportadora nenhuma — a IA não pode falar
   // como se tivesse vindo (ver regra RECLAMAÇÃO DE FRETE no prompt).
-  return { valor: freteGratis ? 0 : freteCalculado.valor, gratis: freteGratis, prazoDias: freteCalculado.prazoDias, origem: freteCalculado.origem };
+  // "copo": reflete se o copo de brinde vai mesmo entrar no pedido (já
+  // considera o produto existir no catálogo) — repassado pra IA poder
+  // confirmar o benefício puxando do resultado da ferramenta em vez de só
+  // recitar de memória o texto do prompt.
+  return { valor: freteGratis ? 0 : freteCalculado.valor, gratis: freteGratis, copo: !!copoBlackProduto, prazoDias: freteCalculado.prazoDias, origem: freteCalculado.origem };
 }
 
 // Cria um pedido de verdade (com link de pagamento InfinitePay) a partir da
@@ -2218,7 +2286,8 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
   // única dessa regra, compartilhada com a prévia de frete).
   const brindeQuantidade = await brindeQuantidadeViaAtendimento(telefone);
 
-  const { pesoTotalKg, subtotalCatalogo, brindeProduto } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
+  const { subtotalCatalogo, brindeProduto, pesoTotalKg: pesoTotalKgInicial } = pesoESubtotalViaAtendimento(itensValidados, brindeQuantidade);
+  let pesoTotalKg = pesoTotalKgInicial;
 
   const itensParaPedido = itensValidados.map(({ produto, quantity }) => ({
     id: produto.id,
@@ -2228,6 +2297,16 @@ async function criarPedidoViaAtendimento({ nome, telefone, cpf, cep, endereco, n
     const sufixo = brindeQuantidade > 1 ? ' — Brinde de boas-vindas (cadastro antecipado)' : ' — Brinde de boas-vindas';
     itensParaPedido.push({ title: `${brindeProduto.nome}${sufixo}`, quantity: brindeQuantidade, unit_price: 0 });
   }
+
+  // Copo de brinde da Black Friday — mesma decisão do checkout do site
+  // (copoBlackFridayParaSubtotal é compartilhada entre os dois):
+  // subtotalCatalogo aqui já é só os itens reais (sem brinde de
+  // boas-vindas), igual ao site.
+  const { produto: copoBlackProduto, pesoExtraKg: pesoCopoBlackKg } = copoBlackFridayParaSubtotal(subtotalCatalogo);
+  if (copoBlackProduto) {
+    itensParaPedido.push({ title: `${copoBlackProduto.nome} — Brinde Black Friday`, quantity: 1, unit_price: 0 });
+  }
+  pesoTotalKg += pesoCopoBlackKg;
 
   const line_items = itensParaPedido.map((i) => ({ ...i, currency_id: 'BRL' }));
 
@@ -2284,20 +2363,28 @@ async function consultarPedidoPorTelefone(telefone) {
   // como a pessoa digitou (sem "55" na frente), mas o WhatsApp sempre manda
   // com "55"; comparação exata nunca bateria entre os dois canais.
   const { rows } = await pool.query(
-    `SELECT id, status, items, total, tracking_code FROM orders
+    `SELECT id, status, items, total, tracking_code, shipping_origem FROM orders
      WHERE RIGHT(regexp_replace(customer_phone, '\\D', '', 'g'), 11) = RIGHT(regexp_replace($1, '\\D', '', 'g'), 11)
      ORDER BY created_at DESC LIMIT 1`,
     [telefone]
   );
   if (!rows[0]) return { encontrado: false };
   const o = rows[0];
+  const retiradaNaLoja = o.shipping_origem === 'retirada';
+  const retiradoNaLoja = retiradaNaLoja && o.tracking_code === RETIRADA_MARCADOR;
   return {
     encontrado: true,
     numero: o.id,
     status: o.status,
     total: Number(o.total),
     itens: o.items,
-    codigo_rastreio: o.tracking_code || null
+    // Nunca o marcador RETIRADA_MARCADOR aqui — ele não é um código de
+    // rastreio de transportadora, e a IA leria literalmente o texto se
+    // devolvêssemos ele neste campo. Os dois campos abaixo é que dizem pra
+    // IA o que aconteceu com o pedido nesse caso.
+    codigo_rastreio: (o.tracking_code && o.tracking_code !== RETIRADA_MARCADOR) ? o.tracking_code : null,
+    retirada_na_loja: retiradaNaLoja,
+    retirado_na_loja: retiradoNaLoja
   };
 }
 
@@ -2589,6 +2676,12 @@ function adminLayout({ title, ativo, body }) {
 // deixa claro que o pedido não foi concluído do lado do cliente.
 const STATUS_LABEL = { pending: 'Não pago', approved: 'Aprovado', rejected: 'Recusado', in_process: 'Em análise', cancelled: 'Cancelado', refunded: 'Reembolsado' };
 
+// Marcador gravado em tracking_code pra pedido de retirada na loja (nunca
+// recebe um código de rastreio de verdade, já que não vai por transportadora)
+// — não confundir com "[RETIRADA NA LOJA]" que entra em entrega.complemento,
+// que é outro campo pra outro propósito (endereço/observação de entrega).
+const RETIRADA_MARCADOR = 'RETIRADO NA LOJA';
+
 // Textos fixos pro aviso de erro do fluxo de etiqueta — nunca texto vindo da
 // URL direto (ver comentário em /admin/pedidos), então cada rota só manda um
 // desses códigos, nunca a mensagem em si.
@@ -2777,8 +2870,8 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
         <div class="pedido-selos">
           ${o.free_gift_duplicado ? '<span class="selo" style="background:#c0392b;color:#fff;">⚠️ Este cliente tem outro pedido aprovado com brinde — confira antes de enviar de novo</span>' : (o.free_gift ? '<span class="selo">🎁 Brinde</span>' : '')}
           ${(o.discount_percent && mostrarTotal) ? `<span class="selo">-${escapeHtml(o.discount_percent)}% cupom</span>` : ''}
-          ${o.tracking_code ? `<span class="selo">📦 Enviado: ${escapeHtml(o.tracking_code)}</span>` : ''}
-          ${o.shipping_origem === 'retirada' ? '<span class="selo" style="background:#211714;color:#D66B3E;">🏠 Retirada na loja — não precisa de frete</span>' : ''}
+          ${(o.tracking_code && o.tracking_code !== RETIRADA_MARCADOR) ? `<span class="selo">📦 Enviado: ${escapeHtml(o.tracking_code)}</span>` : ''}
+          ${o.shipping_origem === 'retirada' ? (o.tracking_code === RETIRADA_MARCADOR ? '<span class="selo" style="background:#211714;color:#D66B3E;">✅ Retirado na loja</span>' : '<span class="selo" style="background:#211714;color:#D66B3E;">🏠 Retirada na loja — não precisa de frete</span>') : ''}
         </div>
         ${(o.free_gift_duplicado && !somenteLeitura) ? `
           <form method="POST" action="${urlBase}/${o.id}/resolver-brinde-duplicado" style="margin-top:4px;">
@@ -2828,11 +2921,20 @@ async function renderizarPedidos(req, res, { urlBase, layout, mostrarTotal, ocul
       ` : ''}
       ${o.melhorenvio_order_id && o.tracking_code ? `<div class="pedido-acoes"><a href="${urlBase}/${o.id}/frete/etiqueta" target="_blank" rel="noopener noreferrer" class="btn-mini btn-mini-primary" style="display:inline-block;text-decoration:none;text-align:center;">Baixar etiqueta (PDF)</a></div>` : ''}
       <div class="pedido-acoes">
-        <form method="POST" action="${urlBase}/${o.id}/rastreio">
-          <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
-          <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
-          <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
-        </form>
+        ${o.shipping_origem === 'retirada' ? (
+          o.tracking_code === RETIRADA_MARCADOR ? '' : `
+          <form method="POST" action="${urlBase}/${o.id}/retirada-confirmada">
+            <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
+            <button type="submit" class="btn-mini btn-mini-primary">Marcar como retirado</button>
+          </form>
+          `
+        ) : `
+          <form method="POST" action="${urlBase}/${o.id}/rastreio">
+            <input type="hidden" name="status" value="${escapeHtml(filtro || 'todos')}">
+            <input type="text" name="codigo" placeholder="Código de rastreio" value="${escapeHtml(o.tracking_code || '')}">
+            <button type="submit" class="btn-mini btn-mini-primary">${o.tracking_code ? 'Reenviar e-mail' : 'Marcar enviado'}</button>
+          </form>
+        `}
         ${mostrarExcluir ? `
           <form method="POST" action="${urlBase}/${o.id}/excluir" onsubmit="return confirm('Excluir este pedido de ${escapeHtml(o.customer_name)}? Não tem como desfazer.');">
             <button type="submit" class="btn-mini btn-mini-danger">Excluir</button>
@@ -3212,6 +3314,32 @@ function handlerResolverBrindeDuplicado(urlBase) {
 app.post('/admin/pedidos/:id/resolver-brinde-duplicado', requireAdmin, express.urlencoded({ extended: false }), handlerResolverBrindeDuplicado('/admin/pedidos'));
 app.post('/vendedor/pedidos/:id/resolver-brinde-duplicado', requireVendedor, express.urlencoded({ extended: false }), handlerResolverBrindeDuplicado('/vendedor/pedidos'));
 
+// Marca pedido de retirada na loja como retirado — esses pedidos nunca têm
+// transportadora/rastreio de verdade, então sem essa ação eles ficavam pra
+// sempre na fila "Novos" (a_enviar), que só sai de lá com tracking_code
+// preenchido. Grava um marcador em tracking_code em vez de criar uma coluna
+// nova, mas só quando o pedido É de retirada e ainda NÃO tem nada em
+// tracking_code — trava que evita sobrescrever um código de rastreio de
+// verdade (ex.: pedido editado manualmente) ou marcar um pedido que não é de
+// retirada. Não dispara enviarEmailRastreio: esse e-mail fala em
+// transportadora/rastreio, não faz sentido pra quem já retirou pessoalmente.
+function handlerRetiradaConfirmada(urlBase) {
+  return asyncHandler(async (req, res) => {
+    if (!pool) return res.status(500).send('Banco de dados não configurado.');
+
+    await pool.query(
+      `UPDATE orders SET tracking_code = $1
+       WHERE id = $2 AND shipping_origem = 'retirada' AND (tracking_code IS NULL OR tracking_code = '')`,
+      [RETIRADA_MARCADOR, req.params.id]
+    );
+    logAdminAcao(req, 'retirada_confirmada', `pedido #${req.params.id}`);
+
+    res.redirect(voltarParaPedido(urlBase, req.body?.status, req.params.id));
+  });
+}
+app.post('/admin/pedidos/:id/retirada-confirmada', requireAdmin, express.urlencoded({ extended: false }), handlerRetiradaConfirmada('/admin/pedidos'));
+app.post('/vendedor/pedidos/:id/retirada-confirmada', requireVendedor, express.urlencoded({ extended: false }), handlerRetiradaConfirmada('/vendedor/pedidos'));
+
 // Exclui um pedido (ex.: pedidos de teste feitos durante o desenvolvimento).
 // Só no painel admin de propósito — ação destrutiva, não faz parte do que o
 // João precisa pra administrar o site.
@@ -3482,7 +3610,7 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
   const status = getStatusWhatsApp();
   const [
     msgBoasVindas, msgConfirmacao, msgFeedback, msgRecompra, msgReengajamento, destaqueReengajamento,
-    reengajamentoPausado, retomarConversaPausado
+    reengajamentoPausado, retomarConversaPausado, recompraPausado
   ] = await Promise.all([
     buscarMensagemConfig('boas_vindas'),
     buscarMensagemConfig('confirmacao_compra'),
@@ -3491,7 +3619,8 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
     buscarMensagemConfig('reengajamento'),
     buscarMensagemConfig('destaque_reengajamento'),
     fluxoPausado('reengajamento_pausado'),
-    fluxoPausado('retomar_conversa_pausado')
+    fluxoPausado('retomar_conversa_pausado'),
+    fluxoPausado('recompra_pausado')
   ]);
 
   const statusLabel = status === 'conectado' ? '🟢 Conectado' : '🔴 Não configurado';
@@ -3535,6 +3664,12 @@ app.get('/admin/whatsapp', requireAdmin, asyncHandler(async (req, res) => {
       'Mensagem casual de madrugada pra puxar de novo quem conversou com a IA ontem e não respondeu mais. Manda pelo template "retomar_conversa_atendimento" (não mais texto livre) — enquanto a Meta não aprovar esse template, reativar aqui só gera tentativa de envio com erro, sem mandar nada de verdade pro cliente.',
       'retomar-conversa',
       retomarConversaPausado
+    )}
+    ${cardFluxoPausavel(
+      'Lembrete de recompra',
+      'Mensagem de marketing por iniciativa da loja, 30 dias após a compra, pra quem já comprou antes. Diferente do reengajamento e do retomar-conversa, continua pausado mesmo depois de religar os outros dois: o telefone usado aqui vem do checkout do site, sem nenhum opt-in específico de marketing — ainda em aberto com o dono como tratar esse consentimento antes de voltar a mandar.',
+      'recompra',
+      recompraPausado
     )}
 
     <h2 style="margin-top:28px;">Testar a IA</h2>
@@ -3621,7 +3756,8 @@ app.post('/admin/whatsapp/destaque', requireAdmin, express.urlencoded({ extended
 // rota: adicionar um novo é só adicionar uma entrada aqui.
 const FLUXOS_PAUSAVEIS = {
   'reengajamento': { chave: 'reengajamento_pausado', nomeAcao: 'reengajamento_toggle' },
-  'retomar-conversa': { chave: 'retomar_conversa_pausado', nomeAcao: 'retomar_conversa_toggle' }
+  'retomar-conversa': { chave: 'retomar_conversa_pausado', nomeAcao: 'retomar_conversa_toggle' },
+  'recompra': { chave: 'recompra_pausado', nomeAcao: 'recompra_toggle' }
 };
 
 app.post('/admin/whatsapp/toggle/:fluxo', requireAdmin, asyncHandler(async (req, res) => {
@@ -3743,6 +3879,14 @@ app.post('/admin/whatsapp/testar-ia', requireAdmin, express.urlencoded({ extende
         // calculadora de frete do site) — sem risco nenhum usar a função real
         // aqui também, igual já acontece com buscarClienteConhecido abaixo.
         calcularFretePreviewViaAtendimento,
+        // Mesma regra do item acima: calcular blackFridayInfo com a função
+        // real (não dá pra "simular" se a Black está ativa sem arriscar o
+        // teste mostrar um prompt diferente do que o atendimento real usa
+        // agora). Mandar a imagem de verdade pro número de teste também usa
+        // a função real -- não é criação de pedido nem cobrança nenhuma,
+        // então não precisa de mock como criarPedidoViaAtendimento acima.
+        blackFridayInfo: blackFridayInfoParaPrompt(),
+        enviarImagemPromocional: enviarImagemPromocionalViaAtendimento,
         escalarAtendimento: async (_telefoneCliente, motivo) => {
           motivoEscalado = motivo || 'não especificado';
         },
@@ -4050,22 +4194,31 @@ async function processarFilaBoasVindasWhatsApp() {
   if (automacoesWhatsAppPausadas()) return;
   if (!dentroDoHorarioComercial()) return;
   try {
-    // Descarta (sem enviar) cadastros represados há mais de 30 dias — evita
-    // rajada de mensagens muito antigas quando a conexão volta depois de um
-    // tempo. 30 dias (e não 24h, como era antes) porque o próprio envio já é
-    // devagar (1 a cada 30s) e enfileirado um por vez, então mesmo um
-    // represamento grande nunca vira rajada de verdade.
+    // Descarta (sem enviar), num único UPDATE: (1) cadastros represados há mais
+    // de 30 dias — evita rajada de mensagens muito antigas quando a conexão
+    // volta depois de um tempo (30 dias, e não 24h como era antes, porque o
+    // próprio envio já é devagar e enfileirado um por vez, então mesmo um
+    // represamento grande nunca vira rajada de verdade); e (2) cadastro de
+    // antes de DATA_CONSENTIMENTO_WHATSAPP_POPUP — mesmo motivo do
+    // processarFilaReengajamentoWhatsApp: o popup só passou a pedir
+    // consentimento específico de WhatsApp a partir dessa data/hora, e
+    // boas_vindas_cadastro é template de categoria Marketing (ver opt-out
+    // acima). Lead cadastrado antes nunca deu esse opt-in e nunca vai poder
+    // receber isso.
     await pool.query(
       `UPDATE leads SET whatsapp_enviado = true
        WHERE cadastro_popup = true AND COALESCE(whatsapp_enviado, false) = false
-         AND created_at < now() - interval '30 days'`
+         AND (created_at < now() - interval '30 days' OR created_at < $1)`,
+      [DATA_CONSENTIMENTO_WHATSAPP_POPUP]
     );
 
     const { rows } = await pool.query(
       `SELECT id, name, phone FROM leads
        WHERE cadastro_popup = true AND COALESCE(whatsapp_enviado, false) = false
+         AND created_at >= $1
          AND created_at <= now() - interval '3 minutes'
-       ORDER BY created_at ASC LIMIT 1`
+       ORDER BY created_at ASC LIMIT 1`,
+      [DATA_CONSENTIMENTO_WHATSAPP_POPUP]
     );
     for (const lead of rows) {
       const telefone = telefoneParaE164(lead.phone);
@@ -4139,6 +4292,15 @@ async function processarFilaFeedbackWhatsApp() {
 // Mesma lógica do feedback, mas aos 30 dias e convidando pra uma nova compra
 // (o café de uma compra normal costuma acabar por essa época).
 async function processarFilaRecompraWhatsApp() {
+  // PAUSADA em 27/11/2026 (toggle em /admin/whatsapp, chave
+  // "recompra_pausado" no banco — ver fluxoPausado), separada da trava geral
+  // (WHATSAPP_AUTOMACOES_PAUSADAS) porque essa fica pausada por mais tempo:
+  // o telefone usado aqui vem do checkout do site, sem nenhum opt-in
+  // específico de marketing (diferente do popup, que já pede consentimento)
+  // — decisão de como tratar isso ainda está em aberto com o dono. Religar
+  // boas-vindas/reengajamento/retomar-conversa não pode reativar esse fluxo
+  // também, por isso a chave separada em vez de reusar a trava geral.
+  if (await fluxoPausado('recompra_pausado')) return;
   if (!pool || getStatusWhatsApp() !== 'conectado') return;
   if (automacoesWhatsAppPausadas()) return;
   if (!dentroDoHorarioComercial()) return;
@@ -4815,7 +4977,9 @@ definirHandlerMensagem(async (telefone, texto, jidOriginal, imagens) => {
   console.log(`[whatsapp-ia] gerando resposta pra ${telefone}...`);
   try {
     const { texto: resposta, partes, esperaMs } = await responderMensagem(telefone, texto, {
-      pool, PRODUCTS, criarPedidoViaAtendimento, calcularFretePreviewViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento
+      pool, PRODUCTS, criarPedidoViaAtendimento, calcularFretePreviewViaAtendimento, consultarPedidoPorTelefone, escalarAtendimento, notificarTrocaDevolucao, buscarClienteConhecido, marcarInteresseSemFechamento,
+      blackFridayInfo: blackFridayInfoParaPrompt(),
+      enviarImagemPromocional: enviarImagemPromocionalViaAtendimento
     }, imagens);
     console.log(`[whatsapp-ia] resposta gerada pra ${telefone} (espera ${Math.round(esperaMs / 1000)}s, ${partes.length} msg(s)): "${(resposta || '').slice(0, 80)}"`);
     if (resposta) {
