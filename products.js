@@ -265,7 +265,7 @@ const PRODUCTS = [
     descricao_es: 'La forma ideal de conocer las dos líneas de la casa: 1 Café Especial 500g en grano (84 puntos SCA) + 1 Café Tradicional 500g molido + caja de madera con 10 unidades de Drip Coffee.',
     descricao_fr: 'La façon idéale de découvrir nos deux lignes de café : 1 Café Spécial 500g en grains (84 points SCA) + 1 Café Traditionnel 500g moulu + boîte en bois avec 10 sachets de Drip Coffee.',
     descricao_zh: '认识我们两条产品线的理想方式：1袋特级咖啡500g咖啡豆（SCA 84分）+ 1袋传统咖啡500g研磨咖啡 + 装有10包Drip Coffee的木盒。',
-    preco: 145.00,
+    preco: 150.00,
     precoOriginal: 200.00,
     categorias: ['kits'],
     badge: 'Combo',
