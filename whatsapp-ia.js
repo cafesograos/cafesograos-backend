@@ -15,7 +15,7 @@ const HISTORICO_MAX_MENSAGENS = 30;
 const TOOLS = [
   {
     name: 'consultar_pedido',
-    description: 'Busca o pedido mais recente desse cliente (pelo telefone da conversa) pra saber status, código de rastreio etc. Use quando o cliente perguntar sobre um pedido já feito.',
+    description: 'Busca o pedido mais recente desse cliente (pelo telefone da conversa) pra saber status, código de rastreio etc. Use quando o cliente perguntar sobre um pedido já feito. Se o resultado vier com "retirada_na_loja": true, esse pedido é de retirada no endereço da loja (opção da Black Friday pra Araraquara) e NUNCA vai ter transportadora nem código de rastreio de verdade -- não fale em "enviado"/"a caminho" nem peça pra aguardar entrega. Nesse caso, "retirado_na_loja": true quer dizer que o pedido já foi buscado e entregue na loja; false quer dizer que ainda está esperando a pessoa ir buscar.',
     input_schema: { type: 'object', properties: {}, required: [] }
   },
   {
